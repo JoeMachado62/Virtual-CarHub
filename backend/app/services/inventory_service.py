@@ -1,0 +1,485 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.integrations.marketcheck_client import MarketCheckClient
+from app.models.entities import Vehicle
+from app.services.image_pipeline_service import ensure_tier2_hero_job, sync_marketcheck_source_assets
+
+
+MOCK_VEHICLES = [
+    {
+        "vin": "1FMCU9H9XNUA00001",
+        "listing_id": "mk-001",
+        "year": 2022,
+        "make": "Ford",
+        "model": "Escape",
+        "trim": "SEL",
+        "body_type": "SUV",
+        "engine_type": "Hybrid",
+        "drivetrain": "AWD",
+        "condition_grade": "Good",
+        "price_asking": 25995,
+        "location_zip": "33445",
+        "location_state": "FL",
+        "source_type": "dealer_partner",
+        "features_raw": ["Apple CarPlay", "Blind Spot Monitor", "Lane Keep Assist"],
+        "features_normalized": {"safety": 0.9, "tech": 0.8, "fuel economy": 0.85},
+    },
+    {
+        "vin": "5NMS3DAJ9PH000002",
+        "listing_id": "mk-002",
+        "year": 2023,
+        "make": "Hyundai",
+        "model": "Santa Fe",
+        "trim": "Limited",
+        "body_type": "SUV",
+        "engine_type": "Gasoline",
+        "drivetrain": "AWD",
+        "condition_grade": "Excellent",
+        "price_asking": 31490,
+        "location_zip": "33101",
+        "location_state": "FL",
+        "source_type": "dealer_wholesale",
+        "features_raw": ["360 Camera", "Panoramic Roof", "Highway Assist"],
+        "features_normalized": {"safety": 0.95, "tech": 0.9, "luxury": 0.7},
+    },
+    {
+        "vin": "1C6SRFJT0PN000003",
+        "listing_id": "mk-003",
+        "year": 2023,
+        "make": "Ram",
+        "model": "1500",
+        "trim": "Laramie",
+        "body_type": "Truck",
+        "engine_type": "Gasoline",
+        "drivetrain": "4WD",
+        "condition_grade": "Good",
+        "price_asking": 43995,
+        "location_zip": "32801",
+        "location_state": "FL",
+        "source_type": "auction",
+        "features_raw": ["Tow Package", "Trailer Brake", "Apple CarPlay"],
+        "features_normalized": {"towing": 0.95, "cargo": 0.8, "tech": 0.75},
+    },
+    {
+        "vin": "WAUENAF48KN000004",
+        "listing_id": "mk-004",
+        "year": 2019,
+        "make": "Audi",
+        "model": "A4",
+        "trim": "Premium",
+        "body_type": "Sedan",
+        "engine_type": "Gasoline",
+        "drivetrain": "AWD",
+        "condition_grade": "Good",
+        "price_asking": 23950,
+        "location_zip": "33602",
+        "location_state": "FL",
+        "source_type": "dealer_partner",
+        "features_raw": ["Leather", "Sunroof", "Sport Package"],
+        "features_normalized": {"luxury": 0.9, "sportiness": 0.8, "tech": 0.7},
+    },
+    {
+        "vin": "7SAYGDEF4PF000005",
+        "listing_id": "mk-005",
+        "year": 2023,
+        "make": "Tesla",
+        "model": "Model Y",
+        "trim": "Long Range",
+        "body_type": "SUV",
+        "engine_type": "BEV",
+        "drivetrain": "AWD",
+        "condition_grade": "Excellent",
+        "price_asking": 37990,
+        "location_zip": "34741",
+        "location_state": "FL",
+        "source_type": "dealer_wholesale",
+        "features_raw": ["Autopilot", "OTA Updates", "Premium Audio"],
+        "features_normalized": {"tech": 0.95, "safety": 0.9, "fuel economy": 1.0},
+    },
+]
+
+
+SOURCE_PRIORITY: dict[str, int] = {
+    "marketcheck": 1,
+    "dealer_partner": 2,
+    "dealer_wholesale": 2,
+    "auction": 3,
+}
+
+PRIMARY_SOURCE_FIELDS = (
+    "listing_id",
+    "year",
+    "make",
+    "model",
+    "trim",
+    "body_type",
+    "sub_body_type",
+    "engine_type",
+    "cylinders",
+    "forced_induction",
+    "drivetrain",
+    "mpg_combined",
+    "ev_range",
+    "towing_capacity_lbs",
+    "odometer",
+    "condition_grade",
+    "price_asking",
+    "price_wholesale_est",
+    "location_zip",
+    "location_state",
+    "source_url",
+    "images",
+    "features_raw",
+    "features_normalized",
+    "quality_firewall_pass",
+)
+
+SECONDARY_FILL_FIELDS = (
+    "listing_id",
+    "trim",
+    "body_type",
+    "sub_body_type",
+    "engine_type",
+    "cylinders",
+    "forced_induction",
+    "drivetrain",
+    "mpg_combined",
+    "ev_range",
+    "towing_capacity_lbs",
+    "odometer",
+    "condition_grade",
+    "price_wholesale_est",
+    "location_zip",
+    "location_state",
+    "source_url",
+    "images",
+    "features_raw",
+    "features_normalized",
+)
+
+
+@dataclass(slots=True)
+class InventoryIngestReport:
+    source: str
+    fetched: int = 0
+    inserted: int = 0
+    updated: int = 0
+    skipped_priority: int = 0
+    skipped_invalid: int = 0
+    mode: str = "live"
+    synced_vins: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def seed_inventory(db: Session) -> int:
+    count = 0
+    for row in MOCK_VEHICLES:
+        existing = db.get(Vehicle, row["vin"])
+        if existing:
+            continue
+        vehicle = Vehicle(
+            **row,
+            available=True,
+            quality_firewall_pass=True,
+            last_seen_active=datetime.now(UTC),
+        )
+        db.add(vehicle)
+        count += 1
+    db.flush()
+    return count
+
+
+def ingest_marketcheck_inventory(
+    db: Session,
+    client: MarketCheckClient,
+    *,
+    limit: int = 100,
+    start: int = 0,
+    search_params: dict[str, Any] | None = None,
+) -> InventoryIngestReport:
+    params: dict[str, Any] = {"rows": limit, "start": start}
+    if search_params:
+        params.update({k: v for k, v in search_params.items() if v not in (None, "")})
+
+    payload = client.search_inventory(params)
+    listings = payload.get("listings", [])
+    if not isinstance(listings, list):
+        listings = []
+
+    report = InventoryIngestReport(
+        source="marketcheck",
+        fetched=len(listings),
+        mode="live" if client.live else "stub",
+    )
+    now = datetime.now(UTC)
+
+    for raw_listing in listings:
+        if not isinstance(raw_listing, dict):
+            report.skipped_invalid += 1
+            continue
+
+        normalized = normalize_marketcheck_listing(raw_listing, now=now)
+        if not normalized:
+            report.skipped_invalid += 1
+            continue
+
+        existing = db.get(Vehicle, normalized["vin"])
+        action = upsert_vehicle_with_source_priority(existing=existing, incoming=normalized, incoming_source="marketcheck")
+        if action == "inserted":
+            db.add(Vehicle(**normalized))
+            report.inserted += 1
+        elif action == "updated":
+            report.updated += 1
+        else:
+            report.skipped_priority += 1
+        vin = normalized["vin"]
+        if vin not in report.synced_vins:
+            report.synced_vins.append(vin)
+
+        # Tier 4-ready model keeps source cache records independent from vehicle row shape.
+        images = normalized.get("images") or []
+        sync_marketcheck_source_assets(
+            db,
+            vin=normalized["vin"],
+            listing_id=normalized.get("listing_id"),
+            image_urls=images,
+        )
+        ensure_tier2_hero_job(
+            db,
+            vin=normalized["vin"],
+            trigger_event="marketcheck_ingest",
+            primary_image_url=images[0] if images else None,
+        )
+
+    db.flush()
+    return report
+
+
+def upsert_vehicle_with_source_priority(
+    *,
+    existing: Vehicle | None,
+    incoming: dict[str, Any],
+    incoming_source: str,
+) -> str:
+    if existing is None:
+        return "inserted"
+
+    incoming_priority = SOURCE_PRIORITY.get(incoming_source, 0)
+    existing_priority = SOURCE_PRIORITY.get((existing.source_type or "").lower(), 0)
+    now = incoming.get("last_seen_active") or datetime.now(UTC)
+
+    if incoming_priority >= existing_priority:
+        for field in PRIMARY_SOURCE_FIELDS:
+            value = incoming.get(field)
+            if value is not None:
+                setattr(existing, field, value)
+        existing.source_type = incoming_source
+        existing.available = bool(incoming.get("available", existing.available))
+        existing.last_seen_active = now
+        return "updated"
+
+    # Lower-priority source should not overwrite higher-priority rows.
+    for field in SECONDARY_FILL_FIELDS:
+        current = getattr(existing, field)
+        if is_missing_value(current):
+            value = incoming.get(field)
+            if not is_missing_value(value):
+                setattr(existing, field, value)
+    existing.last_seen_active = now
+    existing.available = existing.available and bool(incoming.get("available", True))
+    return "skipped_priority"
+
+
+def normalize_marketcheck_listing(raw: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any] | None:
+    build = raw.get("build") if isinstance(raw.get("build"), dict) else {}
+    seller = raw.get("dealer") if isinstance(raw.get("dealer"), dict) else {}
+    if not seller:
+        seller = raw.get("seller") if isinstance(raw.get("seller"), dict) else {}
+    media = raw.get("media") if isinstance(raw.get("media"), dict) else {}
+    extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
+
+    vin = clean_str(raw.get("vin"))
+    year = to_int(pick_first(build.get("year"), raw.get("year")))
+    make = clean_str(pick_first(build.get("make"), raw.get("make")))
+    model = clean_str(pick_first(build.get("model"), raw.get("model")))
+    price = to_float(
+        pick_first(
+            raw.get("price"),
+            raw.get("price_unformatted"),
+            raw.get("msrp"),
+            raw.get("seller_price"),
+        )
+    )
+
+    if not vin or len(vin) != 17 or year is None or make is None or model is None or price is None:
+        return None
+
+    listing_id = clean_str(
+        pick_first(
+            raw.get("id"),
+            raw.get("listing_id"),
+            raw.get("inventory_id"),
+            raw.get("_id"),
+        )
+    )
+    location_state = clean_str(pick_first(seller.get("state"), raw.get("state")))
+    if location_state:
+        location_state = location_state.upper()[:2]
+
+    images = safe_list(
+        pick_first(
+            raw.get("photo_links_cached"),
+            media.get("photo_links_cached"),
+            raw.get("photo_links"),
+            media.get("photo_links"),
+            raw.get("images"),
+        )
+    )
+    options = safe_list(extra.get("options"))
+    high_value_features = safe_list(extra.get("high_value_features"))
+    features = safe_list(
+        pick_first(
+            extra.get("features"),
+            raw.get("features"),
+            high_value_features,
+            options,
+        )
+    )
+
+    exterior_color = clean_str(
+        pick_first(
+            raw.get("exterior_color"),
+            extra.get("exterior_color"),
+            raw.get("base_ext_color"),
+        )
+    )
+    interior_color = clean_str(
+        pick_first(
+            raw.get("interior_color"),
+            extra.get("interior_color"),
+            raw.get("base_int_color"),
+        )
+    )
+    transmission = clean_str(pick_first(build.get("transmission"), raw.get("transmission")))
+    fuel_type = clean_str(pick_first(build.get("fuel_type"), raw.get("fuel_type")))
+    inventory_type = clean_str(raw.get("inventory_type"))
+    days_on_market = to_int(pick_first(raw.get("dom"), raw.get("dom_active"), raw.get("dom_180")))
+    certified = to_bool(raw.get("certified"))
+    single_owner = to_bool(raw.get("carfax_1_owner"))
+    clean_title = to_bool(raw.get("carfax_clean_title"))
+    city = clean_str(pick_first(seller.get("city"), raw.get("city")))
+    dealer_name = clean_str(pick_first(seller.get("name"), raw.get("dealer_name"), raw.get("heading")))
+
+    normalized = {
+        "vin": vin.upper(),
+        "listing_id": listing_id,
+        "year": year,
+        "make": make,
+        "model": model,
+        "trim": clean_str(pick_first(build.get("trim"), raw.get("trim"))),
+        "body_type": clean_str(pick_first(build.get("body_type"), raw.get("body_type"), raw.get("vehicle_type"))),
+        "sub_body_type": clean_str(pick_first(build.get("vehicle_type"), raw.get("sub_body_type"))),
+        "engine_type": clean_str(pick_first(build.get("engine"), raw.get("engine"), build.get("fuel_type"))),
+        "cylinders": to_int(pick_first(build.get("cylinders"), raw.get("cylinders"))),
+        "forced_induction": clean_str(pick_first(build.get("forced_induction"), raw.get("forced_induction"))),
+        "drivetrain": clean_str(pick_first(build.get("drivetrain"), raw.get("drivetrain"))),
+        "mpg_combined": to_float(
+            pick_first(
+                build.get("combined_mpg"),
+                raw.get("combined_mpg"),
+                raw.get("mpg"),
+            )
+        ),
+        "ev_range": to_int(pick_first(build.get("ev_range"), raw.get("ev_range"))),
+        "towing_capacity_lbs": to_int(pick_first(build.get("towing_capacity"), raw.get("towing_capacity_lbs"))),
+        "odometer": to_int(pick_first(raw.get("miles"), raw.get("odometer"))),
+        "condition_grade": clean_str(pick_first(raw.get("condition"), raw.get("condition_grade"))),
+        "price_asking": price,
+        "price_wholesale_est": to_float(raw.get("wholesale_price")),
+        "location_zip": clean_str(pick_first(seller.get("zip"), raw.get("zip"))),
+        "location_state": location_state,
+        "source_type": "marketcheck",
+        "source_url": clean_str(pick_first(raw.get("vdp_url"), raw.get("listing_url"), raw.get("website"))),
+        "images": [str(x) for x in images if x],
+        "features_raw": [str(x) for x in features if x],
+        "features_normalized": {
+            "exterior_color": exterior_color,
+            "interior_color": interior_color,
+            "transmission": transmission,
+            "fuel_type": fuel_type,
+            "inventory_type": inventory_type,
+            "days_on_market": days_on_market,
+            "certified": certified,
+            "single_owner": single_owner,
+            "clean_title": clean_title,
+            "city": city,
+            "dealer_name": dealer_name,
+        },
+        "last_seen_active": now or datetime.now(UTC),
+        "available": bool(pick_first(raw.get("active"), True)),
+        "quality_firewall_pass": True,
+    }
+    return normalized
+
+
+def pick_first(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def to_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def to_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def to_bool(value: Any) -> bool | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y"}:
+        return True
+    if text in {"0", "false", "no", "n"}:
+        return False
+    return None
+
+
+def clean_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def safe_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def is_missing_value(value: Any) -> bool:
+    return value in (None, "", [], {})

@@ -1,0 +1,103 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: vch
+      POSTGRES_PASSWORD: vch
+      POSTGRES_DB: virtual_carhub
+    ports:
+      - "15432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "16379:6379"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://vch:vch@postgres:5432/virtual_carhub
+      REDIS_URL: redis://redis:6379/0
+      LOG_FILE_PATH: /var/log/virtual-carhub/backend.log
+      METRICS_ENABLED: "true"
+      METRICS_PATH: /metrics
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_logs:/var/log/virtual-carhub
+    depends_on:
+      - postgres
+      - redis
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8000/v1
+      NEXT_PUBLIC_SERVICE_TOKEN: dev-service-token
+    ports:
+      - "3004:3000"
+    depends_on:
+      - backend
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - backend
+
+  loki:
+    image: grafana/loki:3.1.1
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+
+  promtail:
+    image: grafana/promtail:3.1.1
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./monitoring/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - backend_logs:/var/log/virtual-carhub:ro
+    depends_on:
+      - loki
+      - backend
+
+  grafana:
+    image: grafana/grafana:11.1.4
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+      - loki
+
+volumes:
+  pgdata:
+  backend_logs:
+  prometheus_data:
+  loki_data:
+  grafana_data:
