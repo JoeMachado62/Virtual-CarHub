@@ -24,7 +24,8 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 if ! gh repo view "${OWNER}/${NEW_REPO}" >/dev/null 2>&1; then
-  gh repo create "${OWNER}/${NEW_REPO}" "--${VISIBILITY}" --confirm
+  # Passing a positional argument skips interactive confirmation in newer gh versions.
+  gh repo create "${OWNER}/${NEW_REPO}" "--${VISIBILITY}" non-interactive
 fi
 
 if ! git remote get-url origin >/dev/null 2>&1; then
@@ -61,11 +62,13 @@ cat >"$tmp_payload" <<'JSON'
 }
 JSON
 
-gh api \
+if ! gh api \
   --method PUT \
   -H "Accept: application/vnd.github+json" \
   "/repos/${OWNER}/${NEW_REPO}/branches/main/protection" \
-  --input "$tmp_payload" >/dev/null
+  --input "$tmp_payload" >/dev/null; then
+  echo "Warning: branch protection could not be applied (likely plan limitation on private repos)."
+fi
 
 rm -f "$tmp_payload"
 
