@@ -1,0 +1,1538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Deal Submission Form</title>
+    <style>
+        :root {
+            --primary-blue: #9d0208; /* Main Red */
+            --primary-purple: #e50c0c; /* Lighter Red / Accent */
+            --light-blue: #fdf0f0; /* Very Light Red for backgrounds */
+            --light-purple: #fce8e7; /* Slightly darker light red */
+            --dark-text: #333;
+            --light-text: #666;
+            --border-color: #e0e0e0;
+            --section-bg: #ffffff;
+            --hover-color: #fff5f5;
+            --input-border-color: #d32f2f; /* Reddish border for inputs */
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: var(--dark-text);
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: var(--primary-blue); 
+            font-weight: 600;
+            font-size: 32px;
+        }
+
+        h3 {
+            color: var(--primary-blue);
+            border-bottom: 2px solid var(--primary-blue);
+            padding-bottom: 8px;
+            margin-top: 25px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+
+        .form-container {
+            background-color: var(--section-bg);
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+
+        .form-section {
+            background-color: var(--section-bg);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 25px;
+            border-left: 4px solid var(--primary-blue);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+        }
+
+        .form-section-alt {
+            border-left: 4px solid var(--primary-purple); 
+        }
+        
+        .form-field input, .form-field select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--input-border-color); 
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-family: inherit;
+            font-size: 14px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .form-field input:focus, .form-field select:focus {
+            outline: none;
+            border-color: var(--primary-blue); 
+            box-shadow: 0 0 0 3px rgba(157, 2, 8, 0.25); 
+        }
+        .form-header {
+            background: linear-gradient(to right, var(--light-blue), var(--light-purple));
+            padding: 15px;
+            margin-bottom: 25px;
+            border-radius: 8px;
+            font-weight: 500;
+        }
+        .form-group { margin-bottom: 20px; display: flex; flex-wrap: wrap; }
+        .form-row { display: flex; flex-wrap: wrap; margin-bottom: 20px; width: 100%; gap: 15px; }
+        .form-col { flex: 1; min-width: 200px; }
+        .form-field { margin-bottom: 15px; }
+        .form-field label { display: block; font-weight: 500; margin-bottom: 6px; color: var(--dark-text); font-size: 14px; }
+        .invalid-input { border-color: #dc3545 !important; background-color: rgba(220, 53, 69, 0.05); }
+        .invalid-input:focus { box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.15) !important; }
+        .radio-group { display: flex; align-items: center; gap: 15px; margin-top: 5px; }
+        .radio-group label { display: flex; align-items: center; font-weight: normal; cursor: pointer; font-size: 14px; }
+        .radio-group input { margin-right: 6px; width: auto; cursor: pointer; }
+        .checkbox-group { display: flex; align-items: center; }
+        .checkbox-group input { margin-right: 6px; width: auto; cursor: pointer; }
+        .field-group { display: flex; flex-wrap: wrap; gap: 15px; }
+        .field-group .form-field { flex: 1; min-width: 150px; }
+        .notice { background-color: var(--light-blue); padding: 15px; border-left: 4px solid var(--primary-blue); margin-bottom: 25px; border-radius: 6px; font-size: 14px;}
+        .attestation-area { margin-top: 30px; margin-bottom: 20px; padding: 15px; background-color: var(--light-purple); border-radius: 8px; }
+        .checkbox-label { display: flex; align-items: flex-start; font-size: 14px; margin-top: 10px; }
+        .checkbox-label input { margin-right: 10px; margin-top: 4px; }
+        .vehicle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .terms-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .terms-full-row { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 15px; }
+        .terms-item { margin-bottom: 15px; }
+        .terms-item label { display: block; font-weight: 500; margin-bottom: 6px; font-size: 14px; }
+        .terms-label { font-weight: 500; background-color: var(--light-purple); color: var(--primary-purple); padding: 6px 10px; border-radius: 4px; }
+        .terms-total { font-weight: 600; background-color: var(--light-blue); padding: 6px 10px; border-radius: 4px; }
+        .terms-amount-financed { font-weight: 600; background-color: var(--light-purple); color: var(--primary-purple); padding: 8px 12px; border-radius: 4px; margin-top: 15px; display: flex; justify-content: space-between; align-items: center;}
+        .currency-input { width: 100%; padding: 10px 12px; border: 1px solid var(--input-border-color); border-radius: 6px; box-sizing: border-box; text-align: right; font-family: inherit; font-size: 14px;}
+        .tax-rate-input { display: flex; gap: 5px; }
+        .tax-rate-input input:first-child { width: 80px; text-align: right; }
+        .submit-btn, .add-borrower-btn { background: linear-gradient(to right, var(--primary-blue), var(--primary-purple)); color: white; padding: 12px 30px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 500; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .submit-btn:hover, .add-borrower-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 8px rgba(0,0,0,0.15); }
+        .remove-borrower-btn { background: linear-gradient(to right, #d65d5d, #c4506e); color: white; padding: 12px 30px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 500; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .remove-borrower-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 8px rgba(0,0,0,0.15); }
+        .error-message { 
+            color: #dc3545; 
+            font-size: 0.8em; 
+            margin-top: 4px; 
+            background-color: rgba(220, 53, 69, 0.1); 
+            padding: 4px 8px; 
+            border-radius: 4px; 
+            border-left: 3px solid #dc3545; 
+            display: block; 
+            animation: fadeIn 0.3s ease-in; 
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .invalid-input { 
+            border-color: #dc3545 !important; 
+            background-color: rgba(220, 53, 69, 0.05) !important; 
+            animation: shake 0.3s ease-in-out; 
+        }
+        
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        
+        .field-success {
+            border-color: #28a745 !important;
+            background-color: rgba(40, 167, 69, 0.05) !important;
+        }
+        .footer { margin-top: 40px; text-align: center; font-size: 12px; color: var(--light-text); padding: 15px; border-top: 1px solid var(--border-color); }
+        .borrower-container { position: relative; margin-bottom: 30px; }
+        .borrower-header { background: linear-gradient(to right, var(--primary-blue), var(--primary-purple)); color: white; padding: 10px 15px; border-radius: 6px; margin-bottom: 15px; font-weight: 500;}
+        .add-borrower-container { display: flex; justify-content: center; margin: 30px 0; }
+        .hidden-section { display: none; }
+        @media (max-width: 768px) { .form-row { flex-direction: column; gap: 10px; } .form-col { width: 100%; } .radio-group { flex-direction: column; align-items: flex-start; gap: 8px;} .vehicle-grid, .terms-grid { grid-template-columns: 1fr; } .tax-rate-input { flex-direction: column; } .tax-rate-input input:first-child { width: 100%; } }
+    </style>
+</head>
+<body>
+    <div class="form-container">
+        <h1>Credit Application</h1>
+
+        <form id="creditApplication">
+            <div class="form-section">
+                <div class="form-row">
+                    <div class="form-col">
+                        <div class="form-field">
+                            <label for="dealerName">Dealer Name:</label>
+                            <input type="text" id="dealerName" name="dealer_name" required>
+                        </div>
+                    </div>
+                    <div class="form-col">
+                        <div class="form-field">
+                            <label for="telephone">Tel:</label>
+                            <input type="tel" id="telephone" name="dealer_telephone" required>
+                        </div>
+                    </div>
+                    <div class="form-col">
+                        <div class="form-field">
+                            <label for="contact">Contact:</label>
+                            <input type="text" id="contact" name="dealer_contact" required>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="notice">
+                <strong>IMPORTANT APPLICANT INFORMATION:</strong> Federal Law requires financial institutions to obtain sufficient information to verify your identity. You may be asked several questions and to provide one or more forms of identification to fulfill this requirement. In some instances we may use outside sources to confirm the information. The information you provide is protected by our privacy policy and federal law.
+            </div>
+
+            <!-- Borrower 1 Container - Start -->
+            <div class="borrower-container" id="borrower1Container">
+                <div class="borrower-header">Primary Borrower</div>
+
+                <!-- Personal Information Section -->
+                <div class="form-section form-section-alt borrower-personal-section">
+                    <h3>Personal Information</h3>
+                    <div class="form-row">
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_firstName">First Name:</label>
+                                <input type="text" id="borrower1_firstName" name="borrower1_firstName" required>
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_lastName">Last Name:</label>
+                                <input type="text" id="borrower1_lastName" name="borrower1_lastName" required>
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_dob">Date of birth:</label>
+                                <input type="date" id="borrower1_dob" name="borrower1_dob" required>
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_ssn">SSN:</label>
+                                <input type="text" id="borrower1_ssn" name="borrower1_ssn" required>
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_drivers_license">Driver's License:</label>
+                                <input type="text" id="borrower1_drivers_license" name="borrower1_drivers_license" required>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_home_phone">Home:</label>
+                                <input type="tel" id="borrower1_home_phone" name="borrower1_home_phone">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_work_phone">Work:</label>
+                                <input type="tel" id="borrower1_work_phone" name="borrower1_work_phone">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_cellPhone">Cell:</label>
+                                <input type="tel" id="borrower1_cellPhone" name="borrower1_cellPhone" required>
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_email">E-Mail:</label>
+                                <input type="email" id="borrower1_email" name="borrower1_email" required>
+                            </div>
+                        </div>
+                    </div>
+                </div> <!-- End of Personal Information Section -->
+
+                <!-- Address Information Section -->
+                <div class="form-section borrower-address-section">
+                    <h3>Address Information</h3>
+                    <div class="form-row">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label>Current address & Type:</label>
+                                <div class="radio-group">
+                                    <label><input type="radio" name="borrower1_address_type" value="own" required> Own</label>
+                                    <label><input type="radio" name="borrower1_address_type" value="rent" required> Rent</label>
+                                    <label><input type="radio" name="borrower1_address_type" value="other" required> Other</label>
+                                </div>
+                                <input type="text" id="borrower1_currentAddress" name="borrower1_current_address" placeholder="Address" style="margin-top: 10px;" required>
+                            </div>
+                        </div>
+                        <div class="form-col" style="flex: 1;">
+                            <div class="form-field">
+                                <label for="borrower1_landlordInfo">Landlord/Mortgage Co. & Phone:</label>
+                                <input type="text" id="borrower1_landlordInfo" name="borrower1_landlord_info">
+                            </div>
+                        </div>
+                        <div class="form-col" style="flex: 0.5;">
+                            <div class="form-field">
+                                <label for="borrower1_currentAddressYears">Years:</label>
+                                <input type="number" id="borrower1_currentAddressYears" name="borrower1_current_address_years" min="0" required>
+                            </div>
+                            <div class="form-field">
+                                <label for="borrower1_currentAddressMonths">Months:</label>
+                                <input type="number" id="borrower1_currentAddressMonths" name="borrower1_current_address_months" min="0" max="11">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Previous address 1 -->
+                    <div class="form-row hidden-section" data-address-level="1">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label for="borrower1_previousAddress1">Previous address 1:</label>
+                                <input type="text" id="borrower1_previousAddress1" name="borrower1_previous_address_1">
+                            </div>
+                        </div>
+                        <div class="form-col" style="flex: 1;">
+                            <div class="form-field">
+                                <label for="borrower1_prevAddress1LandlordInfo">Landlord/Mortgage Co. & Phone:</label>
+                                <input type="text" id="borrower1_prevAddress1LandlordInfo" name="borrower1_prev_address_1_landlord_info">
+                            </div>
+                        </div>
+                        <div class="form-col" style="flex: 0.5;">
+                            <div class="form-field">
+                                <label for="borrower1_prevAddress1Years">Years:</label>
+                                <input type="number" id="borrower1_prevAddress1Years" name="borrower1_prev_address_1_years" min="0">
+                            </div>
+                            <div class="form-field">
+                                <label for="borrower1_prevAddress1Months">Months:</label>
+                                <input type="number" id="borrower1_prevAddress1Months" name="borrower1_prev_address_1_months" min="0" max="11">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Previous address 2 -->
+                    <div class="form-row hidden-section" data-address-level="2">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label for="borrower1_previousAddress2">Previous address 2:</label>
+                                <input type="text" id="borrower1_previousAddress2" name="borrower1_previous_address_2">
+                            </div>
+                        </div>
+                        <div class="form-col" style="flex: 1;">
+                            <div class="form-field">
+                                <label for="borrower1_prevAddress2LandlordInfo">Landlord/Mortgage Co. & Phone:</label>
+                                <input type="text" id="borrower1_prevAddress2LandlordInfo" name="borrower1_prev_address_2_landlord_info">
+                            </div>
+                        </div>
+                        <div class="form-col" style="flex: 0.5;">
+                            <div class="form-field">
+                                <label for="borrower1_prevAddress2Years">Years:</label>
+                                <input type="number" id="borrower1_prevAddress2Years" name="borrower1_prev_address_2_years" min="0">
+                            </div>
+                            <div class="form-field">
+                                <label for="borrower1_prevAddress2Months">Months:</label>
+                                <input type="number" id="borrower1_prevAddress2Months" name="borrower1_prev_address_2_months" min="0" max="11">
+                            </div>
+                        </div>
+                    </div>
+                </div> <!-- End of Address Information Section -->
+
+                <!-- Employment Information Section -->
+                <div class="form-section form-section-alt borrower-employment-section">
+                    <h3>Employment Information</h3>
+                    <div class="form-row">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label for="borrower1_currentEmployer">Current Employer:</label>
+                                <input type="text" id="borrower1_currentEmployer" name="borrower1_current_employer" required>
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_employerPhone">Phone:</label>
+                                <input type="tel" id="borrower1_employerPhone" name="borrower1_employer_phone">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_title">Title:</label>
+                                <input type="text" id="borrower1_title" name="borrower1_title" required>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label for="borrower1_employerAddress">Employer Address:</label>
+                                <input type="text" id="borrower1_employerAddress" name="borrower1_employer_address" required>
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_income">Income:</label>
+                                <input type="text" id="borrower1_income" name="borrower1_income" class="currency-input" required>
+                            </div>
+                        </div>
+                        <div class="form-col" style="flex: 0.5;">
+                            <div class="form-field">
+                                <label for="borrower1_employmentYears">Years:</label>
+                                <input type="number" id="borrower1_employmentYears" name="borrower1_employment_years" min="0" required>
+                            </div>
+                            <div class="form-field">
+                                <label for="borrower1_employmentMonths">Months:</label>
+                                <input type="number" id="borrower1_employmentMonths" name="borrower1_employment_months" min="0" max="11">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_otherIncome">Other Income:</label>
+                                <input type="text" id="borrower1_otherIncome" name="borrower1_other_income" class="currency-input">
+                            </div>
+                        </div>
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label for="borrower1_incomeSource">Source (Alimony, child support or separate maintenance income need not be revealed if you do not wish):</label>
+                                <input type="text" id="borrower1_incomeSource" name="borrower1_income_source">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Previous Employer 1 -->
+                    <div class="form-row hidden-section" data-employment-level="1">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label for="borrower1_previousEmployer1">Previous Employer 1:</label>
+                                <input type="text" id="borrower1_previousEmployer1" name="borrower1_previous_employer_1">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployer1Phone">Phone:</label>
+                                <input type="tel" id="borrower1_prevEmployer1Phone" name="borrower1_prev_employer_1_phone">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployer1Title">Title:</label>
+                                <input type="text" id="borrower1_prevEmployer1Title" name="borrower1_prev_employer_1_title">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row hidden-section" data-employment-level="1">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployer1Address">Employer Address:</label>
+                                <input type="text" id="borrower1_prevEmployer1Address" name="borrower1_prev_employer_1_address">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployer1Income">Income:</label>
+                                <input type="text" id="borrower1_prevEmployer1Income" name="borrower1_prev_employer_1_income" class="currency-input">
+                            </div>
+                        </div>
+                        <div class="form-col" style="flex: 0.5;">
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployment1Years">Years:</label>
+                                <input type="number" id="borrower1_prevEmployment1Years" name="borrower1_prev_employment_1_years" min="0">
+                            </div>
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployment1Months">Months:</label>
+                                <input type="number" id="borrower1_prevEmployment1Months" name="borrower1_prev_employment_1_months" min="0" max="11">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Previous Employer 2 -->
+                    <div class="form-row hidden-section" data-employment-level="2">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label for="borrower1_previousEmployer2">Previous Employer 2:</label>
+                                <input type="text" id="borrower1_previousEmployer2" name="borrower1_previous_employer_2">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployer2Phone">Phone:</label>
+                                <input type="tel" id="borrower1_prevEmployer2Phone" name="borrower1_prev_employer_2_phone">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployer2Title">Title:</label>
+                                <input type="text" id="borrower1_prevEmployer2Title" name="borrower1_prev_employer_2_title">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row hidden-section" data-employment-level="2">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployer2Address">Employer Address:</label>
+                                <input type="text" id="borrower1_prevEmployer2Address" name="borrower1_prev_employer_2_address">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployer2Income">Income:</label>
+                                <input type="text" id="borrower1_prevEmployer2Income" name="borrower1_prev_employer_2_income" class="currency-input">
+                            </div>
+                        </div>
+                        <div class="form-col" style="flex: 0.5;">
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployment2Years">Years:</label>
+                                <input type="number" id="borrower1_prevEmployment2Years" name="borrower1_prev_employment_2_years" min="0">
+                            </div>
+                            <div class="form-field">
+                                <label for="borrower1_prevEmployment2Months">Months:</label>
+                                <input type="number" id="borrower1_prevEmployment2Months" name="borrower1_prev_employment_2_months" min="0" max="11">
+                            </div>
+                        </div>
+                    </div>
+                </div> <!-- End of Employment Information Section -->
+
+                <!-- Financial Information Section -->
+                <div class="form-section borrower-financial-section">
+                    <h3>Financial Information</h3>
+                    <div class="form-row">
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label>Are you obliged to make Alimony, Support or Maintenance payments?</label>
+                                <div class="radio-group">
+                                    <label><input type="radio" name="borrower1_alimony_payments" value="no"> No</label>
+                                    <label><input type="radio" name="borrower1_alimony_payments" value="yes"> Yes</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label for="borrower1_alimonyRecipient">If yes, to (Name & Address):</label>
+                                <input type="text" id="borrower1_alimonyRecipient" name="borrower1_alimony_recipient">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_alimonyAmount">Amt. per month $:</label>
+                                <input type="text" id="borrower1_alimonyAmount" name="borrower1_alimony_amount" class="currency-input">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label>Are you a co-maker, endorser, or guarantor on any loan or contract?</label>
+                                <div class="radio-group">
+                                    <label><input type="radio" name="borrower1_co_maker" value="no"> No</label>
+                                    <label><input type="radio" name="borrower1_co_maker" value="yes"> Yes</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_coMakerFor">If yes, for whom?</label>
+                                <input type="text" id="borrower1_coMakerFor" name="borrower1_co_maker_for">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_coMakerToWhom">To whom?</label>
+                                <input type="text" id="borrower1_coMakerToWhom" name="borrower1_co_maker_to_whom">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label>Are there any unsatisfied judgments against you?</label>
+                                <div class="radio-group">
+                                    <label><input type="radio" name="borrower1_judgments" value="no"> No</label>
+                                    <label><input type="radio" name="borrower1_judgments" value="yes"> Yes</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_judgmentToWhom">If yes, to whom owed?</label>
+                                <input type="text" id="borrower1_judgmentToWhom" name="borrower1_judgment_to_whom">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_judgmentAmount">Amount $:</label>
+                                <input type="text" id="borrower1_judgmentAmount" name="borrower1_judgment_amount" class="currency-input">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-col" style="flex: 2;">
+                            <div class="form-field">
+                                <label>Have you been declared bankrupt in the last 10 years?</label>
+                                <div class="radio-group">
+                                    <label><input type="radio" name="borrower1_bankruptcy" value="no"> No</label>
+                                    <label><input type="radio" name="borrower1_bankruptcy" value="yes"> Yes</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_bankruptcyWhere">If yes, where?</label>
+                                <input type="text" id="borrower1_bankruptcyWhere" name="borrower1_bankruptcy_where">
+                            </div>
+                        </div>
+                        <div class="form-col">
+                            <div class="form-field">
+                                <label for="borrower1_bankruptcyYear">Year?</label>
+                                <input type="text" id="borrower1_bankruptcyYear" name="borrower1_bankruptcy_year">
+                            </div>
+                        </div>
+                    </div>
+                </div> <!-- End of Financial Information Section -->
+            </div>
+            <!-- Borrower 1 Container - End -->
+
+            <!-- Add/Remove Borrower Button -->
+            <div class="add-borrower-container" id="toggleBorrowerButtonContainer">
+                <button type="button" id="toggleBorrowerBtn" class="add-borrower-btn">Add Co-Borrower</button>
+            </div>
+
+            <!-- Borrower 2 Container - Will be initially hidden and added dynamically -->
+            <div class="borrower-container" id="borrower2Container" style="display: none;">
+                 <!-- Content will be added by JS. Name attributes will be borrower2_... -->
+            </div>
+
+            <!-- Dealer Attestation Section -->
+            <div class="form-section form-section-alt">
+                <div class="attestation-area">
+                    <p style="font-weight: 500; color: var(--primary-purple);">DEALER ATTESTATION</p>
+                    <p>I, as an authorized representative of the dealership, certify that everything stated in this application is correct. I confirm that I have received authorization from the applicant to submit this application. The applicant understands that the Lender may check their credit and employment history and answer questions others may ask the Lender about the applicant's credit record with the Lender. The applicant also understands that they must update credit information at Lender's request if their financial condition changes.</p>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="dealerAttestation" name="dealer_attestation" required>
+                        I agree to the above statements and confirm that I am authorized to submit this application on behalf of the applicant.
+                    </label>
+
+                    <div class="form-field" style="margin-top: 15px;">
+                        <label for="signatureDate">Date:</label>
+                        <input type="date" id="signatureDate" name="signature_date" required>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Vehicle Information Section -->
+            <div class="form-section">
+                <h3>Vehicle Information</h3>
+                <div class="vehicle-grid">
+                    <div class="form-field">
+                        <label for="vehicleYear">Year:</label>
+                        <input type="text" id="vehicleYear" name="vehicle_year" required>
+                    </div>
+                    <div class="form-field">
+                        <label for="vehicleMakeModel">Make & Model:</label>
+                        <input type="text" id="vehicleMakeModel" name="vehicle_make_model" required>
+                    </div>
+                    <div class="form-field">
+                        <label for="vehicleTrim">Trim:</label>
+                        <input type="text" id="vehicleTrim" name="vehicle_trim">
+                    </div>
+                    <div class="form-field">
+                        <label for="vehicleMileage">Mileage:</label>
+                        <input type="text" id="vehicleMileage" name="vehicle_mileage" required>
+                    </div>
+                    <div class="form-field">
+                        <label for="vehicleVIN">VIN:</label>
+                        <input type="text" id="vehicleVIN" name="vehicle_vin" required>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Terms Section -->
+            <div class="form-section form-section-alt">
+                <h3>Terms</h3>
+                <div class="terms-grid">
+                    <div class="terms-item">
+                        <label class="terms-label">a. Selling Price:</label>
+                        <input type="text" id="sellingPrice" name="selling_price" class="currency-input" placeholder="$0.00" required>
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-label">b. Warranty:</label>
+                        <input type="text" id="warranty" name="warranty" class="currency-input" placeholder="$0.00">
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-label">c. GAP:</label>
+                        <input type="text" id="gap" name="gap" class="currency-input" placeholder="$0.00">
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-label">d. Other:</label>
+                        <input type="text" id="other" name="other" class="currency-input" placeholder="$0.00">
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-label">e. Taxes:</label>
+                        <div class="tax-rate-input">
+                            <input type="text" id="taxRate" name="tax_rate" placeholder="0.0%">
+                            <input type="text" id="taxes" name="taxes" class="currency-input" placeholder="$0.00" readonly>
+                        </div>
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-label">f. Doc Fees:</label>
+                        <input type="text" id="docFees" name="doc_fees" class="currency-input" placeholder="$0.00">
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-label">g. Title/Lien/Reg Fees:</label>
+                        <input type="text" id="titleFees" name="title_fees" class="currency-input" placeholder="$0.00">
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-total">l. Total Price: (Sum a:g)</label>
+                        <input type="text" id="totalPrice" name="total_price" class="currency-input" readonly>
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-label">h. Total Cash Down:</label>
+                        <input type="text" id="cashDown" name="cash_down" class="currency-input" placeholder="$0.00">
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-label">i. Trade Value:</label>
+                        <input type="text" id="tradeValue" name="trade_value" class="currency-input" placeholder="$0.00">
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-label">j. Trade Payoff:</label>
+                        <input type="text" id="tradePayoff" name="trade_payoff" class="currency-input" placeholder="$0.00">
+                    </div>
+
+                    <div class="terms-item">
+                        <label class="terms-label">k. Net Trade Value:</label>
+                        <input type="text" id="netTradeValue" name="net_trade_value" class="currency-input" readonly>
+                    </div>
+
+                    <div class="terms-full-row">
+                        <div class="terms-item" style="flex: 1;">
+                            <label class="terms-total">m. Total Down: (Sum h:k)</label>
+                            <input type="text" id="totalDown" name="total_down" class="currency-input" readonly>
+                        </div>
+
+                        <div class="terms-item" style="flex: 1;">
+                            <div class="terms-amount-financed">
+                                <span>Amount Financed (l-m):</span>
+                                <input type="text" id="amountFinanced" name="amountFinanced" class="currency-input" style="width: 150px;" readonly>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-row" style="justify-content: center; margin-top: 30px;">
+                <button type="submit" class="submit-btn">Submit Application</button>
+            </div>
+        </form>
+
+
+        <div class="footer">
+            Form provided by pinnacleautofinance.com — brokered financing solutions portal.  | Visit www.pinnacleautofinance.com or call 786.731.8493 to learn more
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // AUTH CHECK:
+            const authToken = localStorage.getItem('pinnacle_auth_token');
+            if (!authToken) {
+                alert('Please log in to submit applications.');
+                window.location.href = '/login.html';
+                return;
+            }
+
+            // AUTO-POPULATE DEALER INFORMATION AND CHECK FOR EXISTING APPLICATION
+            // Wait for DOM to be fully ready before auto-populating
+            setTimeout(() => {
+                autopopulateDealerInfo();
+                checkForExistingApplication();
+            }, 100);
+            
+            async function autopopulateDealerInfo() {
+                // First try to get from localStorage
+                const dealerInfoStr = localStorage.getItem('pinnacle_dealer_info');
+                
+                if (dealerInfoStr) {
+                    try {
+                        const dealerInfo = JSON.parse(dealerInfoStr);
+                        populateDealerFields(dealerInfo);
+                    } catch (error) {
+                        console.error('Error parsing stored dealer info:', error);
+                        // Try fetching fresh data
+                        await fetchAndPopulateDealerInfo();
+                    }
+                } else {
+                    // No stored info, fetch from API
+                    await fetchAndPopulateDealerInfo();
+                }
+            }
+            
+            async function fetchAndPopulateDealerInfo() {
+                try {
+                    const response = await fetch('/api/dashboard/profile', {
+                        headers: {
+                            'Authorization': `Bearer ${authToken}`
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.success && result.profile && result.profile.dealer) {
+                            const dealerInfo = result.profile.dealer;
+                            // Update localStorage with fresh data
+                            localStorage.setItem('pinnacle_dealer_info', JSON.stringify(dealerInfo));
+                            populateDealerFields(dealerInfo);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error fetching dealer profile:', error);
+                    // Fields remain editable if fetch fails
+                }
+            }
+            
+            function populateDealerFields(dealerInfo) {
+                // Debug: Log the dealer info to see what's being passed
+                console.log('Dealer info for auto-population:', dealerInfo);
+                
+                // Auto-fill the dealer fields
+                const dealerNameField = document.getElementById('dealerName');
+                const telephoneField = document.getElementById('telephone');
+                const contactField = document.getElementById('contact');
+                
+                if (dealerNameField && dealerInfo.dealerName) {
+                    dealerNameField.value = dealerInfo.dealerName;
+                    dealerNameField.readOnly = true; // Make it read-only since it's auto-populated
+                }
+                
+                if (telephoneField && dealerInfo.phone) {
+                    console.log('Setting telephone field with:', dealerInfo.phone);
+                    telephoneField.value = dealerInfo.phone;
+                    telephoneField.readOnly = true;
+                } else {
+                    console.log('Telephone field issue - telephoneField:', telephoneField, 'phone:', dealerInfo.phone);
+                }
+                
+                if (contactField && dealerInfo.contactName) {
+                    contactField.value = dealerInfo.contactName;
+                    contactField.readOnly = true;
+                }
+                
+                // Add visual indicator that fields are auto-populated
+                const dealerFields = [dealerNameField, telephoneField, contactField];
+                dealerFields.forEach(field => {
+                    if (field && field.value) {
+                        field.style.backgroundColor = '#f3f4f6';
+                        field.style.border = '1px solid #d1d5db';
+                        field.title = 'Auto-populated from your dealer profile';
+                    }
+                });
+                
+                // Optional: Show a small notice
+                const firstField = document.querySelector('.form-section');
+                if (firstField && dealerNameField && dealerNameField.value) {
+                    const notice = document.createElement('div');
+                    notice.style.cssText = 'background: #eff6ff; border: 1px solid #3b82f6; padding: 8px 12px; border-radius: 4px; margin-bottom: 15px; font-size: 14px; color: #1e40af;';
+                    notice.innerHTML = '✓ Dealer information auto-populated from your profile';
+                    firstField.insertBefore(notice, firstField.firstChild);
+                    
+                    // Remove notice after 5 seconds
+                    setTimeout(() => notice.remove(), 5000);
+                }
+                
+                // Auto-populate complete
+            }
+
+            // Check if we're viewing an existing application
+            async function checkForExistingApplication() {
+                const urlParams = new URLSearchParams(window.location.search);
+                const applicationId = urlParams.get('id') || urlParams.get('applicationId');
+                
+                if (applicationId) {
+                    try {
+                        const response = await fetch(`/api/applications/${applicationId}/form-data`, {
+                            headers: {
+                                'Authorization': `Bearer ${authToken}`
+                            }
+                        });
+                        
+                        if (response.ok) {
+                            const result = await response.json();
+                            if (result.success && result.formData) {
+                                populateFormWithData(result.formData, result.applicationInfo);
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Error loading existing application:', error);
+                    }
+                }
+            }
+            
+            function populateFormWithData(formData, appInfo) {
+                console.log('Loading existing application data:', appInfo.id);
+                
+                // Show banner indicating this is existing application
+                const firstSection = document.querySelector('.form-section');
+                if (firstSection) {
+                    const banner = document.createElement('div');
+                    banner.style.cssText = 'background: #fef3c7; border: 1px solid #f59e0b; padding: 12px; border-radius: 4px; margin-bottom: 20px; font-size: 14px; color: #92400e;';
+                    banner.innerHTML = `📋 Viewing Application ${appInfo.id} (${appInfo.status}) - Submitted: ${new Date(appInfo.createdAt).toLocaleString()}`;
+                    firstSection.insertBefore(banner, firstSection.firstChild);
+                }
+                
+                // Populate all form fields
+                Object.keys(formData).forEach(fieldName => {
+                    const field = document.querySelector(`[name="${fieldName}"]`);
+                    if (field) {
+                        if (field.type === 'radio') {
+                            if (field.value === formData[fieldName]) {
+                                field.checked = true;
+                            }
+                        } else if (field.type === 'checkbox') {
+                            field.checked = formData[fieldName];
+                        } else {
+                            field.value = formData[fieldName];
+                        }
+                    }
+                });
+                
+                // Trigger calculations to update computed fields
+                if (typeof calculateTotals === 'function') {
+                    calculateTotals();
+                }
+                
+                // If application is not in editable state, make form read-only
+                if (appInfo.isReadOnly) {
+                    document.querySelectorAll('input, select, textarea').forEach(field => {
+                        if (!field.readOnly && !field.classList.contains('dealer-info')) {
+                            field.readOnly = true;
+                            field.style.backgroundColor = '#f9fafb';
+                        }
+                    });
+                    
+                    // Hide submit button
+                    const submitBtn = document.querySelector('.submit-application-btn');
+                    if (submitBtn) {
+                        submitBtn.style.display = 'none';
+                    }
+                }
+                
+                console.log('✅ Application data loaded successfully');
+            }
+
+            // --- Currency Formatting and Calculations ---
+            const formatCurrency = (input) => {
+                let value = String(input.value).replace(/[^\d.]/g, '');
+                const parts = value.split('.');
+                if (parts.length > 2) value = parts[0] + '.' + parts.slice(1).join('');
+                if (parts.length > 1) value = parts[0] + '.' + parts[1].slice(0, 2);
+                
+                if (value === '.' || value === '') { // Handle empty or just dot
+                    input.value = '';
+                    clearFieldError(input);
+                    return;
+                }
+                const num = parseFloat(value);
+                if (!isNaN(num)) {
+                    input.value = '$' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    clearFieldError(input, true);
+                } else {
+                    input.value = '';
+                    showFieldError(input, 'Please enter a valid currency amount');
+                }
+            };
+
+            // Phone number formatting and validation
+            const formatPhoneNumber = (input) => {
+                let value = input.value.replace(/\D/g, ''); // Remove all non-digits
+                
+                // Check for invalid characters in original input
+                if (input.value.replace(/[\d\s\-\(\)]/g, '').length > 0) {
+                    showFieldError(input, 'Phone number can only contain digits, spaces, dashes, and parentheses');
+                    input.classList.add('invalid-input');
+                    return;
+                }
+                
+                // Validate length
+                if (value.length > 10) {
+                    value = value.substring(0, 10);
+                }
+                
+                if (value.length === 0) {
+                    input.value = '';
+                    clearFieldError(input);
+                    return;
+                }
+                
+                // Format as XXX-XXX-XXXX
+                if (value.length <= 3) {
+                    input.value = value;
+                } else if (value.length <= 6) {
+                    input.value = value.substring(0, 3) + '-' + value.substring(3);
+                } else {
+                    input.value = value.substring(0, 3) + '-' + value.substring(3, 6) + '-' + value.substring(6);
+                }
+                
+                // Validate complete phone number
+                if (value.length === 10) {
+                    clearFieldError(input, true);
+                } else if (value.length > 0) {
+                    showFieldError(input, 'Please enter a complete 10-digit phone number');
+                }
+            };
+
+            // SSN formatting and validation
+            const formatSSN = (input) => {
+                let value = input.value.replace(/\D/g, ''); // Remove all non-digits
+                
+                // Check for invalid characters in original input
+                if (input.value.replace(/[\d\s\-]/g, '').length > 0) {
+                    showFieldError(input, 'SSN can only contain digits, spaces, and dashes');
+                    input.classList.add('invalid-input');
+                    return;
+                }
+                
+                // Validate length
+                if (value.length > 9) {
+                    value = value.substring(0, 9);
+                }
+                
+                if (value.length === 0) {
+                    input.value = '';
+                    clearFieldError(input);
+                    return;
+                }
+                
+                // Format as XXX-XX-XXXX
+                if (value.length <= 3) {
+                    input.value = value;
+                } else if (value.length <= 5) {
+                    input.value = value.substring(0, 3) + '-' + value.substring(3);
+                } else {
+                    input.value = value.substring(0, 3) + '-' + value.substring(3, 5) + '-' + value.substring(5);
+                }
+                
+                // Validate complete SSN
+                if (value.length === 9) {
+                    clearFieldError(input, true);
+                } else if (value.length > 0) {
+                    showFieldError(input, 'Please enter a complete 9-digit SSN');
+                }
+            };
+
+            // Error handling functions
+            const showFieldError = (input, message) => {
+                input.classList.add('invalid-input');
+                
+                // Remove existing error message
+                const existingError = input.parentNode.querySelector('.error-message');
+                if (existingError) {
+                    existingError.remove();
+                }
+                
+                // Add new error message
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error-message';
+                errorDiv.textContent = message;
+                input.parentNode.appendChild(errorDiv);
+            };
+
+            const clearFieldError = (input, showSuccess = false) => {
+                input.classList.remove('invalid-input');
+                const errorMessage = input.parentNode.querySelector('.error-message');
+                if (errorMessage) {
+                    errorMessage.remove();
+                }
+                
+                // Add success styling if validation passed and field has content
+                if (showSuccess && input.value.trim()) {
+                    input.classList.add('field-success');
+                } else {
+                    input.classList.remove('field-success');
+                }
+            };
+
+            // Address validation function
+            const validateAddress = async (input) => {
+                const address = input.value.trim();
+                if (!address) {
+                    clearFieldError(input);
+                    return;
+                }
+                
+                // Basic format validation
+                const addressPattern = /^\d+\s+[A-Za-z0-9\s,.'#-]+$/;
+                if (!addressPattern.test(address)) {
+                    showFieldError(input, 'Please enter a valid address format (e.g., 123 Main St, City, State 12345)');
+                    return;
+                }
+                
+                // Check for minimum required components
+                const components = address.split(',');
+                if (components.length < 2) {
+                    showFieldError(input, 'Please include city and state in the address');
+                    return;
+                }
+                
+                clearFieldError(input, true);
+            };
+
+            const parseCurrency = (value) => parseFloat(String(value || '0').replace(/[$,]/g, '')) || 0;
+            const parsePercentage = (value) => parseFloat(String(value || '0').replace(/[%]/g, '')) / 100 || 0;
+
+            // Note: Form validation is handled in the submit event listener below
+
+            const calculateTotals = () => {
+                const getVal = (id) => parseCurrency(document.getElementById(id)?.value);
+                const setVal = (id, val, isCurrency = true) => {
+                    const el = document.getElementById(id);
+                    if (el) el.value = isCurrency ? '$' + val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : val;
+                };
+
+                const sellingPrice = getVal('sellingPrice');
+                const warranty = getVal('warranty');
+                const gap = getVal('gap');
+                const other = getVal('other');
+                const docFees = getVal('docFees');
+                const titleFees = getVal('titleFees');
+                const tradeValue = getVal('tradeValue');
+                const tradePayoff = getVal('tradePayoff');
+                const netTradeValue = tradeValue - tradePayoff;
+                setVal('netTradeValue', netTradeValue);
+
+                const taxRateVal = document.getElementById('taxRate')?.value;
+                const taxRate = taxRateVal ? parsePercentage(taxRateVal) : 0;
+                const taxableAmount = sellingPrice + warranty + gap + other; 
+                const taxes = taxableAmount * taxRate;
+                setVal('taxes', taxes);
+
+                const totalPrice = sellingPrice + warranty + gap + other + taxes + docFees + titleFees;
+                setVal('totalPrice', totalPrice);
+
+                const cashDown = getVal('cashDown');
+                const totalDown = cashDown + netTradeValue;
+                setVal('totalDown', totalDown);
+
+                const amountFinanced = totalPrice - totalDown;
+                setVal('amountFinanced', amountFinanced);
+            };
+            
+            const formatTaxRate = (input) => {
+                let value = input.value.replace(/[^\d.]/g, '');
+                const parts = value.split('.');
+                if (parts.length > 2) value = parts[0] + '.' + parts.slice(1).join('');
+                input.value = value ? value + '%' : '';
+                calculateTotals();
+            };
+            
+            // Currency input formatting with all event listeners combined
+            document.querySelectorAll('.currency-input').forEach(input => {
+                input.addEventListener('blur', function() { formatCurrency(this); calculateTotals(); });
+                input.addEventListener('focus', function() { this.value = String(this.value).replace(/[$,]/g, ''); });
+                input.addEventListener('input', function() {
+                    // Remove any non-digit or decimal characters while typing
+                    let value = this.value.replace(/[^\d.]/g, '');
+                    const parts = value.split('.');
+                    if (parts.length > 2) {
+                        value = parts[0] + '.' + parts.slice(1).join('');
+                    }
+                    if (parts.length > 1) {
+                        value = parts[0] + '.' + parts[1].slice(0, 2);
+                    }
+                    this.value = value;
+                });
+            });
+
+            // Tax rate input formatting
+            const taxRateInput = document.getElementById('taxRate');
+            if (taxRateInput) {
+                taxRateInput.addEventListener('blur', function() { formatTaxRate(this); });
+                taxRateInput.addEventListener('focus', function() { this.value = this.value.replace(/%/g, ''); });
+            }
+
+            // Phone number formatting
+            document.querySelectorAll('input[type="tel"]').forEach(input => {
+                input.addEventListener('input', function() { formatPhoneNumber(this); });
+                input.addEventListener('blur', function() { formatPhoneNumber(this); });
+            });
+
+            // SSN formatting
+            document.querySelectorAll('input[name*="ssn"]').forEach(input => {
+                input.addEventListener('input', function() { formatSSN(this); });
+                input.addEventListener('blur', function() { formatSSN(this); });
+            });
+
+            // Address validation (specific fields only, exclude years/months)
+            document.querySelectorAll('input[name="borrower1_current_address"], input[name="borrower1_previous_address_1"], input[name="borrower1_previous_address_2"], input[name="borrower1_employer_address"], input[name="borrower1_prev_employer_1_address"], input[name="borrower1_prev_employer_2_address"]').forEach(input => {
+                input.addEventListener('blur', function() { validateAddress(this); });
+            });
+            document.querySelectorAll('.terms-grid input:not([readonly])').forEach(input => {
+                input.addEventListener('input', calculateTotals); 
+            });
+            if (document.querySelector('.terms-grid')) calculateTotals();
+
+
+            // --- Conditional Display Logic for Address and Employment ---
+            const DURATION_THRESHOLD_YEARS = 2; 
+            const DURATION_THRESHOLD_MONTHS_TOTAL = DURATION_THRESHOLD_YEARS * 12; 
+
+            function updateVisibility(container, sectionType, yearsValue, monthsValue, prev1YearsValue, prev1MonthsValue) {
+                const sectionClass = `.borrower-${sectionType}-section`;
+                const level1DataAttr = `[data-${sectionType}-level="1"]`;
+                const level2DataAttr = `[data-${sectionType}-level="2"]`;
+
+                const section = container.querySelector(sectionClass);
+                if (!section) {
+                    console.warn(`Section ${sectionClass} not found in`, container.id);
+                    return;
+                }
+
+                const prev1Section = section.querySelector(level1DataAttr);
+                const prev2Section = section.querySelector(level2DataAttr);
+
+                if (!prev1Section || !prev2Section) {
+                    console.warn(`Previous history sections not found for ${sectionType} in`, container.id);
+                    return;
+                }
+
+                const totalCurrentMonths = (parseInt(yearsValue) || 0) * 12 + (parseInt(monthsValue) || 0);
+                const totalPrev1Months = (parseInt(prev1YearsValue) || 0) * 12 + (parseInt(prev1MonthsValue) || 0);
+
+                const showPrev1 = totalCurrentMonths < DURATION_THRESHOLD_MONTHS_TOTAL && totalCurrentMonths > 0;
+                prev1Section.style.display = showPrev1 ? 'flex' : 'none';
+                if (!showPrev1) prev1Section.querySelectorAll('input').forEach(input => input.value = '');
+                
+                // For employment, previous employer can have multiple rows (e.g. address on next line)
+                if (sectionType === 'employment' && showPrev1) {
+                    const allPrev1Rows = container.querySelectorAll(`${sectionClass} ${level1DataAttr}`);
+                    allPrev1Rows.forEach(row => row.style.display = 'flex');
+                } else if (sectionType === 'employment' && !showPrev1) {
+                     const allPrev1Rows = container.querySelectorAll(`${sectionClass} ${level1DataAttr}`);
+                    allPrev1Rows.forEach(row => {
+                        row.style.display = 'none';
+                        row.querySelectorAll('input').forEach(input => input.value = '');
+                    });
+                }
+
+
+                const showPrev2 = showPrev1 && totalPrev1Months > 0 && (totalCurrentMonths + totalPrev1Months) < DURATION_THRESHOLD_MONTHS_TOTAL;
+                prev2Section.style.display = showPrev2 ? 'flex' : 'none';
+                if (!showPrev2) prev2Section.querySelectorAll('input').forEach(input => input.value = '');
+
+                if (sectionType === 'employment' && showPrev2) {
+                    const allPrev2Rows = container.querySelectorAll(`${sectionClass} ${level2DataAttr}`);
+                    allPrev2Rows.forEach(row => row.style.display = 'flex');
+                } else if (sectionType === 'employment' && !showPrev2) {
+                     const allPrev2Rows = container.querySelectorAll(`${sectionClass} ${level2DataAttr}`);
+                    allPrev2Rows.forEach(row => {
+                        row.style.display = 'none';
+                        row.querySelectorAll('input').forEach(input => input.value = '');
+                    });
+                }
+            }
+
+
+            const setupBorrowerListeners = (borrowerContainerId) => {
+                const container = document.getElementById(borrowerContainerId);
+                if (!container) return;
+                const borrowerPrefix = borrowerContainerId.replace('Container', '_'); // e.g., borrower1_
+
+                const fieldsToWatch = [
+                    { years: `${borrowerPrefix}current_address_years`, months: `${borrowerPrefix}current_address_months`, prev1Years: `${borrowerPrefix}prev_address_1_years`, prev1Months: `${borrowerPrefix}prev_address_1_months`, type: 'address' },
+                    { years: `${borrowerPrefix}employment_years`, months: `${borrowerPrefix}employment_months`, prev1Years: `${borrowerPrefix}prev_employment_1_years`, prev1Months: `${borrowerPrefix}prev_employment_1_months`, type: 'employment' }
+                ];
+
+                fieldsToWatch.forEach(fieldSet => {
+                    const yearEl = container.querySelector(`input[name="${fieldSet.years}"]`);
+                    const monthEl = container.querySelector(`input[name="${fieldSet.months}"]`);
+                    const prev1YearEl = container.querySelector(`input[name="${fieldSet.prev1Years}"]`);
+                    const prev1MonthEl = container.querySelector(`input[name="${fieldSet.prev1Months}"]`);
+
+                    const updateFunc = () => updateVisibility(container, fieldSet.type, yearEl?.value, monthEl?.value, prev1YearEl?.value, prev1MonthEl?.value);
+
+                    [yearEl, monthEl, prev1YearEl, prev1MonthEl].forEach(el => {
+                        if (el) {
+                            el.addEventListener('input', updateFunc);
+                            el.addEventListener('change', updateFunc); // For number input spinners
+                        }
+                    });
+                    updateFunc(); // Initial call
+                });
+            };
+
+            setupBorrowerListeners('borrower1Container');
+
+            // --- Add/Remove Co-Borrower Functionality ---
+            const toggleBorrowerBtn = document.getElementById('toggleBorrowerBtn');
+            const borrower2Container = document.getElementById('borrower2Container');
+            let coBorrowerVisible = false;
+
+            const addCoBorrower = () => {
+                 if (coBorrowerVisible) return;
+
+                const borrower1Node = document.getElementById('borrower1Container');
+                const clonedBorrowerNode = borrower1Node.cloneNode(true);
+                
+                clonedBorrowerNode.id = 'borrower2ContainerInner'; // Changed for clarity, not strictly necessary
+                borrower2Container.innerHTML = ''; 
+                borrower2Container.appendChild(clonedBorrowerNode);
+
+                const header = borrower2Container.querySelector('.borrower-header');
+                if (header) header.textContent = 'Co-Borrower';
+
+                borrower2Container.querySelectorAll('[id], [name]').forEach(el => {
+                    if (el.id)   el.id = el.id.replace(/borrower1/g, 'borrower2').replace(/^applicant$/, 'borrower2_applicant').replace(/^dob$/, 'borrower2_dob').replace(/^ssn$/, 'borrower2_ssn').replace(/^driversLicense$/, 'borrower2_drivers_license').replace(/^homePhone$/, 'borrower2_home_phone').replace(/^workPhone$/, 'borrower2_work_phone').replace(/^cellPhone$/, 'borrower2_cellPhone').replace(/^email$/, 'borrower2_email').replace(/^currentAddress$/, 'borrower2_currentAddress').replace(/^landlordInfo$/, 'borrower2_landlordInfo').replace(/^currentAddressYears$/, 'borrower2_currentAddressYears').replace(/^currentAddressMonths$/, 'borrower2_currentAddressMonths').replace(/^previousAddress1$/, 'borrower2_previousAddress1').replace(/^prevAddress1LandlordInfo$/, 'borrower2_prevAddress1LandlordInfo').replace(/^prevAddress1Years$/, 'borrower2_prevAddress1Years').replace(/^prevAddress1Months$/, 'borrower2_prevAddress1Months').replace(/^previousAddress2$/, 'borrower2_previousAddress2').replace(/^prevAddress2LandlordInfo$/, 'borrower2_prevAddress2LandlordInfo').replace(/^prevAddress2Years$/, 'borrower2_prevAddress2Years').replace(/^prevAddress2Months$/, 'borrower2_prevAddress2Months').replace(/^currentEmployer$/, 'borrower2_currentEmployer').replace(/^employerPhone$/, 'borrower2_employerPhone').replace(/^title$/, 'borrower2_title').replace(/^employerAddress$/, 'borrower2_employerAddress').replace(/^income$/, 'borrower2_income').replace(/^employmentYears$/, 'borrower2_employmentYears').replace(/^employmentMonths$/, 'borrower2_employmentMonths').replace(/^otherIncome$/, 'borrower2_otherIncome').replace(/^incomeSource$/, 'borrower2_incomeSource').replace(/^previousEmployer1$/, 'borrower2_previousEmployer1').replace(/^prevEmployer1Phone$/, 'borrower2_prevEmployer1Phone').replace(/^prevEmployer1Title$/, 'borrower2_prevEmployer1Title').replace(/^prevEmployer1Address$/, 'borrower2_prevEmployer1Address').replace(/^prevEmployer1Income$/, 'borrower2_prevEmployer1Income').replace(/^prevEmployment1Years$/, 'borrower2_prevEmployment1Years').replace(/^prevEmployment1Months$/, 'borrower2_prevEmployment1Months').replace(/^previousEmployer2$/, 'borrower2_previousEmployer2').replace(/^prevEmployer2Phone$/, 'borrower2_prevEmployer2Phone').replace(/^prevEmployer2Title$/, 'borrower2_prevEmployer2Title').replace(/^prevEmployer2Address$/, 'borrower2_prevEmployer2Address').replace(/^prevEmployer2Income$/, 'borrower2_prevEmployer2Income').replace(/^prevEmployment2Years$/, 'borrower2_prevEmployment2Years').replace(/^prevEmployment2Months$/, 'borrower2_prevEmployment2Months').replace(/^alimonyRecipient$/, 'borrower2_alimonyRecipient').replace(/^alimonyAmount$/, 'borrower2_alimonyAmount').replace(/^coMakerFor$/, 'borrower2_coMakerFor').replace(/^coMakerToWhom$/, 'borrower2_coMakerToWhom').replace(/^judgmentToWhom$/, 'borrower2_judgmentToWhom').replace(/^judgmentAmount$/, 'borrower2_judgmentAmount').replace(/^bankruptcyWhere$/, 'borrower2_bankruptcyWhere').replace(/^bankruptcyYear$/, 'borrower2_bankruptcyYear');
+                    if (el.name) el.name = el.name.replace(/borrower1_/g, 'borrower2_');
+                    
+                    const labelFor = el.getAttribute('for');
+                    if (labelFor) el.setAttribute('for', labelFor.replace(/borrower1/g, 'borrower2').replace(/^applicant$/, 'borrower2_applicant').replace(/^dob$/, 'borrower2_dob').replace(/^ssn$/, 'borrower2_ssn').replace(/^driversLicense$/, 'borrower2_drivers_license').replace(/^homePhone$/, 'borrower2_home_phone').replace(/^workPhone$/, 'borrower2_work_phone').replace(/^cellPhone$/, 'borrower2_cellPhone').replace(/^email$/, 'borrower2_email').replace(/^currentAddress$/, 'borrower2_currentAddress').replace(/^landlordInfo$/, 'borrower2_landlordInfo').replace(/^currentAddressYears$/, 'borrower2_currentAddressYears').replace(/^currentAddressMonths$/, 'borrower2_currentAddressMonths').replace(/^previousAddress1$/, 'borrower2_previousAddress1').replace(/^prevAddress1LandlordInfo$/, 'borrower2_prevAddress1LandlordInfo').replace(/^prevAddress1Years$/, 'borrower2_prevAddress1Years').replace(/^prevAddress1Months$/, 'borrower2_prevAddress1Months').replace(/^previousAddress2$/, 'borrower2_previousAddress2').replace(/^prevAddress2LandlordInfo$/, 'borrower2_prevAddress2LandlordInfo').replace(/^prevAddress2Years$/, 'borrower2_prevAddress2Years').replace(/^prevAddress2Months$/, 'borrower2_prevAddress2Months').replace(/^currentEmployer$/, 'borrower2_currentEmployer').replace(/^employerPhone$/, 'borrower2_employerPhone').replace(/^title$/, 'borrower2_title').replace(/^employerAddress$/, 'borrower2_employerAddress').replace(/^income$/, 'borrower2_income').replace(/^employmentYears$/, 'borrower2_employmentYears').replace(/^employmentMonths$/, 'borrower2_employmentMonths').replace(/^otherIncome$/, 'borrower2_otherIncome').replace(/^incomeSource$/, 'borrower2_incomeSource').replace(/^previousEmployer1$/, 'borrower2_previousEmployer1').replace(/^prevEmployer1Phone$/, 'borrower2_prevEmployer1Phone').replace(/^prevEmployer1Title$/, 'borrower2_prevEmployer1Title').replace(/^prevEmployer1Address$/, 'borrower2_prevEmployer1Address').replace(/^prevEmployer1Income$/, 'borrower2_prevEmployer1Income').replace(/^prevEmployment1Years$/, 'borrower2_prevEmployment1Years').replace(/^prevEmployment1Months$/, 'borrower2_prevEmployment1Months').replace(/^previousEmployer2$/, 'borrower2_previousEmployer2').replace(/^prevEmployer2Phone$/, 'borrower2_prevEmployer2Phone').replace(/^prevEmployer2Title$/, 'borrower2_prevEmployer2Title').replace(/^prevEmployer2Address$/, 'borrower2_prevEmployer2Address').replace(/^prevEmployer2Income$/, 'borrower2_prevEmployer2Income').replace(/^prevEmployment2Years$/, 'borrower2_prevEmployment2Years').replace(/^prevEmployment2Months$/, 'borrower2_prevEmployment2Months').replace(/^alimonyRecipient$/, 'borrower2_alimonyRecipient').replace(/^alimonyAmount$/, 'borrower2_alimonyAmount').replace(/^coMakerFor$/, 'borrower2_coMakerFor').replace(/^coMakerToWhom$/, 'borrower2_coMakerToWhom').replace(/^judgmentToWhom$/, 'borrower2_judgmentToWhom').replace(/^judgmentAmount$/, 'borrower2_judgmentAmount').replace(/^bankruptcyWhere$/, 'borrower2_bankruptcyWhere').replace(/^bankruptcyYear$/, 'borrower2_bankruptcyYear'));
+
+
+                    if (el.tagName === 'INPUT' && el.type !== 'radio' && el.type !== 'checkbox') {
+                        el.value = '';
+                    } else if (el.tagName === 'INPUT' && (el.type === 'radio' || el.type === 'checkbox')) {
+                        el.checked = false;
+                    } else if (el.tagName === 'SELECT') {
+                        el.selectedIndex = 0;
+                    }
+                });
+                
+                borrower2Container.querySelectorAll('.hidden-section').forEach(section => {
+                    section.style.display = 'none'; 
+                });
+
+                borrower2Container.style.display = 'block';
+                toggleBorrowerBtn.textContent = 'Remove Co-Borrower';
+                toggleBorrowerBtn.classList.replace('add-borrower-btn', 'remove-borrower-btn');
+                
+                // Currency input formatting for co-borrower (all event listeners combined)
+                borrower2Container.querySelectorAll('.currency-input').forEach(input => {
+                    input.addEventListener('blur', function() { formatCurrency(this); calculateTotals(); });
+                    input.addEventListener('focus', function() { this.value = String(this.value).replace(/[$,]/g, ''); });
+                    input.addEventListener('input', function() {
+                        // Remove any non-digit or decimal characters while typing
+                        let value = this.value.replace(/[^\d.]/g, '');
+                        const parts = value.split('.');
+                        if (parts.length > 2) {
+                            value = parts[0] + '.' + parts.slice(1).join('');
+                        }
+                        if (parts.length > 1) {
+                            value = parts[0] + '.' + parts[1].slice(0, 2);
+                        }
+                        this.value = value;
+                    });
+                });
+
+                // Add event listeners for phone number formatting in co-borrower section
+                borrower2Container.querySelectorAll('input[type="tel"]').forEach(input => {
+                    input.addEventListener('input', function() { formatPhoneNumber(this); });
+                    input.addEventListener('blur', function() { formatPhoneNumber(this); });
+                });
+
+                // Add event listeners for SSN formatting in co-borrower section
+                borrower2Container.querySelectorAll('input[name*="ssn"]').forEach(input => {
+                    input.addEventListener('input', function() { formatSSN(this); });
+                    input.addEventListener('blur', function() { formatSSN(this); });
+                });
+
+                // Add event listeners for address validation in co-borrower section (specific fields only, exclude years/months)
+                borrower2Container.querySelectorAll('input[name="borrower2_current_address"], input[name="borrower2_previous_address_1"], input[name="borrower2_previous_address_2"], input[name="borrower2_employer_address"], input[name="borrower2_prev_employer_1_address"], input[name="borrower2_prev_employer_2_address"]').forEach(input => {
+                    input.addEventListener('blur', function() { validateAddress(this); });
+                });
+
+                setupBorrowerListeners('borrower2Container'); 
+                coBorrowerVisible = true;
+            };
+
+            const removeCoBorrower = () => {
+                if (!coBorrowerVisible) return;
+                if (confirm('Are you sure you want to remove the co-borrower?')) {
+                    borrower2Container.innerHTML = ''; 
+                    borrower2Container.style.display = 'none';
+                    toggleBorrowerBtn.textContent = 'Add Co-Borrower';
+                    toggleBorrowerBtn.classList.replace('remove-borrower-btn', 'add-borrower-btn');
+                    coBorrowerVisible = false;
+                }
+            };
+
+            toggleBorrowerBtn.addEventListener('click', () => {
+                coBorrowerVisible ? removeCoBorrower() : addCoBorrower();
+            });
+
+            // --- Form Submission Logic ---
+            const creditAppForm = document.getElementById('creditApplication');
+            const submitButton = creditAppForm.querySelector('.submit-btn');
+
+            creditAppForm.addEventListener('submit', async function(event) {
+                event.preventDefault();
+                
+                submitButton.disabled = true;
+                submitButton.textContent = 'Submitting...';
+
+                let isClientValid = true;
+                creditAppForm.querySelectorAll('.error-message').forEach(el => el.remove());
+                creditAppForm.querySelectorAll('.invalid-input').forEach(el => el.classList.remove('invalid-input'));
+
+                creditAppForm.querySelectorAll('input[required], select[required], textarea[required]').forEach(input => {
+                    const parentSection = input.closest('.form-section, .borrower-container');
+                    const isVisible = !!(parentSection && (parentSection.offsetWidth || parentSection.offsetHeight || parentSection.getClientRects().length) && (input.offsetWidth || input.offsetHeight || input.getClientRects().length) && !input.closest('.hidden-section[style*="display: none"]'));
+
+                    if (isVisible && ((input.type === 'checkbox' && !input.checked) || (input.type !== 'checkbox' && !input.value.trim()))) {
+                        isClientValid = false;
+                        input.classList.add('invalid-input');
+                        const errorDiv = document.createElement('div');
+                        errorDiv.className = 'error-message';
+                        errorDiv.textContent = 'This field is required.';
+                        input.parentNode.insertBefore(errorDiv, input.nextSibling);
+                    }
+                });
+                
+                const radioGroupsToValidate = [];
+                ['borrower1', 'borrower2'].forEach(prefix => {
+                    if (prefix === 'borrower1' || (prefix === 'borrower2' && coBorrowerVisible)) {
+                        ['address_type', 'alimony_payments', 'co_maker', 'judgments', 'bankruptcy'].forEach(suffix => {
+                             const groupName = `${prefix}_${suffix}`;
+                             const firstRadioOfGroup = creditAppForm.querySelector(`input[name="${groupName}"]`);
+                             if(firstRadioOfGroup){
+                                const parentField = firstRadioOfGroup.closest('.form-field');
+                                if(parentField && (parentField.offsetWidth || parentField.offsetHeight || parentField.getClientRects().length) && !parentField.closest('.hidden-section[style*="display: none"]')){
+                                    radioGroupsToValidate.push(groupName);
+                                }
+                             }
+                        });
+                    }
+                });
+
+
+                radioGroupsToValidate.forEach(groupName => {
+                    const radioGroupElements = creditAppForm.querySelectorAll(`input[name="${groupName}"]`);
+                    if (radioGroupElements.length > 0) {
+                        const checkedRadio = creditAppForm.querySelector(`input[name="${groupName}"]:checked`);
+                        if (!checkedRadio) { 
+                            isClientValid = false;
+                            const firstRadio = radioGroupElements[0];
+                            firstRadio.classList.add('invalid-input'); 
+                            const errorDiv = document.createElement('div');
+                            errorDiv.className = 'error-message';
+                            errorDiv.textContent = 'Please select an option.';
+                            firstRadio.closest('.radio-group').parentNode.insertBefore(errorDiv, firstRadio.closest('.radio-group').nextSibling);
+                        }
+                    }
+                });
+
+                if (!isClientValid) {
+                    alert('Please correct the errors highlighted on the form.');
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Submit Application';
+                    const firstInvalid = creditAppForm.querySelector('.invalid-input');
+                    if (firstInvalid) firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    return;
+                }
+
+                const form = event.target;
+                const formDataObj = {};
+                const formElements = form.elements;
+
+                for (let i = 0; i < formElements.length; i++) {
+                    const element = formElements[i];
+                    const isVisibleOrAlwaysNeeded = !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length || element.type === 'hidden' || element.name === 'dealer_attestation' || element.name === 'signature_date' || (element.closest('.form-section') && !element.closest('.hidden-section[style*="display: none"]')));
+                    
+                    if (element.name && (isVisibleOrAlwaysNeeded || !element.closest('.hidden-section'))) { 
+                        if (element.type === 'radio') {
+                            if (element.checked) {
+                                formDataObj[element.name] = element.value;
+                            }
+                        } else if (element.type === 'checkbox') {
+                            formDataObj[element.name] = element.checked;
+                        } else if (element.tagName === 'SELECT' && element.multiple) {
+                            formDataObj[element.name] = Array.from(element.selectedOptions).map(opt => opt.value);
+                        } else {
+                            formDataObj[element.name] = element.value;
+                        }
+                    }
+                }
+                
+                if (!coBorrowerVisible) {
+                    Object.keys(formDataObj).forEach(key => {
+                        if (key.startsWith('borrower2_')) {
+                            delete formDataObj[key];
+                        }
+                    });
+                }
+
+                console.log('Submitting FormData:', JSON.stringify(formDataObj, null, 2));
+
+
+            try {
+                const response = await fetch('/api/applications/submit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('pinnacle_auth_token')}` 
+                    },
+                    body: JSON.stringify(formDataObj),
+                });
+
+
+
+                    const result = await response.json();
+
+                    if (!response.ok) {
+                        let errorMessage = `Submission failed: ${result.message || response.statusText}`;
+                        if (result.errors && Array.isArray(result.errors)) {
+                            errorMessage += '\nDetails:\n' + result.errors.join('\n');
+                        }
+                        alert(errorMessage);
+                        console.error('Server Error:', result);
+                    } else {
+                        alert(`Application submitted successfully!\nApplication ID: ${result.application.id}\nTracking: ${result.application.status}`);
+                        
+                        // Redirect back to dashboard with success indicator
+                        window.location.href = '/dashboard.html?submitted=true';
+                    }
+                } catch (error) {
+                    alert('An unexpected error occurred during submission. Please try again. Check console for details.');
+                    console.error('Submission Fetch Error:', error);
+                } finally {
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Submit Application';
+                }
+            });
+
+            if (document.querySelector('.terms-grid')) calculateTotals();
+            setupBorrowerListeners('borrower1Container');
+
+        }); 
+    </script>
+</body>
+</html>

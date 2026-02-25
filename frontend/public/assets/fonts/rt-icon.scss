@@ -1,0 +1,241 @@
+$flaticon_autovault-font: "flaticon_autovault";
+
+@font-face {
+    font-family: $flaticon_autovault-font;
+    src: url("./flaticon_autovault.woff2?fa01aae5d25e80092e59d42cdfef7e67") format("woff2"),
+url("./flaticon_autovault.woff?fa01aae5d25e80092e59d42cdfef7e67") format("woff"),
+url("./flaticon_autovault.eot?fa01aae5d25e80092e59d42cdfef7e67#iefix") format("embedded-opentype"),
+url("./flaticon_autovault.ttf?fa01aae5d25e80092e59d42cdfef7e67") format("truetype"),
+url("./flaticon_autovault.svg?fa01aae5d25e80092e59d42cdfef7e67#flaticon_autovault") format("svg");
+}
+
+i[class^="flaticon-"]:before, i[class*=" flaticon-"]:before {
+    font-family: flaticon_autovault !important;
+    font-style: normal;
+    font-weight: normal !important;
+    font-variant: normal;
+    text-transform: none;
+    line-height: 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+$flaticon_autovault-map: (
+    "angle-small-up": "\f101",
+    "angle-small-down": "\f102",
+    "hatchback": "\f103",
+    "minivan": "\f104",
+    "sport-car": "\f105",
+    "sedan": "\f106",
+    "right-arrow": "\f107",
+    "car": "\f108",
+    "gearshift": "\f109",
+    "user-2": "\f10a",
+    "fuel-station": "\f10b",
+    "convertible-car": "\f10c",
+    "sport-car-1": "\f10d",
+    "review": "\f10e",
+    "user": "\f10f",
+    "check-circle": "\f110",
+    "quotation": "\f111",
+    "star-sharp-half-stroke": "\f112",
+    "star": "\f113",
+    "24-hours-support": "\f114",
+    "competitive": "\f115",
+    "engineer": "\f116",
+    "gps": "\f117",
+    "envelope": "\f118",
+    "phone-flip": "\f119",
+    "marker": "\f11a",
+    "facebook": "\f11b",
+    "twitter": "\f11c",
+    "linkedin": "\f11d",
+    "instagram": "\f11e",
+    "right-arrow-1": "\f11f",
+    "back": "\f120",
+    "vacuum-cleaner": "\f121",
+    "reusable-bottle": "\f122",
+    "clock": "\f123",
+    "message": "\f124",
+    "search": "\f125",
+    "tracking": "\f126",
+    "rental-car": "\f127",
+    "monitoring-test": "\f128",
+    "calendar": "\f129",
+    "car-rental": "\f12a",
+    "location-pin": "\f12b",
+    "car-1": "\f12c",
+    "login": "\f12d",
+    "sport-car-2": "\f12e",
+    "shopping-cart": "\f12f",
+    "delivery-truck": "\f130",
+    "drive": "\f131",
+    "engine": "\f132",
+    "color-palette": "\f133",
+    "whatsapp": "\f134",
+    "minimize-sign": "\f135",
+    "price-tag": "\f136",
+);
+
+.flaticon-angle-small-up:before {
+    content: map-get($flaticon_autovault-map, "angle-small-up");
+}
+.flaticon-angle-small-down:before {
+    content: map-get($flaticon_autovault-map, "angle-small-down");
+}
+.flaticon-hatchback:before {
+    content: map-get($flaticon_autovault-map, "hatchback");
+}
+.flaticon-minivan:before {
+    content: map-get($flaticon_autovault-map, "minivan");
+}
+.flaticon-sport-car:before {
+    content: map-get($flaticon_autovault-map, "sport-car");
+}
+.flaticon-sedan:before {
+    content: map-get($flaticon_autovault-map, "sedan");
+}
+.flaticon-right-arrow:before {
+    content: map-get($flaticon_autovault-map, "right-arrow");
+}
+.flaticon-car:before {
+    content: map-get($flaticon_autovault-map, "car");
+}
+.flaticon-gearshift:before {
+    content: map-get($flaticon_autovault-map, "gearshift");
+}
+.flaticon-user-2:before {
+    content: map-get($flaticon_autovault-map, "user-2");
+}
+.flaticon-fuel-station:before {
+    content: map-get($flaticon_autovault-map, "fuel-station");
+}
+.flaticon-convertible-car:before {
+    content: map-get($flaticon_autovault-map, "convertible-car");
+}
+.flaticon-sport-car-1:before {
+    content: map-get($flaticon_autovault-map, "sport-car-1");
+}
+.flaticon-review:before {
+    content: map-get($flaticon_autovault-map, "review");
+}
+.flaticon-user:before {
+    content: map-get($flaticon_autovault-map, "user");
+}
+.flaticon-check-circle:before {
+    content: map-get($flaticon_autovault-map, "check-circle");
+}
+.flaticon-quotation:before {
+    content: map-get($flaticon_autovault-map, "quotation");
+}
+.flaticon-star-sharp-half-stroke:before {
+    content: map-get($flaticon_autovault-map, "star-sharp-half-stroke");
+}
+.flaticon-star:before {
+    content: map-get($flaticon_autovault-map, "star");
+}
+.flaticon-24-hours-support:before {
+    content: map-get($flaticon_autovault-map, "24-hours-support");
+}
+.flaticon-competitive:before {
+    content: map-get($flaticon_autovault-map, "competitive");
+}
+.flaticon-engineer:before {
+    content: map-get($flaticon_autovault-map, "engineer");
+}
+.flaticon-gps:before {
+    content: map-get($flaticon_autovault-map, "gps");
+}
+.flaticon-envelope:before {
+    content: map-get($flaticon_autovault-map, "envelope");
+}
+.flaticon-phone-flip:before {
+    content: map-get($flaticon_autovault-map, "phone-flip");
+}
+.flaticon-marker:before {
+    content: map-get($flaticon_autovault-map, "marker");
+}
+.flaticon-facebook:before {
+    content: map-get($flaticon_autovault-map, "facebook");
+}
+.flaticon-twitter:before {
+    content: map-get($flaticon_autovault-map, "twitter");
+}
+.flaticon-linkedin:before {
+    content: map-get($flaticon_autovault-map, "linkedin");
+}
+.flaticon-instagram:before {
+    content: map-get($flaticon_autovault-map, "instagram");
+}
+.flaticon-right-arrow-1:before {
+    content: map-get($flaticon_autovault-map, "right-arrow-1");
+}
+.flaticon-back:before {
+    content: map-get($flaticon_autovault-map, "back");
+}
+.flaticon-vacuum-cleaner:before {
+    content: map-get($flaticon_autovault-map, "vacuum-cleaner");
+}
+.flaticon-reusable-bottle:before {
+    content: map-get($flaticon_autovault-map, "reusable-bottle");
+}
+.flaticon-clock:before {
+    content: map-get($flaticon_autovault-map, "clock");
+}
+.flaticon-message:before {
+    content: map-get($flaticon_autovault-map, "message");
+}
+.flaticon-search:before {
+    content: map-get($flaticon_autovault-map, "search");
+}
+.flaticon-tracking:before {
+    content: map-get($flaticon_autovault-map, "tracking");
+}
+.flaticon-rental-car:before {
+    content: map-get($flaticon_autovault-map, "rental-car");
+}
+.flaticon-monitoring-test:before {
+    content: map-get($flaticon_autovault-map, "monitoring-test");
+}
+.flaticon-calendar:before {
+    content: map-get($flaticon_autovault-map, "calendar");
+}
+.flaticon-car-rental:before {
+    content: map-get($flaticon_autovault-map, "car-rental");
+}
+.flaticon-location-pin:before {
+    content: map-get($flaticon_autovault-map, "location-pin");
+}
+.flaticon-car-1:before {
+    content: map-get($flaticon_autovault-map, "car-1");
+}
+.flaticon-login:before {
+    content: map-get($flaticon_autovault-map, "login");
+}
+.flaticon-sport-car-2:before {
+    content: map-get($flaticon_autovault-map, "sport-car-2");
+}
+.flaticon-shopping-cart:before {
+    content: map-get($flaticon_autovault-map, "shopping-cart");
+}
+.flaticon-delivery-truck:before {
+    content: map-get($flaticon_autovault-map, "delivery-truck");
+}
+.flaticon-drive:before {
+    content: map-get($flaticon_autovault-map, "drive");
+}
+.flaticon-engine:before {
+    content: map-get($flaticon_autovault-map, "engine");
+}
+.flaticon-color-palette:before {
+    content: map-get($flaticon_autovault-map, "color-palette");
+}
+.flaticon-whatsapp:before {
+    content: map-get($flaticon_autovault-map, "whatsapp");
+}
+.flaticon-minimize-sign:before {
+    content: map-get($flaticon_autovault-map, "minimize-sign");
+}
+.flaticon-price-tag:before {
+    content: map-get($flaticon_autovault-map, "price-tag");
+}

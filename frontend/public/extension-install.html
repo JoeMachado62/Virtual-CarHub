@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Install Auto Fill Extension - Pinnacle Portal</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .download-section {
+            background: #f0f9ff;
+            border: 2px solid #3b82f6;
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .download-btn {
+            display: inline-block;
+            background: #3b82f6;
+            color: white;
+            padding: 16px 40px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 18px;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+        }
+
+        .download-btn:hover {
+            background: #2563eb;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(59, 130, 246, 0.5);
+        }
+
+        .file-info {
+            margin-top: 15px;
+            color: #6b7280;
+            font-size: 14px;
+        }
+
+        .steps {
+            margin-top: 40px;
+        }
+
+        .step {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 40px;
+            padding-bottom: 40px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .step:last-child {
+            border-bottom: none;
+        }
+
+        .step-number {
+            flex-shrink: 0;
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .step-content h3 {
+            font-size: 20px;
+            color: #1f2937;
+            margin-bottom: 10px;
+        }
+
+        .step-content p {
+            color: #6b7280;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        .step-image {
+            background: #f9fafb;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 15px;
+            text-align: center;
+        }
+
+        .step-image img {
+            max-width: 100%;
+            border-radius: 4px;
+        }
+
+        .code-snippet {
+            background: #1f2937;
+            color: #f9fafb;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            margin: 15px 0;
+            overflow-x: auto;
+        }
+
+        .tip {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+
+        .tip-title {
+            font-weight: 600;
+            color: #92400e;
+            margin-bottom: 5px;
+        }
+
+        .tip-text {
+            color: #78350f;
+            font-size: 14px;
+        }
+
+        .warning {
+            background: #fee2e2;
+            border-left: 4px solid #ef4444;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+
+        .warning-title {
+            font-weight: 600;
+            color: #991b1b;
+            margin-bottom: 5px;
+        }
+
+        .warning-text {
+            color: #7f1d1d;
+            font-size: 14px;
+        }
+
+        .video-placeholder {
+            background: #f3f4f6;
+            border: 2px dashed #d1d5db;
+            border-radius: 8px;
+            padding: 60px 20px;
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .video-placeholder h4 {
+            color: #6b7280;
+            margin-bottom: 10px;
+        }
+
+        .faq {
+            margin-top: 40px;
+            padding-top: 40px;
+            border-top: 2px solid #e5e7eb;
+        }
+
+        .faq h2 {
+            font-size: 24px;
+            color: #1f2937;
+            margin-bottom: 20px;
+        }
+
+        .faq-item {
+            margin-bottom: 20px;
+        }
+
+        .faq-question {
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .faq-answer {
+            color: #6b7280;
+            line-height: 1.6;
+        }
+
+        .support-box {
+            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+            color: white;
+            padding: 30px;
+            border-radius: 8px;
+            text-align: center;
+            margin-top: 40px;
+        }
+
+        .support-box h3 {
+            margin-bottom: 10px;
+        }
+
+        .support-box a {
+            color: white;
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Auto Fill Extension</h1>
+            <p>Install in 3 easy steps (takes 2 minutes)</p>
+        </div>
+
+        <div class="content">
+            <!-- Download Section -->
+            <div class="download-section">
+                <h2 style="margin-bottom: 15px; color: #1f2937;">Step 1: Download the Extension</h2>
+                <a href="/downloads/auto-fill-extension.tar.gz" class="download-btn" download>
+                    📦 Download Extension (40 KB)
+                </a>
+                <div class="file-info">
+                    auto-fill-extension.tar.gz • Version 1.0.0 • Updated Oct 23, 2025
+                </div>
+            </div>
+
+            <div class="tip">
+                <div class="tip-title">💡 Quick Tip</div>
+                <div class="tip-text">The file will download to your Downloads folder. Keep this page open for the next steps!</div>
+            </div>
+
+            <!-- Installation Steps -->
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3>Extract the Extension Folder</h3>
+                        <p>Find the downloaded file in your Downloads folder and extract it:</p>
+                        <ul style="color: #6b7280; margin-left: 20px; line-height: 1.8;">
+                            <li><strong>Windows:</strong> Right-click → "Extract All" → Choose Desktop</li>
+                            <li><strong>Mac:</strong> Double-click the .tar.gz file (it extracts automatically)</li>
+                        </ul>
+                        <p style="margin-top: 15px;">You should now see a folder called <code style="background: #f3f4f6; padding: 2px 6px; border-radius: 3px;">chrome-extension</code> on your Desktop</p>
+                    </div>
+                </div>
+
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3>Install in Chrome Browser</h3>
+                        <p>Follow these steps to load the extension:</p>
+
+                        <div style="margin: 20px 0;">
+                            <strong style="color: #1f2937;">A. Open Chrome Extensions Page</strong>
+                            <p style="margin-top: 5px;">Copy and paste this into Chrome's address bar:</p>
+                            <div class="code-snippet">chrome://extensions/</div>
+                            <p style="margin-top: 10px; font-size: 14px; color: #6b7280;">Or click: Menu (⋮) → More Tools → Extensions</p>
+                        </div>
+
+                        <div style="margin: 20px 0;">
+                            <strong style="color: #1f2937;">B. Enable Developer Mode</strong>
+                            <p style="margin-top: 5px;">Find the toggle in the top-right corner and turn it ON</p>
+                            <div class="step-image">
+                                <div style="background: #fff; padding: 20px; display: inline-block; border: 1px solid #e5e7eb; border-radius: 4px;">
+                                    <div style="text-align: right; margin-bottom: 10px;">
+                                        <span style="background: #3b82f6; color: white; padding: 6px 12px; border-radius: 4px; font-size: 12px;">Developer mode ON</span>
+                                    </div>
+                                    <p style="color: #9ca3af; font-size: 13px;">Toggle should be blue when enabled</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="margin: 20px 0;">
+                            <strong style="color: #1f2937;">C. Load the Extension</strong>
+                            <p style="margin-top: 5px;">Click <strong>"Load unpacked"</strong> button (appears after enabling Developer mode)</p>
+                            <p style="margin-top: 10px;">Navigate to your Desktop and select the <code style="background: #f3f4f6; padding: 2px 6px; border-radius: 3px;">chrome-extension</code> folder</p>
+                        </div>
+
+                        <div style="margin: 20px 0;">
+                            <strong style="color: #1f2937;">D. Pin the Extension (Recommended)</strong>
+                            <p style="margin-top: 5px;">Click the puzzle piece icon 🧩 in Chrome's toolbar</p>
+                            <p style="margin-top: 5px;">Find "Auto Fill Agent" and click the pin 📌 icon</p>
+                        </div>
+
+                        <div class="tip">
+                            <div class="tip-title">✅ Success!</div>
+                            <div class="tip-text">You should now see the Auto Fill Agent icon in your Chrome toolbar. Click it to login!</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Video Tutorial Placeholder -->
+            <div class="video-placeholder">
+                <h4>📹 Video Tutorial Coming Soon</h4>
+                <p style="color: #9ca3af; margin-top: 10px;">Watch a 60-second walkthrough of the installation process</p>
+            </div>
+
+            <!-- Important Notes -->
+            <div class="warning">
+                <div class="warning-title">⚠️ Important Notes</div>
+                <div class="warning-text">
+                    • Keep the <code>chrome-extension</code> folder on your Desktop - don't delete it!<br>
+                    • Chrome needs this folder to run the extension<br>
+                    • If you move/delete the folder, the extension will stop working
+                </div>
+            </div>
+
+            <!-- FAQ -->
+            <div class="faq">
+                <h2>Frequently Asked Questions</h2>
+
+                <div class="faq-item">
+                    <div class="faq-question">❓ I don't see "Load unpacked" button</div>
+                    <div class="faq-answer">Make sure Developer mode is enabled (toggle in top-right corner). The button appears below the toggle.</div>
+                </div>
+
+                <div class="faq-item">
+                    <div class="faq-question">❓ Extension shows an error after loading</div>
+                    <div class="faq-answer">Make sure you selected the correct folder (chrome-extension) and all files are present. Try refreshing the extension page.</div>
+                </div>
+
+                <div class="faq-item">
+                    <div class="faq-question">❓ Can I delete the folder after installation?</div>
+                    <div class="faq-answer">No! Chrome needs the folder to run the extension. Keep it on your Desktop or move it to a permanent location (not Downloads).</div>
+                </div>
+
+                <div class="faq-item">
+                    <div class="faq-question">❓ Will this work on other browsers?</div>
+                    <div class="faq-answer">Currently Chrome and Edge only. Firefox and Safari are not supported at this time.</div>
+                </div>
+
+                <div class="faq-item">
+                    <div class="faq-question">❓ Is my data secure?</div>
+                    <div class="faq-answer">Yes! The extension only communicates with portal.pinnacleautofinance.com. No data is sent to third parties. All communication uses HTTPS encryption.</div>
+                </div>
+            </div>
+
+            <!-- Support Box -->
+            <div class="support-box">
+                <h3>Need Help? 🆘</h3>
+                <p>Contact support at <a href="mailto:support@pinnacleautofinance.com">support@pinnacleautofinance.com</a></p>
+                <p style="margin-top: 10px;">Or visit the <a href="/dashboard.html">Portal Dashboard</a></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Track download
+        document.querySelector('.download-btn').addEventListener('click', function() {
+            console.log('Extension download started');
+            // You can add analytics tracking here
+        });
+    </script>
+</body>
+</html>

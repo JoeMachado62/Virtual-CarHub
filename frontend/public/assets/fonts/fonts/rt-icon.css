@@ -1,0 +1,184 @@
+
+@font-face {
+    font-family: "rt-icon";
+    src: url("./rt-icon.woff2?fa01aae5d25e80092e59d42cdfef7e67") format("woff2"),
+url("./rt-icon.woff?fa01aae5d25e80092e59d42cdfef7e67") format("woff"),
+url("./rt-icon.eot?fa01aae5d25e80092e59d42cdfef7e67#iefix") format("embedded-opentype"),
+url("./rt-icon.ttf?fa01aae5d25e80092e59d42cdfef7e67") format("truetype"),
+url("./rt-icon.svg?fa01aae5d25e80092e59d42cdfef7e67#rt-icon") format("svg")
+}
+
+i[class^="rt-icon-"]:before, i[class*=" rt-icon-"]:before {
+    font-family: rt-icon !important;
+    font-style: normal;
+    font-weight: normal !important;
+    font-variant: normal;
+    text-transform: none;
+    line-height: 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.rt-icon-angle-small-up:before {
+    content: "\f101";
+}
+.rt-icon-angle-small-down:before {
+    content: "\f102";
+}
+.rt-icon-hatchback:before {
+    content: "\f103";
+}
+.rt-icon-minivan:before {
+    content: "\f104";
+}
+.rt-icon-sport-car:before {
+    content: "\f105";
+}
+.rt-icon-sedan:before {
+    content: "\f106";
+}
+.rt-icon-right-arrow:before {
+    content: "\f107";
+}
+.rt-icon-car:before {
+    content: "\f108";
+}
+.rt-icon-gearshift:before {
+    content: "\f109";
+}
+.rt-icon-user-2:before {
+    content: "\f10a";
+}
+.rt-icon-fuel-station:before {
+    content: "\f10b";
+}
+.rt-icon-convertible-car:before {
+    content: "\f10c";
+}
+.rt-icon-sport-car-1:before {
+    content: "\f10d";
+}
+.rt-icon-review:before {
+    content: "\f10e";
+}
+.rt-icon-user:before {
+    content: "\f10f";
+}
+.rt-icon-check-circle:before {
+    content: "\f110";
+}
+.rt-icon-quotation:before {
+    content: "\f111";
+}
+.rt-icon-star-sharp-half-stroke:before {
+    content: "\f112";
+}
+.rt-icon-star:before {
+    content: "\f113";
+}
+.rt-icon-24-hours-support:before {
+    content: "\f114";
+}
+.rt-icon-competitive:before {
+    content: "\f115";
+}
+.rt-icon-engineer:before {
+    content: "\f116";
+}
+.rt-icon-gps:before {
+    content: "\f117";
+}
+.rt-icon-envelope:before {
+    content: "\f118";
+}
+.rt-icon-phone-flip:before {
+    content: "\f119";
+}
+.rt-icon-marker:before {
+    content: "\f11a";
+}
+.rt-icon-facebook:before {
+    content: "\f11b";
+}
+.rt-icon-twitter:before {
+    content: "\f11c";
+}
+.rt-icon-linkedin:before {
+    content: "\f11d";
+}
+.rt-icon-instagram:before {
+    content: "\f11e";
+}
+.rt-icon-right-arrow-1:before {
+    content: "\f11f";
+}
+.rt-icon-back:before {
+    content: "\f120";
+}
+.rt-icon-vacuum-cleaner:before {
+    content: "\f121";
+}
+.rt-icon-reusable-bottle:before {
+    content: "\f122";
+}
+.rt-icon-clock:before {
+    content: "\f123";
+}
+.rt-icon-message:before {
+    content: "\f124";
+}
+.rt-icon-search:before {
+    content: "\f125";
+}
+.rt-icon-tracking:before {
+    content: "\f126";
+}
+.rt-icon-rental-car:before {
+    content: "\f127";
+}
+.rt-icon-monitoring-test:before {
+    content: "\f128";
+}
+.rt-icon-calendar:before {
+    content: "\f129";
+}
+.rt-icon-car-rental:before {
+    content: "\f12a";
+}
+.rt-icon-location-pin:before {
+    content: "\f12b";
+}
+.rt-icon-car-1:before {
+    content: "\f12c";
+}
+.rt-icon-login:before {
+    content: "\f12d";
+}
+.rt-icon-sport-car-2:before {
+    content: "\f12e";
+}
+.rt-icon-shopping-cart:before {
+    content: "\f12f";
+}
+.rt-icon-delivery-truck:before {
+    content: "\f130";
+}
+.rt-icon-drive:before {
+    content: "\f131";
+}
+.rt-icon-engine:before {
+    content: "\f132";
+}
+.rt-icon-color-palette:before {
+    content: "\f133";
+}
+.rt-icon-whatsapp:before {
+    content: "\f134";
+}
+.rt-icon-minimize-sign:before {
+    content: "\f135";
+}
+.rt-icon-price-tag:before {
+    content: "\f136";
+}
+

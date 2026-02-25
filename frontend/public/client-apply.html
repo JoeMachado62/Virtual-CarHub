@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apply for Auto Financing - Pinnacle Auto Finance</title>
+    <style>
+        :root {
+            --primary-red: #9d0208;
+            --accent-red: #e50c0c;
+            --light-red: #fdf0f0;
+            --dark-text: #333;
+            --light-text: #666;
+            --border-color: #e0e0e0;
+            --success-color: #28a745;
+            --section-bg: #ffffff;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f5f5f5;
+            color: var(--dark-text);
+            line-height: 1.6;
+        }
+
+        .header {
+            background: white;
+            border-bottom: 1px solid var(--border-color);
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .logo {
+            color: var(--primary-red);
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        .subtitle {
+            color: var(--light-text);
+            font-size: 14px;
+            margin-top: 5px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        .welcome-card {
+            background: linear-gradient(135deg, var(--primary-red), var(--accent-red));
+            color: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 12px rgba(157, 2, 8, 0.3);
+        }
+
+        .welcome-card h1 {
+            font-size: 32px;
+            margin-bottom: 15px;
+        }
+
+        .welcome-card p {
+            font-size: 16px;
+            opacity: 0.95;
+            line-height: 1.8;
+        }
+
+        .benefits {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .benefit-item {
+            background: rgba(255, 255, 255, 0.15);
+            padding: 15px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .benefit-icon {
+            font-size: 24px;
+        }
+
+        .benefit-text {
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .auth-section {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .auth-tabs {
+            display: flex;
+            border-bottom: 2px solid var(--border-color);
+            margin-bottom: 30px;
+        }
+
+        .auth-tab {
+            flex: 1;
+            text-align: center;
+            padding: 15px;
+            cursor: pointer;
+            color: var(--light-text);
+            font-weight: 500;
+            transition: all 0.3s;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+        }
+
+        .auth-tab.active {
+            color: var(--primary-red);
+            border-bottom-color: var(--primary-red);
+        }
+
+        .auth-content {
+            display: none;
+        }
+
+        .auth-content.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: var(--dark-text);
+            font-size: 14px;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: var(--primary-red);
+            box-shadow: 0 0 0 3px rgba(157, 2, 8, 0.1);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .btn {
+            background: var(--primary-red);
+            color: white;
+            border: none;
+            padding: 14px 24px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            width: 100%;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: var(--accent-red);
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        .info-note {
+            background: var(--light-red);
+            border-left: 4px solid var(--primary-red);
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+            font-size: 14px;
+        }
+
+        .info-note strong {
+            color: var(--primary-red);
+        }
+
+        .footer-text {
+            text-align: center;
+            color: var(--light-text);
+            font-size: 12px;
+            margin-top: 30px;
+            padding-bottom: 30px;
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .success-message {
+            background: #d4edda;
+            color: #155724;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .benefits {
+                grid-template-columns: 1fr;
+            }
+
+            .welcome-card h1 {
+                font-size: 24px;
+            }
+
+            .auth-section {
+                padding: 25px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">Pinnacle Auto Finance</div>
+        <div class="subtitle">Get approved by multiple lenders - One application</div>
+    </div>
+
+    <div class="container">
+        <!-- Welcome Card -->
+        <div class="welcome-card">
+            <h1>🚗 Get the Best Auto Loan Rate</h1>
+            <p>Submit ONE application and we'll automatically check with 10+ trusted lenders. No need to fill out multiple forms or visit different websites. We do the work for you!</p>
+
+            <div class="benefits">
+                <div class="benefit-item">
+                    <div class="benefit-icon">⚡</div>
+                    <div class="benefit-text"><strong>5 minutes</strong> to complete application</div>
+                </div>
+                <div class="benefit-item">
+                    <div class="benefit-icon">🏦</div>
+                    <div class="benefit-text"><strong>10+ lenders</strong> compete for your business</div>
+                </div>
+                <div class="benefit-item">
+                    <div class="benefit-icon">📊</div>
+                    <div class="benefit-text"><strong>Track all offers</strong> in one dashboard</div>
+                </div>
+                <div class="benefit-item">
+                    <div class="benefit-icon">💰</div>
+                    <div class="benefit-text"><strong>Compare rates</strong> side-by-side</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Authentication Section -->
+        <div class="auth-section" id="authSection">
+            <div class="auth-tabs">
+                <div class="auth-tab active" onclick="switchTab('login')">Login</div>
+                <div class="auth-tab" onclick="switchTab('register')">Create Account</div>
+            </div>
+
+            <div class="error-message" id="errorMessage"></div>
+            <div class="success-message" id="successMessage"></div>
+
+            <!-- Login Form -->
+            <div class="auth-content active" id="loginContent">
+                <form id="loginForm" onsubmit="handleLogin(event)">
+                    <div class="form-group">
+                        <label for="loginEmail">Email Address</label>
+                        <input type="email" id="loginEmail" required placeholder="your.email@gmail.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="loginPassword">Password</label>
+                        <input type="password" id="loginPassword" required placeholder="Enter your password">
+                    </div>
+                    <button type="submit" class="btn">Login & Continue</button>
+                </form>
+                <p style="text-align: center; margin-top: 15px; color: var(--light-text); font-size: 14px;">
+                    Don't have an account? <a href="#" onclick="switchTab('register')" style="color: var(--primary-red);">Create one now</a>
+                </p>
+            </div>
+
+            <!-- Register Form -->
+            <div class="auth-content" id="registerContent">
+                <div class="info-note">
+                    <strong>📧 Gmail Required:</strong> We need a Gmail account to receive lender responses automatically. If you don't have Gmail, <a href="https://accounts.google.com/signup" target="_blank" style="color: var(--primary-red);">create one here</a> first.
+                </div>
+
+                <form id="registerForm" onsubmit="handleRegister(event)">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="regFirstName">First Name *</label>
+                            <input type="text" id="regFirstName" required placeholder="John">
+                        </div>
+                        <div class="form-group">
+                            <label for="regLastName">Last Name *</label>
+                            <input type="text" id="regLastName" required placeholder="Doe">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="regEmail">Gmail Address *</label>
+                        <input type="email" id="regEmail" required placeholder="your.email@gmail.com" pattern=".+@gmail\.com">
+                        <small style="color: var(--light-text); font-size: 12px;">Must be a Gmail address</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="regPhone">Phone Number *</label>
+                        <input type="tel" id="regPhone" required placeholder="(555) 123-4567">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="regPassword">Password *</label>
+                        <input type="password" id="regPassword" required placeholder="Create a secure password" minlength="8">
+                        <small style="color: var(--light-text); font-size: 12px;">At least 8 characters</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="regPasswordConfirm">Confirm Password *</label>
+                        <input type="password" id="regPasswordConfirm" required placeholder="Re-enter password">
+                    </div>
+
+                    <button type="submit" class="btn">Create Account & Continue</button>
+                </form>
+                <p style="text-align: center; margin-top: 15px; color: var(--light-text); font-size: 14px;">
+                    Already have an account? <a href="#" onclick="switchTab('login')" style="color: var(--primary-red);">Login here</a>
+                </p>
+            </div>
+        </div>
+
+        <div class="footer-text">
+            🔒 Your information is secure and encrypted. We never share your data without permission.
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'https://portal.pinnacleautofinance.com/api';
+
+        // Get dealer ID from URL parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const dealerId = urlParams.get('dealer') || 'ee56c306-cc40-4dd9-8e86-ef11b313455a'; // Default dealer ID
+
+        function switchTab(tab) {
+            // Update tab styling
+            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.auth-content').forEach(c => c.classList.remove('active'));
+
+            if (tab === 'login') {
+                document.querySelectorAll('.auth-tab')[0].classList.add('active');
+                document.getElementById('loginContent').classList.add('active');
+            } else {
+                document.querySelectorAll('.auth-tab')[1].classList.add('active');
+                document.getElementById('registerContent').classList.add('active');
+            }
+
+            hideMessages();
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('successMessage');
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            document.getElementById('errorMessage').style.display = 'none';
+        }
+
+        function hideMessages() {
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+
+        async function handleLogin(event) {
+            event.preventDefault();
+            hideMessages();
+
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/client/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Store token and client info
+                    localStorage.setItem('clientToken', data.token);
+                    localStorage.setItem('clientInfo', JSON.stringify(data.client));
+
+                    showSuccess('Login successful! Redirecting to your dashboard...');
+                    setTimeout(() => {
+                        window.location.href = '/client-dashboard.html';
+                    }, 1500);
+                } else {
+                    showError(data.message || 'Login failed. Please check your credentials.');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                showError('Unable to connect to server. Please try again.');
+            }
+        }
+
+        async function handleRegister(event) {
+            event.preventDefault();
+            hideMessages();
+
+            const firstName = document.getElementById('regFirstName').value;
+            const lastName = document.getElementById('regLastName').value;
+            const email = document.getElementById('regEmail').value;
+            const phone = document.getElementById('regPhone').value;
+            const password = document.getElementById('regPassword').value;
+            const passwordConfirm = document.getElementById('regPasswordConfirm').value;
+
+            // Validate Gmail
+            if (!email.endsWith('@gmail.com')) {
+                showError('Please use a Gmail address (e.g., yourname@gmail.com)');
+                return;
+            }
+
+            // Validate password match
+            if (password !== passwordConfirm) {
+                showError('Passwords do not match');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/client/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email,
+                        password,
+                        firstName,
+                        lastName,
+                        phone,
+                        dealerId
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Store token and client info
+                    localStorage.setItem('clientToken', data.token);
+                    localStorage.setItem('clientInfo', JSON.stringify(data.client));
+
+                    showSuccess('Account created! Redirecting to your dashboard...');
+                    setTimeout(() => {
+                        window.location.href = '/client-dashboard.html';
+                    }, 1500);
+                } else {
+                    showError(data.message || 'Registration failed. Please try again.');
+                }
+            } catch (error) {
+                console.error('Registration error:', error);
+                showError('Unable to connect to server. Please try again.');
+            }
+        }
+
+        // Check if already logged in
+        window.addEventListener('DOMContentLoaded', () => {
+            const token = localStorage.getItem('clientToken');
+            if (token) {
+                // User already logged in, redirect to dashboard
+                window.location.href = '/client-dashboard.html';
+            }
+        });
+    </script>
+</body>
+</html>

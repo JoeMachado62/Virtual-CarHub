@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VInventory | VirtualCarHub</title>
+
+    <link rel="stylesheet" href="/assets/css/vendor/bootstrap.min.css">
+    <link rel="stylesheet" href="/assets/css/style.css">
+    <link rel="stylesheet" href="/assets/css/vch-theme.css">
+    <link rel="stylesheet" href="/assets/css/vinventory-live.css">
+    <link rel="stylesheet" href="/assets/css/plugins/fontawesome.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="icon" type="image/svg+xml" href="/assets/images/logo/logo.svg">
+</head>
+
+<body class="home-two vch-dark-mode">
+
+    <header class="header-two header--sticky">
+        <div class="header-top">
+            <div class="container-2">
+                <div class="header-top-inner d-flex align-items-center justify-content-between">
+                    <div class="left d-flex align-items-center">
+                        <div class="map-area">
+                            <i class="fa-solid fa-phone" style="color:var(--primary);"></i>
+                            <a href="callto:18333928867">+1 833-EZ-AUTOS</a>
+                        </div>
+                        <div class="map-area">
+                            <i class="fa-solid fa-envelope" style="color:var(--primary);"></i>
+                            <a href="mailto:info@virtualcarhub.com">info@virtualcarhub.com</a>
+                        </div>
+                    </div>
+                    <div class="right">
+                        <div class="social-area-transparent">
+                            <ul class="d-flex align-items-center">
+                                <li><a href="#"><i class="fa-brands fa-x-twitter"></i></a></li>
+                                <li><a href="#"><i class="fa-brands fa-linkedin"></i></a></li>
+                                <li><a href="#"><i class="fa-brands fa-facebook"></i></a></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="container-2">
+            <div class="header-bottom">
+                <div class="row">
+                    <div class="col-lg-12">
+                        <div class="header-wrapper-1">
+                            <div class="logo-area-start">
+                                <a href="/" class="logo">
+                                    <img src="/assets/images/logo/logo.svg" alt="VirtualCarHub" style="max-height: 50px;">
+                                </a>
+                            </div>
+                            <div class="header-right d-block">
+                                <div class="bottom d-flex align-items-center justify-content-between">
+                                    <div class="nav-area">
+                                        <ul>
+                                            <li class="main-nav"><a class="main-menu" href="/">Home</a></li>
+                                            <li class="main-nav"><a class="main-menu" href="/vinventory.html">VInventory</a></li>
+                                            <li class="main-nav"><a class="main-menu" href="/calculator.html">Financing</a></li>
+                                            <li class="main-nav"><a class="main-menu" href="/blog/index.html">Blog</a></li>
+                                            <li class="main-nav"><a class="main-menu" href="/about.html">About Us</a></li>
+                                            <li class="main-nav"><a class="main-menu" href="/contact.html">Contact</a></li>
+                                        </ul>
+                                    </div>
+                                    <div class="bottom-right">
+                                        <div class="button-area">
+                                            <a href="/dashboard.html" class="rts-btn btn-indigo radius-small icon">
+                                                My Garage
+                                                <i class="fa-solid fa-arrow-right"></i>
+                                            </a>
+                                            <a href="#" onclick="openDannyModal(); return false;" class="rts-btn btn-primary radius-small icon">
+                                                Talk to Danny
+                                                <i class="fa-solid fa-microphone"></i>
+                                            </a>
+                                        </div>
+                                        <div class="menu-btn" id="menu-btn">
+                                            <svg width="20" height="16" viewBox="0 0 20 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                                <rect y="0" width="20" height="2" fill="white" />
+                                                <rect y="7" width="20" height="2" fill="white" />
+                                                <rect y="14" width="20" height="2" fill="white" />
+                                            </svg>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <section class="rts-breadcrumb-area bg_image" style="position: relative; overflow: hidden; background: transparent !important;">
+        <img src="https://images.pexels.com/photos/164634/pexels-photo-164634.jpeg?_gl=1*19j087i*_ga*MTMzNjI4MDg5NS4xNzY1Njg1MzM1*_ga_8JE65Q40S6*czE3NjU2ODUzMzQkbzEkZzEkdDE3NjU2ODUzNTckajM3JGwwJGgw"
+            style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; opacity:0.4; z-index:0;" alt="Inventory Background">
+        <div style="position:absolute; top:0; left:0; width:100%; height:100%; background: radial-gradient(circle at center, rgba(2,6,23,0.4) 0%, rgba(2,6,23,1) 90%); z-index:1;"></div>
+        <div class="container" style="position: relative; z-index: 2;">
+            <div class="row">
+                <div class="col-lg-12">
+                    <div class="breadcrumb-inner-area text-center">
+                        <h2 class="title">Wholesale VInventory</h2>
+                        <ul class="breadcrumb-list">
+                            <li><a href="/">Home</a></li>
+                            <li>VInventory</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div class="rts-product-area rts-section-gap">
+        <div class="container">
+            <div class="row g-4">
+                <div class="col-xl-3 col-lg-4">
+                    <div class="vinv-panel">
+                        <h5 class="vinv-title">Account Access</h5>
+                        <div class="vinv-field">
+                            <label for="authEmail">Email</label>
+                            <input id="authEmail" class="vinv-input" type="email" autocomplete="email" placeholder="buyer@virtualcarhub.com">
+                        </div>
+                        <div class="vinv-field">
+                            <label for="authPassword">Password</label>
+                            <input id="authPassword" class="vinv-input" type="password" autocomplete="current-password" placeholder="Enter password">
+                        </div>
+                        <div class="vinv-actions">
+                            <button id="authLoginBtn" type="button" class="vinv-btn">Sign In</button>
+                            <button id="authLogoutBtn" type="button" class="vinv-btn-ghost" style="display:none;">Sign Out</button>
+                        </div>
+                        <p id="authStatus" class="vinv-text" style="margin-top:10px;">Not signed in</p>
+                        <p id="vinvDealStage" class="vinv-pill" style="display:inline-flex; margin-top:8px;">Deal Stage: Guest</p>
+                    </div>
+
+                    <div class="vinv-panel">
+                        <h5 class="vinv-title">Search Filters</h5>
+                        <form id="vinvFilterForm">
+                            <div class="vinv-field">
+                                <label for="filterQuery">Keyword / VIN</label>
+                                <input id="filterQuery" class="vinv-input" name="q" type="text" placeholder="VIN, make, model">
+                            </div>
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterMake">Make</label>
+                                    <select id="filterMake" class="vinv-select" name="make">
+                                        <option value="">Loading makes...</option>
+                                    </select>
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterModel">Model</label>
+                                    <select id="filterModel" class="vinv-select" name="model">
+                                        <option value="">Choose Make First</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterTrim">Trim</label>
+                                    <select id="filterTrim" class="vinv-select" name="trim">
+                                        <option value="">Any Trim</option>
+                                    </select>
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterBody">Body</label>
+                                    <select id="filterBody" class="vinv-select" name="body_type">
+                                        <option value="">Any Body</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterInventoryType">Condition</label>
+                                    <select id="filterInventoryType" class="vinv-select" name="inventory_type">
+                                        <option value="">Any Condition</option>
+                                    </select>
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterState">State</label>
+                                    <select id="filterState" class="vinv-select" name="state">
+                                        <option value="">Any State</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <hr class="vinv-divider">
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterMinPrice">Min Price</label>
+                                    <input id="filterMinPrice" class="vinv-input" name="min_price" type="number" min="0" placeholder="10000">
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterMaxPrice">Max Price</label>
+                                    <input id="filterMaxPrice" class="vinv-input" name="max_price" type="number" min="0" placeholder="50000">
+                                </div>
+                            </div>
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterMinYear">Min Year</label>
+                                    <input id="filterMinYear" class="vinv-input" name="min_year" type="number" min="1980" max="2099" placeholder="2018">
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterMaxYear">Max Year</label>
+                                    <input id="filterMaxYear" class="vinv-input" name="max_year" type="number" min="1980" max="2099" placeholder="2026">
+                                </div>
+                            </div>
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterMinMiles">Min Miles</label>
+                                    <input id="filterMinMiles" class="vinv-input" name="min_miles" type="number" min="0" placeholder="0">
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterMaxMiles">Max Miles</label>
+                                    <input id="filterMaxMiles" class="vinv-input" name="max_miles" type="number" min="0" placeholder="100000">
+                                </div>
+                            </div>
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterMinDom">Min DOM</label>
+                                    <input id="filterMinDom" class="vinv-input" name="min_dom" type="number" min="0" placeholder="0">
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterMaxDom">Max DOM</label>
+                                    <input id="filterMaxDom" class="vinv-input" name="max_dom" type="number" min="0" placeholder="120">
+                                </div>
+                            </div>
+
+                            <hr class="vinv-divider">
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterExteriorColor">Exterior Color</label>
+                                    <select id="filterExteriorColor" class="vinv-select" name="exterior_color">
+                                        <option value="">Any Exterior</option>
+                                    </select>
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterInteriorColor">Interior Color</label>
+                                    <select id="filterInteriorColor" class="vinv-select" name="interior_color">
+                                        <option value="">Any Interior</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterDrivetrain">Drivetrain</label>
+                                    <select id="filterDrivetrain" class="vinv-select" name="drivetrain">
+                                        <option value="">Any Drivetrain</option>
+                                    </select>
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterFuelType">Fuel Type</label>
+                                    <select id="filterFuelType" class="vinv-select" name="fuel_type">
+                                        <option value="">Any Fuel</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterTransmission">Transmission</label>
+                                    <select id="filterTransmission" class="vinv-select" name="transmission">
+                                        <option value="">Any Transmission</option>
+                                    </select>
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterSource">Source</label>
+                                    <select id="filterSource" class="vinv-select" name="source_type">
+                                        <option value="">Any Source</option>
+                                        <option value="marketcheck">MarketCheck</option>
+                                        <option value="dealer_partner">Dealer Partner</option>
+                                        <option value="dealer_wholesale">Dealer Wholesale</option>
+                                        <option value="auction">Auction</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="vinv-check-grid" style="margin-bottom:10px;">
+                                <label class="vinv-check">
+                                    <input type="checkbox" name="certified">
+                                    <span>Certified</span>
+                                </label>
+                                <label class="vinv-check">
+                                    <input type="checkbox" name="single_owner">
+                                    <span>Single Owner</span>
+                                </label>
+                                <label class="vinv-check">
+                                    <input type="checkbox" name="clean_title">
+                                    <span>Clean Title</span>
+                                </label>
+                                <label class="vinv-check">
+                                    <input type="checkbox" name="has_images" checked>
+                                    <span>Has Images</span>
+                                </label>
+                            </div>
+
+                            <label class="vinv-toggle">
+                                <input type="checkbox" name="live_sync" checked>
+                                <span>Live sync via MarketCheck</span>
+                            </label>
+
+                            <div class="vinv-grid-2">
+                                <div class="vinv-field">
+                                    <label for="filterSortBy">Sort By</label>
+                                    <select id="filterSortBy" class="vinv-select" name="sort_by">
+                                        <option value="updated_at" selected>Updated</option>
+                                        <option value="price_asking">Price</option>
+                                        <option value="year">Year</option>
+                                        <option value="odometer">Mileage</option>
+                                    </select>
+                                </div>
+                                <div class="vinv-field">
+                                    <label for="filterSortDir">Direction</label>
+                                    <select id="filterSortDir" class="vinv-select" name="sort_dir">
+                                        <option value="desc" selected>Descending</option>
+                                        <option value="asc">Ascending</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="vinv-actions">
+                                <button type="submit" class="vinv-btn">Search Inventory</button>
+                                <button type="button" id="vinvResetFilters" class="vinv-btn-ghost">Reset</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div class="vinv-panel">
+                        <div class="vinv-header-row">
+                            <h5 class="vinv-title" style="margin:0;">My Garage</h5>
+                            <span id="vinvGarageCount" class="vinv-pill">0 saved</span>
+                        </div>
+                        <div id="vinvGarageList" class="vinv-garage-list">
+                            <div class="vinv-empty">No saved vehicles yet.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-xl-9 col-lg-8">
+                    <div class="vinv-panel">
+                        <div class="vinv-header-row">
+                            <h4 class="vinv-title" style="margin:0;">Search Results</h4>
+                            <div class="vinv-meta">
+                                <span id="vinvResultCount" class="vinv-pill">0 listings</span>
+                                <span id="vinvSyncBadge" class="vinv-pill">Local Search</span>
+                            </div>
+                        </div>
+                        <div id="vinvError"></div>
+                        <div id="vinvGrid" class="row g-3" aria-live="polite">
+                            <div class="col-12">
+                                <div class="vinv-empty">Loading inventory...</div>
+                            </div>
+                        </div>
+                        <div id="vinvPagination" style="margin-top:14px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="vinventoryModal" class="vinv-modal" aria-hidden="true" role="dialog">
+        <div class="vinv-modal-dialog">
+            <div class="vinv-modal-head">
+                <h5 class="vinv-title" style="margin:0;">Vehicle Details</h5>
+                <button id="vinvModalClose" type="button" class="vinv-btn-ghost">Close</button>
+            </div>
+            <div id="vinvModalBody"></div>
+        </div>
+    </div>
+
+    <div id="vinvAuthRequiredModal" class="vinv-modal" aria-hidden="true" role="dialog">
+        <div class="vinv-modal-dialog vinv-auth-dialog">
+            <div class="vinv-modal-head">
+                <h5 class="vinv-title" style="margin:0;">My Garage Access Required</h5>
+                <button id="vinvAuthRequiredClose" type="button" class="vinv-btn-ghost">Close</button>
+            </div>
+            <p id="vinvAuthPromptMessage" class="vinv-auth-message">To Use My Garage Create Free account or Login</p>
+            <div class="vinv-field">
+                <label for="vinvAuthPromptEmail">Email</label>
+                <input id="vinvAuthPromptEmail" class="vinv-input" type="email" autocomplete="email" placeholder="you@example.com">
+            </div>
+            <div class="vinv-field">
+                <label for="vinvAuthPromptPassword">Password</label>
+                <input id="vinvAuthPromptPassword" class="vinv-input" type="password" autocomplete="current-password" placeholder="Enter password">
+            </div>
+            <div class="vinv-actions">
+                <button id="vinvAuthPromptLogin" type="button" class="vinv-btn">Login</button>
+                <button id="vinvAuthPromptRegister" type="button" class="vinv-btn-ghost">Create Free Account</button>
+            </div>
+            <p id="vinvAuthPromptStatus" class="vinv-text" style="margin-top:8px;"></p>
+        </div>
+    </div>
+
+    <div class="rts-footer-area footer-three" id="rts-footer">
+        <div class="container">
+            <div class="row">
+                <div class="col-lg-12">
+                    <div class="footer-wrapper-style-between">
+                        <div class="single-wized logo-area">
+                            <a href="/" class="logo">
+                                <img src="/assets/images/logo/logo-w.svg" width="150" alt="VirtualCarHub">
+                            </a>
+                            <p class="desc">Don't miss out on the latest updates, exclusive offers, and insider news.
+                                Join our community and get everything</p>
+                            <form action="#">
+                                <input type="email" placeholder="Enter your email" required>
+                                <button type="submit" class="rts-btn radius-small btn-primary">Subscribe</button>
+                            </form>
+                        </div>
+                        <div class="single-wized">
+                            <h6 class="title">Contact & legal </h6>
+                            <div class="body">
+                                <ul class="nav-bottom">
+                                    <li><a href="#">Legal</a></li>
+                                    <li><a href="#">Privacy policy</a></li>
+                                    <li><a href="#">Cookies policy </a></li>
+                                    <li><a href="#">Disclaimer</a></li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div class="single-wized">
+                            <h6 class="title">Quick Links</h6>
+                            <div class="body">
+                                <ul class="nav-bottom">
+                                    <li><a href="#">Get In Touch</a></li>
+                                    <li><a href="#">Car Reviews</a></li>
+                                    <li><a href="#">Maintenance Tips </a></li>
+                                    <li><a href="#">Contact Us</a></li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div class="single-wized">
+                            <h6 class="title">Download App</h6>
+                            <div class="body d-flex gap-3">
+                                <a href="#"><img src="/assets/images/about/app-store.svg" alt=""></a>
+                                <a href="#"><img src="/assets/images/about/play-store.svg" alt=""></a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="copyright-area">
+            <div class="container">
+                <div class="row">
+                    <div class="col-lg-12">
+                        <div class="copyright-area-inner d-flex align-items-center justify-content-between">
+                            <p>Copyright © 2026 All Rights Reserved by VirtualCarHub</p>
+                            <div class="social-area-transparent">
+                                <ul class="d-flex align-items-center">
+                                    <li><a href="#"><i class="fa-brands fa-x-twitter"></i></a></li>
+                                    <li><a href="#"><i class="fa-brands fa-linkedin"></i></a></li>
+                                    <li><a href="#"><i class="fa-brands fa-facebook"></i></a></li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/assets/js/plugins/jquery.js"></script>
+    <script src="/assets/js/plugins/jquery-ui.js"></script>
+    <script src="/assets/js/vendor/waw.js"></script>
+    <script src="/assets/js/plugins/counter-up.js"></script>
+    <script src="/assets/js/plugins/contact-form.js"></script>
+    <script src="/assets/js/plugins/swiper.js"></script>
+    <script src="/assets/js/plugins/metismenu.js"></script>
+    <script src="/assets/js/vendor/jarallax.js"></script>
+    <script src="/assets/js/plugins/smooth-scroll.js"></script>
+    <script src="/assets/js/plugins/magnifying-popup.js"></script>
+    <script src="/assets/js/vendor/bootstrap.min.js"></script>
+    <script src="/assets/js/vendor/waypoint.js"></script>
+    <script src="/assets/js/main.js"></script>
+    <script src="/assets/js/vinventory-live.js"></script>
+
+    <script>
+        function openDannyModal() {
+            document.getElementById('dannyModal').style.display = 'flex';
+        }
+
+        function closeDannyModal() {
+            document.getElementById('dannyModal').style.display = 'none';
+        }
+
+        async function startDannyCall(event) {
+            event.preventDefault();
+            const phoneInput = document.getElementById('dannyPhoneInput').value;
+            const statusArea = document.getElementById('dannyStatus');
+            const submitBtn = document.getElementById('dannySubmitBtn');
+
+            if (!phoneInput) return;
+
+            statusArea.style.display = 'block';
+            statusArea.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Connecting to Danny...';
+            submitBtn.disabled = true;
+            submitBtn.style.opacity = '0.5';
+
+            try {
+                const response = await fetch('/api/voice/intake', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ customerPhone: phoneInput })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    statusArea.innerHTML = '<i class="fa-solid fa-phone-volume" style="color:#10B981"></i> Calling you now! Pick up to speak with Danny.';
+                    submitBtn.innerText = 'Call Initiated';
+                } else {
+                    statusArea.innerHTML = '<span style="color:red">Error: ' + (data.error || 'Failed') + '</span>';
+                    submitBtn.disabled = false;
+                    submitBtn.style.opacity = '1';
+                }
+
+            } catch (e) {
+                console.error(e);
+                statusArea.innerHTML = '<span style="color:red">Connection Failed.</span>';
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1';
+            }
+        }
+    </script>
+
+    <div id="dannyModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(8px); z-index: 9999; align-items: center; justify-content: center;">
+        <div style="background: #0f172a; border: 1px solid rgba(255,255,255,0.1); width: 100%; max-width: 500px; border-radius: 20px; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); animation: zoomIn 0.3s ease;">
+            <div style="background: linear-gradient(135deg,  var(--secondary), var(--primary)); padding: 30px; text-align: center; position: relative;">
+                <button onclick="closeDannyModal()" style="position: absolute; top: 15px; right: 15px; background: none; border: none; color: white; font-size: 1.5rem; cursor: pointer;">&times;</button>
+                <div style="width: 80px; height: 80px; background: white; border-radius: 50%; margin: 0 auto 15px; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 25px rgba(0,0,0,0.2);">
+                    <img src="/assets/images/logo/logo.svg" style="width: 40px;" alt="VCH">
+                </div>
+                <h3 style="color: white; margin: 0; font-size: 1.5rem;">Talk to Danny</h3>
+                <p style="color: rgba(255,255,255,0.9); margin: 5px 0 0; font-size: 0.9rem;">Your AI Deal Architect</p>
+            </div>
+
+            <div style="padding: 30px;">
+                <p style="color: var(--text-muted); text-align: center; margin-bottom: 25px;">
+                    Enter your number. Danny will call you immediately to build your deal profile.
+                </p>
+
+                <form onsubmit="startDannyCall(event)">
+                    <div style="position: relative; margin-bottom: 20px;">
+                        <i class="fa-solid fa-phone" style="position: absolute; left: 15px; top: 50%; transform: translateY(-50%); color: var(--text-muted);"></i>
+                        <input type="tel" id="dannyPhoneInput" placeholder="(555) 123-4567" required
+                            style="width: 100%; padding: 15px 15px 15px 45px; background: #1e293b; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; color: white; font-size: 1.1rem;">
+                    </div>
+
+                    <button type="submit" id="dannySubmitBtn" class="rts-btn btn-primary w-100" style="border-radius: 10px; font-size: 1.1rem; padding: 15px;">
+                        Call Me Now
+                    </button>
+                </form>
+
+                <div id="dannyStatus" style="display:none; text-align: center; margin-top: 20px; padding: 15px; background: rgba(16, 185, 129, 0.1); border-radius: 8px; color: var(--text-main);"></div>
+
+                <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; font-size: 0.8rem; color: var(--text-muted);">
+                    <span><i class="fa-solid fa-shield-halved"></i> Secure Line</span>
+                    <span><i class="fa-solid fa-bolt"></i> AI Powered</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

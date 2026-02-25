@@ -1,0 +1,304 @@
+:root {
+    --bg-app: #020617;
+    /* Slate 950 */
+    --bg-surface: #0f172a;
+    /* Slate 900 */
+    --bg-card: #1e293b;
+    /* Slate 800 */
+    --text-main: #f8fafc;
+    /* Slate 50 */
+    --text-muted: #94a3b8;
+    /* Slate 400 */
+    --primary: #10B981;
+    /* Emerald 500 */
+    --secondary: #4F46E5;
+    /* Indigo 600 */
+    --font-main: 'Inter', system-ui, sans-serif;
+}
+
+body {
+    background: radial-gradient(circle at center, rgba(2, 6, 23, 0.4) 0%, rgba(2, 6, 23, 1) 90%), var(--bg-app) !important;
+    color: var(--text-main) !important;
+    font-family: var(--font-main) !important;
+    min-height: 100vh;
+}
+
+/* Header Overrides */
+.header-two,
+.header-one,
+.header--sticky {
+    background-color: var(--bg-surface) !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.main-menu ul li a,
+.main-menu ul li .main-menu {
+    color: var(--text-main) !important;
+}
+
+.header-top {
+    background-color: var(--bg-app) !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.map-area a,
+.social-area-transparent ul li a {
+    color: var(--text-muted) !important;
+}
+
+/* Override Template Backgrounds */
+/* Override Template Backgrounds */
+/* Override Template Backgrounds */
+.rts-banner-area,
+.rts-category-area,
+.rts-portfolio-area,
+.rts-section-gap,
+.rts-section-gapTop,
+.rts-blog-area,
+.rts-counter-area-two,
+.rts-wrapper,
+.rts-wrapper-inner,
+.rts-about-area {
+    background-color: transparent !important;
+}
+
+/* Allow banner images but overlay them dark */
+.bg_image_two {
+    background-color: var(--bg-app);
+    background-blend-mode: overlay;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.title,
+.sub-title {
+    color: var(--text-main) !important;
+}
+
+.section-title span {
+    color: var(--primary) !important;
+}
+
+/* Cards & Wrappers - FIX for White on White */
+.project-wrapper,
+.category-wrapper,
+.project-wrapper2,
+.rts-counter-area-two .counter-inner .inner,
+.review-wrapper,
+.team-wrapper,
+.service-wrapper {
+    background-color: var(--bg-card) !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+    border-radius: 12px;
+    box-shadow: none !important;
+}
+
+/* Specific fix for Stats/Counter Text */
+.rts-counter-area-two .counter-inner .inner .title,
+.rts-counter-area-two .counter-inner .inner .desc {
+    color: var(--text-main) !important;
+}
+
+/* Buttons - FIX for White on White */
+/* Buttons - FIX for White on White */
+.rts-btn.btn-border {
+    background-color: transparent !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    color: var(--text-main) !important;
+}
+
+.rts-btn.btn-border:hover {
+    background-color: var(--primary) !important;
+    border-color: var(--primary) !important;
+    color: white !important;
+}
+
+/* Load More Button - Now using btn-indigo class, no special overrides needed */
+
+/* Blog Page Layout - Proper padding for content */
+.rts-blog-area.inner.rts-section-gapTop {
+    padding-top: 40px !important;
+    padding-bottom: 40px !important;
+}
+
+/* Footer - Light background with proper margins */
+.rts-footer-area.footer-three {
+    background-color: #f8fafc !important;
+    /* Light background */
+    margin-top: 80px !important;
+    padding-top: 80px !important;
+}
+
+.footer-wrapper-style-between {
+    padding-top: 20px !important;
+}
+
+/* Footer text colors for light mode */
+.rts-footer-area.footer-three .single-wized .title,
+.rts-footer-area.footer-three .single-wized .desc,
+.rts-footer-area.footer-three .nav-bottom li a,
+.rts-footer-area.footer-three p {
+    color: #1f2937 !important;
+    /* Dark text for light bg */
+}
+
+/* Footer text colors */
+.rts-footer-area .single-wized .title,
+.rts-footer-area .single-wized .desc,
+.rts-footer-area .nav-bottom li a {
+    color: var(--text-main) !important;
+}
+
+/* CTA Section - Reduce padding */
+.rts-cta-area-three {
+    padding-top: 40px !important;
+    padding-bottom: 40px !important;
+}
+
+/* Navigation Menu Items - Force White */
+.main-nav .main-menu,
+.mobile-menu-link,
+.mm-collapse li a {
+    color: var(--text-main) !important;
+}
+
+/* Sign In Button (Header) */
+.header-right .rts-btn.btn-border {
+    color: white !important;
+    border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+.header-right .rts-btn.btn-border:hover {
+    background-color: var(--primary) !important;
+    border-color: var(--primary) !important;
+}
+
+/* Blog Cards - White on White Fix */
+.blog-wrapper {
+    background-color: var(--bg-card) !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+    border-radius: 12px;
+    padding: 15px;
+    /* Reduced from 20px */
+    margin-bottom: 15px;
+    /* Reduced from 30px */
+}
+
+.blog-wrapper .content h6 a {
+    color: var(--text-main) !important;
+}
+
+.blog-wrapper .content .blog-meta {
+    color: var(--primary) !important;
+}
+
+.blog-wrapper .content .author-date .person,
+.blog-wrapper .content .author-date .date {
+    color: var(--text-muted) !important;
+}
+
+/* Sidebar Boxes */
+.right-side-bar .side-box {
+    background-color: var(--bg-card) !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.right-side-bar .side-box h2 {
+    color: var(--text-main) !important;
+}
+
+
+/* AI Input Field - Glassmorphism */
+.banner-right-side-two {
+    background: rgba(15, 23, 42, 0.6) !important;
+    backdrop-filter: blur(12px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 16px;
+    padding: 30px;
+}
+
+/* Inputs */
+input,
+textarea,
+select {
+    background-color: var(--bg-card) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: white !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: var(--text-muted) !important;
+}
+
+/* True OTD Badge */
+.vch-badge-otd {
+    background-color: var(--bg-surface);
+    color: var(--primary);
+    border: 1px solid var(--primary);
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-weight: bold;
+    display: inline-block;
+}
+
+.vch-badge-dom {
+    background-color: var(--secondary);
+    color: white;
+    padding: 2px 8px;
+    font-size: 0.8rem;
+    border-radius: 10px;
+    margin-left: 10px;
+}
+
+/* Footer */
+.footer-two {
+    background-color: #f1f5f9 !important;
+    /* Light footer */
+}
+
+.copyright-area {
+    background-color: #e2e8f0 !important;
+    /* Light copyright area */
+}
+
+.copyright-area p,
+.copyright-area-inner p {
+    color: #374151 !important;
+}
+
+.rts-btn.btn-indigo {
+    color: var(--text-main);
+    background: var(--bg-card);
+}
+
+.rts-btn.btn-indigo::after {
+    background: #4f7cea;
+}
+
+
+.rts-btn.btn-indigo:hover {
+    color: white;
+}
+
+/* About Page Stats Uniformity */
+.rts-counter-area-two .counter-inner {
+    display: flex !important;
+    align-items: stretch !important;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 30px;
+}
+
+.rts-counter-area-two .counter-inner .inner {
+    width: 100%;
+    flex: 1 1 250px;
+    margin: 0 !important;
+    height: auto !important;
+}
