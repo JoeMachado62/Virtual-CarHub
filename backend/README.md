@@ -25,6 +25,10 @@ uvicorn app.main:app --reload --port 8000
 - All endpoints use a standard envelope: `{ status, data, error }`.
 - Rate limits follow PRD defaults (`BUYER_RATE_LIMIT_PER_MINUTE=100`, `AGENT_RATE_LIMIT_PER_MINUTE=1000`) with Redis-backed or in-memory fallback.
 - Existing Pinnacle env names are supported (for example `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `GHL_DEALS_STAGE_NEW` fallback aliases).
+- WordPress/Motors export endpoint:
+  - JSON: `GET /v1/inventory/wordpress/export?format=json`
+  - CSV: `GET /v1/inventory/wordpress/export?format=csv`
+  - Set `PUBLIC_WEB_BASE_URL` to control generated VDP links.
 - GHL-first e-sign path is supported via document template send (`/proposals/templates/send`) using:
   - `GHL_DOCUMENTS_ENABLED=true`
   - `GHL_RETURN_AUTHORIZATION_TEMPLATE_ID=<template_id>`

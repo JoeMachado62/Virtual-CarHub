@@ -2,7 +2,12 @@ from datetime import UTC, datetime
 
 from sqlalchemy import delete, select
 
-from app.api.v1.routers.inventory import get_inventory_vehicle, search_inventory
+from app.api.v1 import routers as api_routers
+from app.api.v1.routers.inventory import (
+    get_inventory_vehicle,
+    search_inventory,
+    wordpress_inventory_export,
+)
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
 from app.models.entities import Vehicle
@@ -21,6 +26,18 @@ class StubMarketCheckClient:
     def search_inventory(self, params: dict) -> dict:
         _ = params
         return {"listings": self._listings}
+
+
+class StubMarketCheckPriceClient:
+    def __init__(self, average_retail: float) -> None:
+        self.live = True
+        self._average_retail = average_retail
+
+    def get_price(self, vin: str) -> dict:
+        return {
+            "vin": vin,
+            "average_retail": self._average_retail,
+        }
 
 
 def test_ingest_marketcheck_inventory_inserts_rows() -> None:
@@ -131,9 +148,21 @@ def test_inventory_search_and_detail_contract() -> None:
             q=None,
             make=None,
             model=None,
+            trim=None,
             body_type="SUV",
             source_type=None,
             state=None,
+            exterior_color=None,
+            interior_color=None,
+            drivetrain=None,
+            fuel_type=None,
+            transmission=None,
+            inventory_type=None,
+            certified=None,
+            single_owner=None,
+            clean_title=None,
+            min_dom=None,
+            max_dom=None,
             min_price=None,
             max_price=None,
             min_year=None,
@@ -143,6 +172,8 @@ def test_inventory_search_and_detail_contract() -> None:
             has_images=None,
             sort_by="updated_at",
             sort_dir="desc",
+            live_sync=False,
+            sync_limit=72,
             page=1,
             per_page=2,
             db=db,
@@ -164,3 +195,136 @@ def test_inventory_search_and_detail_contract() -> None:
             assert "hero_image" in detail["data"]
             assert "display_mode" in detail["data"]
             assert "inspection_status" in detail["data"]
+
+
+def test_wordpress_export_json_contract() -> None:
+    init_db()
+    with SessionLocal() as db:
+        seed_inventory(db)
+        db.commit()
+
+        response = wordpress_inventory_export(
+            format="json",
+            q=None,
+            make=None,
+            model=None,
+            trim=None,
+            body_type=None,
+            source_type=None,
+            state=None,
+            min_price=None,
+            max_price=None,
+            min_year=None,
+            max_year=None,
+            has_images=None,
+            include_unavailable=False,
+            updated_since=None,
+            sort_by="updated_at",
+            sort_dir="desc",
+            page=1,
+            per_page=3,
+            db=db,
+        )
+
+    assert response["status"] == "ok"
+    payload = response["data"]
+    assert payload["export"]["format"] == "json"
+    assert "source_priority" in payload["export"]
+    assert "items" in payload
+    assert "pagination" in payload
+    if payload["items"]:
+        first = payload["items"][0]
+        assert "external_id" in first
+        assert "vdp_url" in first
+        assert "images" in first
+        assert "source_priority" in first
+        assert "image_display_mode" in first
+        assert "inspection_status" in first
+        assert "has_inspection_report" in first
+        assert "photos_coming_soon" in first
+        assert "marketcheck_average_retail" in first
+        assert "price_delta_marketcheck" in first
+        assert "price_delta_marketcheck_pct" in first
+
+
+def test_wordpress_export_csv_contract() -> None:
+    init_db()
+    with SessionLocal() as db:
+        seed_inventory(db)
+        db.commit()
+
+        response = wordpress_inventory_export(
+            format="csv",
+            q=None,
+            make=None,
+            model=None,
+            trim=None,
+            body_type=None,
+            source_type=None,
+            state=None,
+            min_price=None,
+            max_price=None,
+            min_year=None,
+            max_year=None,
+            has_images=None,
+            include_unavailable=False,
+            updated_since=None,
+            sort_by="updated_at",
+            sort_dir="desc",
+            page=1,
+            per_page=2,
+            db=db,
+        )
+
+    assert response.media_type == "text/csv; charset=utf-8"
+    assert "attachment; filename=" in response.headers.get("content-disposition", "")
+    body = response.body.decode("utf-8")
+    assert body.startswith("external_id,vin,title")
+
+
+def test_wordpress_export_can_include_marketcheck_price_stats(monkeypatch) -> None:
+    init_db()
+    with SessionLocal() as db:
+        seed_inventory(db)
+        db.commit()
+
+        monkeypatch.setattr(
+            api_routers.inventory,
+            "_marketcheck_client",
+            lambda: StubMarketCheckPriceClient(average_retail=33000.0),
+        )
+
+        response = wordpress_inventory_export(
+            format="json",
+            q=None,
+            make=None,
+            model=None,
+            trim=None,
+            body_type=None,
+            source_type=None,
+            state=None,
+            min_price=None,
+            max_price=None,
+            min_year=None,
+            max_year=None,
+            has_images=None,
+            include_unavailable=False,
+            updated_since=None,
+            include_price_stats=True,
+            sort_by="updated_at",
+            sort_dir="desc",
+            page=1,
+            per_page=2,
+            db=db,
+        )
+
+    assert response["status"] == "ok"
+    payload = response["data"]
+    assert payload["export"]["price_stats"]["requested"] is True
+    assert payload["export"]["price_stats"]["enriched"] is True
+    assert payload["items"]
+
+    first = payload["items"][0]
+    assert first["marketcheck_average_retail"] == 33000.0
+    assert isinstance(first["price_delta_marketcheck"], float)
+    assert isinstance(first["price_delta_marketcheck_pct"], float)

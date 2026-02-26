@@ -18,3 +18,14 @@ node_modules/
 
 # Logs
 *.log
+
+# OS artifacts
+.DS_Store
+
+# WordPress build/deploy artifacts
+wordpress/uploads/
+wordpress/packages/*.zip
+wordpress/work/
+
+# Legacy custom child theme snapshot kept local only
+wordpress/themes/virtualcarhub-motors-child/

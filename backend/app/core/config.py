@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     service_token: str = Field(default="dev-service-token", alias="SERVICE_TOKEN")
     cors_origins: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
+    public_web_base_url: str = Field(default="https://virtualcarhub.com", alias="PUBLIC_WEB_BASE_URL")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_file_path: str = Field(default="/var/log/virtual-carhub/backend.log", alias="LOG_FILE_PATH")
 

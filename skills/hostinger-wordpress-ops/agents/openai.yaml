@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hostinger WordPress Ops"
+  short_description: "Manage Hostinger WordPress cloud operations safely"
+  default_prompt: "Use this skill to operate Hostinger-hosted WordPress environments via API CLI and MCP workflows with secure token handling."

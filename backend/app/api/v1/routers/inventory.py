@@ -1,6 +1,10 @@
+import csv
+import io
+import re
+from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import asc, desc, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -11,7 +15,7 @@ from app.db.session import get_db
 from app.integrations.marketcheck_client import MarketCheckClient
 from app.models.entities import Vehicle
 from app.services.image_pipeline_service import resolve_vehicle_card_media, resolve_vehicle_display_context
-from app.services.inventory_service import ingest_marketcheck_inventory, seed_inventory
+from app.services.inventory_service import SOURCE_PRIORITY, ingest_marketcheck_inventory, seed_inventory
 
 router = APIRouter()
 
@@ -29,6 +33,57 @@ FACET_FIELDS = [
     "transmission",
     "inventory_type",
 ]
+
+WORDPRESS_EXPORT_COLUMNS = [
+    "external_id",
+    "vin",
+    "title",
+    "slug",
+    "year",
+    "make",
+    "model",
+    "trim",
+    "body_type",
+    "drivetrain",
+    "fuel_type",
+    "transmission",
+    "mileage",
+    "price",
+    "condition_grade",
+    "inventory_type",
+    "certified",
+    "single_owner",
+    "clean_title",
+    "days_on_market",
+    "exterior_color",
+    "interior_color",
+    "city",
+    "state",
+    "zip",
+    "dealer_name",
+    "source_type",
+    "source_priority",
+    "source_url",
+    "thumbnail",
+    "image_count",
+    "image_display_mode",
+    "inspection_status",
+    "has_inspection_report",
+    "photos_coming_soon",
+    "image_urls",
+    "features",
+    "description",
+    "marketcheck_average_retail",
+    "price_delta_marketcheck",
+    "price_delta_marketcheck_pct",
+    "vdp_path",
+    "vdp_url",
+    "available",
+    "updated_at",
+    "last_seen_active",
+]
+
+SLUG_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 
 def _marketcheck_client() -> MarketCheckClient:
@@ -70,6 +125,15 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _to_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_feature_list(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
@@ -102,6 +166,289 @@ def _parse_facet_buckets(values: Any) -> list[dict[str, Any]]:
             if item:
                 buckets.append({"item": item, "count": 0})
     return buckets
+
+
+def _to_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value if value.tzinfo else value.replace(tzinfo=UTC)
+    return normalized.astimezone(UTC).isoformat()
+
+
+def _parse_iso8601(value: str | None) -> datetime | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _normalize_slug_part(value: Any) -> str:
+    text = _to_str(value)
+    if not text:
+        return ""
+    return SLUG_NON_ALNUM_RE.sub("-", text.lower()).strip("-")
+
+
+def _build_vehicle_title(vehicle: Vehicle) -> str:
+    parts = [str(vehicle.year), vehicle.make, vehicle.model]
+    trim = _to_str(vehicle.trim)
+    if trim:
+        parts.append(trim)
+    return " ".join([part for part in parts if part]).strip()
+
+
+def _build_vehicle_slug(vehicle: Vehicle) -> str:
+    parts = [
+        _normalize_slug_part(vehicle.year),
+        _normalize_slug_part(vehicle.make),
+        _normalize_slug_part(vehicle.model),
+        _normalize_slug_part(vehicle.trim),
+        _normalize_slug_part(vehicle.vin),
+    ]
+    filtered = [part for part in parts if part]
+    return "-".join(filtered) or vehicle.vin.lower()
+
+
+def _build_vdp_links(vin: str) -> tuple[str, str]:
+    path = f"/vinventory-details.html?vin={vin}"
+    base = settings.public_web_base_url.rstrip("/")
+    return path, f"{base}{path}"
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _to_str(value)
+        if not text:
+            continue
+        key = text.strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def _serialize_wordpress_vehicle(db: Session, vehicle: Vehicle) -> dict[str, Any]:
+    display_context = resolve_vehicle_display_context(db, vehicle=vehicle)
+    gallery = display_context.get("gallery_images") or vehicle.images or []
+    hero_image = display_context.get("hero_image")
+    normalized = vehicle.features_normalized or {}
+
+    image_urls = _dedupe_strings([hero_image, *[str(value) for value in gallery]])
+    features = _normalize_feature_list(vehicle.features_raw or [])
+    source_name = (vehicle.source_type or "").lower()
+    source_priority = SOURCE_PRIORITY.get(source_name, 0)
+    vdp_path, vdp_url = _build_vdp_links(vehicle.vin)
+
+    return {
+        "external_id": vehicle.vin,
+        "vin": vehicle.vin,
+        "title": _build_vehicle_title(vehicle),
+        "slug": _build_vehicle_slug(vehicle),
+        "year": vehicle.year,
+        "make": vehicle.make,
+        "model": vehicle.model,
+        "trim": vehicle.trim,
+        "body_type": vehicle.body_type,
+        "drivetrain": vehicle.drivetrain,
+        "fuel_type": normalized.get("fuel_type"),
+        "transmission": normalized.get("transmission"),
+        "mileage": vehicle.odometer,
+        "price": vehicle.price_asking,
+        "condition_grade": vehicle.condition_grade,
+        "inventory_type": normalized.get("inventory_type"),
+        "certified": normalized.get("certified"),
+        "single_owner": normalized.get("single_owner"),
+        "clean_title": normalized.get("clean_title"),
+        "days_on_market": normalized.get("days_on_market"),
+        "exterior_color": normalized.get("exterior_color"),
+        "interior_color": normalized.get("interior_color"),
+        "city": normalized.get("city"),
+        "state": vehicle.location_state,
+        "zip": vehicle.location_zip,
+        "dealer_name": normalized.get("dealer_name"),
+        "source_type": vehicle.source_type,
+        "source_priority": source_priority,
+        "source_url": vehicle.source_url,
+        "thumbnail": image_urls[0] if image_urls else None,
+        "image_count": len(image_urls),
+        "image_display_mode": display_context.get("mode"),
+        "inspection_status": display_context.get("inspection_status"),
+        "has_inspection_report": bool(display_context.get("has_inspection_report")),
+        "photos_coming_soon": len(image_urls) == 0,
+        "images": image_urls,
+        "features": features,
+        "description": normalized.get("description"),
+        "marketcheck_average_retail": None,
+        "price_delta_marketcheck": None,
+        "price_delta_marketcheck_pct": None,
+        "vdp_path": vdp_path,
+        "vdp_url": vdp_url,
+        "available": vehicle.available,
+        "updated_at": _to_iso(vehicle.updated_at),
+        "last_seen_active": _to_iso(vehicle.last_seen_active),
+    }
+
+
+def _extract_marketcheck_average_retail(payload: Any) -> float | None:
+    if not isinstance(payload, dict):
+        return None
+
+    candidates: list[Any] = [
+        payload.get("average_retail"),
+        payload.get("avg_price"),
+        payload.get("average"),
+        payload.get("market_price"),
+        payload.get("retail"),
+        payload.get("estimated_market_price"),
+    ]
+
+    prices = payload.get("prices")
+    if isinstance(prices, dict):
+        candidates.extend(
+            [
+                prices.get("average_retail"),
+                prices.get("avg_price"),
+                prices.get("average"),
+                prices.get("retail"),
+                prices.get("market_price"),
+            ]
+        )
+
+    market = payload.get("market")
+    if isinstance(market, dict):
+        candidates.extend(
+            [
+                market.get("average_retail"),
+                market.get("avg_price"),
+                market.get("average"),
+                market.get("retail"),
+                market.get("market_price"),
+            ]
+        )
+
+    listings = payload.get("listings")
+    if isinstance(listings, list):
+        listing_prices = [_to_float(row.get("price")) for row in listings if isinstance(row, dict)]
+        numeric_prices = [value for value in listing_prices if value is not None]
+        if numeric_prices:
+            candidates.append(round(sum(numeric_prices) / len(numeric_prices), 2))
+
+    for candidate in candidates:
+        parsed = _to_float(candidate)
+        if parsed is not None and parsed > 0:
+            return round(parsed, 2)
+
+    return None
+
+
+def _attach_marketcheck_price_stats(client: MarketCheckClient, items: list[dict[str, Any]]) -> None:
+    for item in items:
+        vin = _to_str(item.get("vin"))
+        asking_price = _to_float(item.get("price"))
+
+        item["marketcheck_average_retail"] = None
+        item["price_delta_marketcheck"] = None
+        item["price_delta_marketcheck_pct"] = None
+
+        if not vin:
+            continue
+
+        try:
+            stats = client.get_price(vin)
+        except Exception:
+            continue
+
+        market_retail = _extract_marketcheck_average_retail(stats)
+        if market_retail is None:
+            continue
+
+        item["marketcheck_average_retail"] = market_retail
+
+        if asking_price is None or asking_price <= 0:
+            continue
+
+        delta = round(market_retail - asking_price, 2)
+        item["price_delta_marketcheck"] = delta
+        item["price_delta_marketcheck_pct"] = round((delta / market_retail) * 100, 2) if market_retail else None
+
+
+def _to_csv_bool(value: Any) -> str:
+    parsed = _to_bool(value)
+    if parsed is None:
+        return ""
+    return "1" if parsed else "0"
+
+
+def _serialize_wordpress_csv_row(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "external_id": item.get("external_id") or "",
+        "vin": item.get("vin") or "",
+        "title": item.get("title") or "",
+        "slug": item.get("slug") or "",
+        "year": item.get("year") or "",
+        "make": item.get("make") or "",
+        "model": item.get("model") or "",
+        "trim": item.get("trim") or "",
+        "body_type": item.get("body_type") or "",
+        "drivetrain": item.get("drivetrain") or "",
+        "fuel_type": item.get("fuel_type") or "",
+        "transmission": item.get("transmission") or "",
+        "mileage": item.get("mileage") or "",
+        "price": item.get("price") or "",
+        "condition_grade": item.get("condition_grade") or "",
+        "inventory_type": item.get("inventory_type") or "",
+        "certified": _to_csv_bool(item.get("certified")),
+        "single_owner": _to_csv_bool(item.get("single_owner")),
+        "clean_title": _to_csv_bool(item.get("clean_title")),
+        "days_on_market": item.get("days_on_market") or "",
+        "exterior_color": item.get("exterior_color") or "",
+        "interior_color": item.get("interior_color") or "",
+        "city": item.get("city") or "",
+        "state": item.get("state") or "",
+        "zip": item.get("zip") or "",
+        "dealer_name": item.get("dealer_name") or "",
+        "source_type": item.get("source_type") or "",
+        "source_priority": item.get("source_priority") or 0,
+        "source_url": item.get("source_url") or "",
+        "thumbnail": item.get("thumbnail") or "",
+        "image_count": item.get("image_count") or 0,
+        "image_display_mode": item.get("image_display_mode") or "",
+        "inspection_status": item.get("inspection_status") or "",
+        "has_inspection_report": _to_csv_bool(item.get("has_inspection_report")),
+        "photos_coming_soon": _to_csv_bool(item.get("photos_coming_soon")),
+        "image_urls": "|".join(item.get("images") or []),
+        "features": "|".join(item.get("features") or []),
+        "description": item.get("description") or "",
+        "marketcheck_average_retail": item.get("marketcheck_average_retail") or "",
+        "price_delta_marketcheck": item.get("price_delta_marketcheck") or "",
+        "price_delta_marketcheck_pct": item.get("price_delta_marketcheck_pct") or "",
+        "vdp_path": item.get("vdp_path") or "",
+        "vdp_url": item.get("vdp_url") or "",
+        "available": _to_csv_bool(item.get("available")),
+        "updated_at": item.get("updated_at") or "",
+        "last_seen_active": item.get("last_seen_active") or "",
+    }
+
+
+def _build_wordpress_export_csv(items: list[dict[str, Any]]) -> str:
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=WORDPRESS_EXPORT_COLUMNS)
+    writer.writeheader()
+    for item in items:
+        writer.writerow(_serialize_wordpress_csv_row(item))
+    return buffer.getvalue()
 
 
 def _build_marketcheck_search_params(
@@ -604,6 +951,136 @@ def search_inventory(
             },
             "sync": sync,
         }
+    )
+
+
+@router.get("/wordpress/export", response_model=None)
+def wordpress_inventory_export(
+    format: str = Query(default="json", pattern="^(json|csv)$"),
+    q: str | None = Query(default=None),
+    make: str | None = Query(default=None),
+    model: str | None = Query(default=None),
+    trim: str | None = Query(default=None),
+    body_type: str | None = Query(default=None),
+    source_type: str | None = Query(default=None),
+    state: str | None = Query(default=None, min_length=2, max_length=2),
+    min_price: float | None = Query(default=None),
+    max_price: float | None = Query(default=None),
+    min_year: int | None = Query(default=None),
+    max_year: int | None = Query(default=None),
+    has_images: bool | None = Query(default=None),
+    include_unavailable: bool = Query(default=False),
+    updated_since: str | None = Query(default=None),
+    include_price_stats: bool = Query(default=False),
+    sort_by: str = Query(default="updated_at", pattern="^(updated_at|price|year|mileage)$"),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> Any:
+    updated_since_at = _parse_iso8601(updated_since)
+    if updated_since and updated_since_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="updated_since must be a valid ISO-8601 timestamp",
+        )
+
+    stmt = select(Vehicle)
+    if not include_unavailable:
+        stmt = stmt.where(Vehicle.available.is_(True))
+
+    if q:
+        text = f"%{q.lower()}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(Vehicle.vin).like(text),
+                func.lower(Vehicle.make).like(text),
+                func.lower(Vehicle.model).like(text),
+                func.lower(func.coalesce(Vehicle.trim, "")).like(text),
+            )
+        )
+    if make:
+        stmt = stmt.where(func.lower(Vehicle.make) == make.lower())
+    if model:
+        stmt = stmt.where(func.lower(Vehicle.model) == model.lower())
+    if trim:
+        stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")) == trim.lower())
+    if body_type:
+        stmt = stmt.where(func.lower(Vehicle.body_type) == body_type.lower())
+    if source_type:
+        stmt = stmt.where(func.lower(Vehicle.source_type) == source_type.lower())
+    if state:
+        stmt = stmt.where(func.lower(Vehicle.location_state) == state.lower())
+    if min_price is not None:
+        stmt = stmt.where(Vehicle.price_asking >= min_price)
+    if max_price is not None:
+        stmt = stmt.where(Vehicle.price_asking <= max_price)
+    if min_year is not None:
+        stmt = stmt.where(Vehicle.year >= min_year)
+    if max_year is not None:
+        stmt = stmt.where(Vehicle.year <= max_year)
+    if has_images is True:
+        stmt = stmt.where(func.coalesce(func.json_array_length(Vehicle.images), 0) > 0)
+    if updated_since_at is not None:
+        stmt = stmt.where(Vehicle.updated_at >= updated_since_at)
+
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+
+    sort_columns = {
+        "updated_at": Vehicle.updated_at,
+        "price": Vehicle.price_asking,
+        "year": Vehicle.year,
+        "mileage": Vehicle.odometer,
+    }
+    order_column = sort_columns[sort_by]
+    order_by = asc(order_column) if sort_dir == "asc" else desc(order_column)
+
+    offset = (page - 1) * per_page
+    rows = db.scalars(
+        stmt.order_by(order_by, desc(Vehicle.updated_at), asc(Vehicle.vin)).offset(offset).limit(per_page)
+    ).all()
+    items = [_serialize_wordpress_vehicle(db, row) for row in rows]
+    price_stats_enriched = False
+
+    if include_price_stats and settings.has_marketcheck and items:
+        try:
+            _attach_marketcheck_price_stats(_marketcheck_client(), items)
+            price_stats_enriched = True
+        except Exception:
+            price_stats_enriched = False
+
+    total_pages = max(1, (total + per_page - 1) // per_page) if total else 0
+    payload = {
+        "items": items,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1 and total_pages > 0,
+        },
+        "export": {
+            "format": format,
+            "generated_at": _to_iso(datetime.now(UTC)),
+            "source_priority": SOURCE_PRIORITY,
+            "price_stats": {
+                "requested": include_price_stats,
+                "enabled": bool(settings.has_marketcheck),
+                "enriched": price_stats_enriched,
+            },
+        },
+    }
+
+    if format == "json":
+        return ok(payload)
+
+    filename = datetime.now(UTC).strftime("virtualcarhub-inventory-%Y%m%dT%H%M%SZ.csv")
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(
+        content=_build_wordpress_export_csv(items),
+        media_type="text/csv; charset=utf-8",
+        headers=headers,
     )
 
 
