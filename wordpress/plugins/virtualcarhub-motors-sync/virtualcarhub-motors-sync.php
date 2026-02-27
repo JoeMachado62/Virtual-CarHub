@@ -14,6 +14,7 @@ define( 'VCH_MOTORS_SYNC_VERSION', '0.1.0' );
 define( 'VCH_MOTORS_SYNC_SETTINGS_OPTION', 'vch_motors_sync_settings' );
 define( 'VCH_MOTORS_SYNC_STATE_OPTION', 'vch_motors_sync_state' );
 define( 'VCH_MOTORS_SYNC_LAST_SYNC_OPTION', 'vch_motors_sync_last_synced_at' );
+define( 'VCH_MOTORS_SYNC_LAST_TEST_OPTION', 'vch_motors_sync_last_test_result' );
 define( 'VCH_MOTORS_SYNC_CRON_HOOK', 'vch_motors_sync_run_event' );
 define( 'VCH_MOTORS_SYNC_NONCE_ACTION', 'vch_motors_sync_now' );
 define( 'VCH_MOTORS_SYNC_NONCE_NAME', 'vch_motors_sync_nonce' );
@@ -161,16 +162,42 @@ function vch_motors_sync_render_admin_page() {
 	$settings = vch_motors_sync_get_settings();
 	$state    = get_option( VCH_MOTORS_SYNC_STATE_OPTION, array() );
 	$last     = get_option( VCH_MOTORS_SYNC_LAST_SYNC_OPTION, '' );
+	$last_test = get_option( VCH_MOTORS_SYNC_LAST_TEST_OPTION, array() );
 	$status   = sanitize_text_field( $_GET['vch_sync_status'] ?? '' );
+	$action   = sanitize_text_field( $_GET['vch_sync_action'] ?? 'sync' );
 	?>
 	<div class="wrap">
 		<h1><?php esc_html_e( 'VirtualCarHub Motors Sync', 'virtualcarhub-motors-sync' ); ?></h1>
 		<p><?php esc_html_e( 'Sync VirtualCarHub inventory export into Motors listing posts.', 'virtualcarhub-motors-sync' ); ?></p>
 
 		<?php if ( 'ok' === $status ) : ?>
-			<div class="notice notice-success"><p><?php esc_html_e( 'Manual sync completed.', 'virtualcarhub-motors-sync' ); ?></p></div>
+			<div class="notice notice-success">
+				<p>
+					<?php
+					if ( 'force' === $action ) {
+						esc_html_e( 'Forced full sync completed.', 'virtualcarhub-motors-sync' );
+					} elseif ( 'test' === $action ) {
+						esc_html_e( 'Connection test succeeded.', 'virtualcarhub-motors-sync' );
+					} else {
+						esc_html_e( 'Manual sync completed.', 'virtualcarhub-motors-sync' );
+					}
+					?>
+				</p>
+			</div>
 		<?php elseif ( 'error' === $status ) : ?>
-			<div class="notice notice-error"><p><?php esc_html_e( 'Manual sync failed. Check Last Sync State below.', 'virtualcarhub-motors-sync' ); ?></p></div>
+			<div class="notice notice-error">
+				<p>
+					<?php
+					if ( 'force' === $action ) {
+						esc_html_e( 'Forced full sync failed. Check Last Sync State below.', 'virtualcarhub-motors-sync' );
+					} elseif ( 'test' === $action ) {
+						esc_html_e( 'Connection test failed. Check Last Connection Test below.', 'virtualcarhub-motors-sync' );
+					} else {
+						esc_html_e( 'Manual sync failed. Check Last Sync State below.', 'virtualcarhub-motors-sync' );
+					}
+					?>
+				</p>
+			</div>
 		<?php endif; ?>
 
 		<form method="post" action="options.php">
@@ -228,12 +255,42 @@ function vch_motors_sync_render_admin_page() {
 			<?php submit_button( __( 'Sync Now', 'virtualcarhub-motors-sync' ), 'secondary' ); ?>
 		</form>
 
+		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-top:12px;">
+			<input type="hidden" name="action" value="vch_motors_sync_force_full_sync">
+			<?php wp_nonce_field( VCH_MOTORS_SYNC_NONCE_ACTION, VCH_MOTORS_SYNC_NONCE_NAME ); ?>
+			<?php submit_button( __( 'Force Full Sync (Reset Checkpoint)', 'virtualcarhub-motors-sync' ), 'secondary' ); ?>
+		</form>
+
+		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-top:12px;">
+			<input type="hidden" name="action" value="vch_motors_sync_test_connection">
+			<?php wp_nonce_field( VCH_MOTORS_SYNC_NONCE_ACTION, VCH_MOTORS_SYNC_NONCE_NAME ); ?>
+			<?php submit_button( __( 'Test API Connection', 'virtualcarhub-motors-sync' ), 'secondary' ); ?>
+		</form>
+
 		<hr>
 		<h2><?php esc_html_e( 'Sync State', 'virtualcarhub-motors-sync' ); ?></h2>
 		<p><strong><?php esc_html_e( 'Last updated_since checkpoint:', 'virtualcarhub-motors-sync' ); ?></strong> <code><?php echo esc_html( $last ?: 'n/a' ); ?></code></p>
 		<pre style="background:#fff;border:1px solid #ccd0d4;padding:12px;max-height:360px;overflow:auto;"><?php echo esc_html( wp_json_encode( $state, JSON_PRETTY_PRINT ) ); ?></pre>
+
+		<hr>
+		<h2><?php esc_html_e( 'Last Connection Test', 'virtualcarhub-motors-sync' ); ?></h2>
+		<pre style="background:#fff;border:1px solid #ccd0d4;padding:12px;max-height:220px;overflow:auto;"><?php echo esc_html( wp_json_encode( $last_test, JSON_PRETTY_PRINT ) ); ?></pre>
 	</div>
 	<?php
+}
+
+function vch_motors_sync_admin_redirect( $status, $action ) {
+	wp_safe_redirect(
+		add_query_arg(
+			array(
+				'page'            => 'vch-motors-sync',
+				'vch_sync_status' => $status,
+				'vch_sync_action' => $action,
+			),
+			admin_url( 'tools.php' )
+		)
+	);
+	exit;
 }
 
 function vch_motors_sync_handle_manual_sync() {
@@ -245,19 +302,55 @@ function vch_motors_sync_handle_manual_sync() {
 
 	$result = vch_motors_sync_run( 'manual' );
 	$status = is_wp_error( $result ) ? 'error' : 'ok';
-
-	wp_safe_redirect(
-		add_query_arg(
-			array(
-				'page'            => 'vch-motors-sync',
-				'vch_sync_status' => $status,
-			),
-			admin_url( 'tools.php' )
-		)
-	);
-	exit;
+	vch_motors_sync_admin_redirect( $status, 'sync' );
 }
 add_action( 'admin_post_vch_motors_sync_now', 'vch_motors_sync_handle_manual_sync' );
+
+function vch_motors_sync_handle_force_full_sync() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Insufficient permissions.', 'virtualcarhub-motors-sync' ) );
+	}
+
+	check_admin_referer( VCH_MOTORS_SYNC_NONCE_ACTION, VCH_MOTORS_SYNC_NONCE_NAME );
+
+	update_option( VCH_MOTORS_SYNC_LAST_SYNC_OPTION, '', false );
+	$result = vch_motors_sync_run( 'manual-force-full' );
+	$status = is_wp_error( $result ) ? 'error' : 'ok';
+	vch_motors_sync_admin_redirect( $status, 'force' );
+}
+add_action( 'admin_post_vch_motors_sync_force_full_sync', 'vch_motors_sync_handle_force_full_sync' );
+
+function vch_motors_sync_handle_test_connection() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Insufficient permissions.', 'virtualcarhub-motors-sync' ) );
+	}
+
+	check_admin_referer( VCH_MOTORS_SYNC_NONCE_ACTION, VCH_MOTORS_SYNC_NONCE_NAME );
+
+	$settings = vch_motors_sync_get_settings();
+	$result   = vch_motors_sync_fetch_export_page( $settings, 1, '' );
+	$state    = array(
+		'tested_at' => gmdate( 'c' ),
+		'endpoint'  => $settings['export_endpoint'],
+		'success'   => false,
+	);
+
+	if ( is_wp_error( $result ) ) {
+		$state['error'] = $result->get_error_message();
+		update_option( VCH_MOTORS_SYNC_LAST_TEST_OPTION, $state, false );
+		vch_motors_sync_admin_redirect( 'error', 'test' );
+	}
+
+	$items      = is_array( $result['items'] ?? null ) ? $result['items'] : array();
+	$pagination = is_array( $result['pagination'] ?? null ) ? $result['pagination'] : array();
+	$state['success'] = true;
+	$state['items_on_first_page'] = count( $items );
+	$state['has_next'] = ! empty( $pagination['has_next'] );
+	$state['first_vin'] = ! empty( $items[0]['vin'] ) ? $items[0]['vin'] : null;
+	update_option( VCH_MOTORS_SYNC_LAST_TEST_OPTION, $state, false );
+	vch_motors_sync_admin_redirect( 'ok', 'test' );
+}
+add_action( 'admin_post_vch_motors_sync_test_connection', 'vch_motors_sync_handle_test_connection' );
 
 function vch_motors_sync_run_cron() {
 	vch_motors_sync_run( 'cron' );

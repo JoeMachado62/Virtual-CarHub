@@ -13,6 +13,8 @@ This plugin imports inventory rows from the VirtualCarHub backend export API int
 - Stores MarketCheck price comparison fields when enabled.
 - Supports scheduled sync (WP-Cron) and manual sync from wp-admin.
 - Enforces a hard floor: only listings with `days_on_market >= 45` are eligible for publish.
+- Includes one-click `Force Full Sync (Reset Checkpoint)` action in wp-admin.
+- Includes one-click `Test API Connection` action in wp-admin.
 
 ## Admin setup
 

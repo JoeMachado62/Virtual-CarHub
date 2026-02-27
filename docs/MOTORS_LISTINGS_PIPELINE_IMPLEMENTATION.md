@@ -55,6 +55,8 @@ The WordPress plugin stores these in listing meta for reporting widgets or dashb
 
 - Scheduled sync via WP-Cron.
 - Manual sync from wp-admin (`Tools > VCH Motors Sync`).
+- Forced full sync from wp-admin (resets `updated_since` checkpoint and runs full upsert).
+- API connectivity test from wp-admin (checks export endpoint and first-page payload).
 - Hard publish floor: only vehicles with `days_on_market >= 45`.
 - VIN-based idempotent upsert.
 - Sold handling via `car_mark_as_sold` when `available=false`.
