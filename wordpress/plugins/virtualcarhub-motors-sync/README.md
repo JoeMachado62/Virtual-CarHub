@@ -20,7 +20,7 @@ This plugin imports inventory rows from the VirtualCarHub backend export API int
 2. Open `Tools > VCH Motors Sync`.
 3. Configure:
    - `Export Endpoint`: your backend export endpoint.
-   - `Bearer Token`: optional, only if your endpoint requires auth.
+   - `Bearer Token`: required if backend sets `WORDPRESS_EXPORT_BEARER_TOKEN`.
    - `Listing Post Type`: usually `listings`.
    - `Rows Per Page` and `Max Pages Per Run`.
    - `Include MarketCheck Price Stats` if you want pricing deltas.

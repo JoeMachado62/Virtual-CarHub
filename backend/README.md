@@ -29,6 +29,7 @@ uvicorn app.main:app --reload --port 8000
   - JSON: `GET /v1/inventory/wordpress/export?format=json`
   - CSV: `GET /v1/inventory/wordpress/export?format=csv`
   - Set `PUBLIC_WEB_BASE_URL` to control generated VDP links.
+  - Optional auth: set `WORDPRESS_EXPORT_BEARER_TOKEN` and send `Authorization: Bearer <token>`.
 - GHL-first e-sign path is supported via document template send (`/proposals/templates/send`) using:
   - `GHL_DOCUMENTS_ENABLED=true`
   - `GHL_RETURN_AUTHORIZATION_TEMPLATE_ID=<template_id>`

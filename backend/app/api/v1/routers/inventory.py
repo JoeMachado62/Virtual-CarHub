@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import Integer, asc, desc, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_service_token
+from app.api.deps import require_service_token, require_wordpress_export_auth
 from app.core.config import settings
 from app.core.responses import ok
 from app.db.session import get_db
@@ -956,6 +956,7 @@ def search_inventory(
 
 @router.get("/wordpress/export", response_model=None)
 def wordpress_inventory_export(
+    _auth: None = Depends(require_wordpress_export_auth),
     format: str = Query(default="json", pattern="^(json|csv)$"),
     q: str | None = Query(default=None),
     make: str | None = Query(default=None),

@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     )
 
     service_token: str = Field(default="dev-service-token", alias="SERVICE_TOKEN")
+    wordpress_export_bearer_token: str = Field(default="", alias="WORDPRESS_EXPORT_BEARER_TOKEN")
     cors_origins: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
     public_web_base_url: str = Field(default="https://virtualcarhub.com", alias="PUBLIC_WEB_BASE_URL")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
