@@ -17,6 +17,7 @@ define( 'VCH_MOTORS_SYNC_LAST_SYNC_OPTION', 'vch_motors_sync_last_synced_at' );
 define( 'VCH_MOTORS_SYNC_CRON_HOOK', 'vch_motors_sync_run_event' );
 define( 'VCH_MOTORS_SYNC_NONCE_ACTION', 'vch_motors_sync_now' );
 define( 'VCH_MOTORS_SYNC_NONCE_NAME', 'vch_motors_sync_nonce' );
+define( 'VCH_MOTORS_SYNC_MIN_DAYS_ON_MARKET', 45 );
 
 function vch_motors_sync_default_settings() {
 	return array(
@@ -215,6 +216,7 @@ function vch_motors_sync_render_admin_page() {
 					</td>
 				</tr>
 			</table>
+			<p><strong><?php esc_html_e( 'Hard rule:', 'virtualcarhub-motors-sync' ); ?></strong> <?php echo esc_html( sprintf( 'Only vehicles with Days on Market >= %d are eligible for publish.', (int) VCH_MOTORS_SYNC_MIN_DAYS_ON_MARKET ) ); ?></p>
 			<?php submit_button( __( 'Save Sync Settings', 'virtualcarhub-motors-sync' ) ); ?>
 		</form>
 
@@ -262,6 +264,49 @@ function vch_motors_sync_run_cron() {
 }
 add_action( VCH_MOTORS_SYNC_CRON_HOOK, 'vch_motors_sync_run_cron' );
 
+function vch_motors_sync_apply_dom_floor_to_listing_queries( $query ) {
+	if ( ! ( $query instanceof WP_Query ) ) {
+		return;
+	}
+
+	if ( is_admin() && ! wp_doing_ajax() ) {
+		return;
+	}
+
+	$settings         = vch_motors_sync_get_settings();
+	$target_post_type = sanitize_key( (string) ( $settings['post_type'] ?? 'listings' ) );
+	if ( empty( $target_post_type ) ) {
+		$target_post_type = 'listings';
+	}
+
+	$post_type = $query->get( 'post_type' );
+	$matches   = false;
+	if ( is_array( $post_type ) ) {
+		$matches = in_array( $target_post_type, $post_type, true );
+	} elseif ( is_string( $post_type ) ) {
+		$matches = $target_post_type === $post_type;
+	}
+
+	if ( ! $matches && $query->is_post_type_archive( $target_post_type ) ) {
+		$matches = true;
+	}
+
+	if ( ! $matches ) {
+		return;
+	}
+
+	$meta_query   = $query->get( 'meta_query' );
+	$meta_query   = is_array( $meta_query ) ? $meta_query : array();
+	$meta_query[] = array(
+		'key'     => 'vch_days_on_market',
+		'value'   => (int) VCH_MOTORS_SYNC_MIN_DAYS_ON_MARKET,
+		'compare' => '>=',
+		'type'    => 'NUMERIC',
+	);
+	$query->set( 'meta_query', $meta_query );
+}
+add_action( 'pre_get_posts', 'vch_motors_sync_apply_dom_floor_to_listing_queries', 20 );
+
 function vch_motors_sync_run( $trigger = 'manual' ) {
 	$settings      = vch_motors_sync_get_settings();
 	$updated_since = (string) get_option( VCH_MOTORS_SYNC_LAST_SYNC_OPTION, '' );
@@ -274,6 +319,7 @@ function vch_motors_sync_run( $trigger = 'manual' ) {
 		'items_seen'       => 0,
 		'items_created'    => 0,
 		'items_updated'    => 0,
+		'items_skipped_dom'=> 0,
 		'items_failed'     => 0,
 		'errors'           => array(),
 		'updated_since_in' => $updated_since,
@@ -299,6 +345,12 @@ function vch_motors_sync_run( $trigger = 'manual' ) {
 		$state['items_seen'] += count( $items );
 
 		foreach ( $items as $item ) {
+			$dom_value = vch_motors_sync_to_int( $item['days_on_market'] ?? null );
+			if ( null === $dom_value || $dom_value < (int) VCH_MOTORS_SYNC_MIN_DAYS_ON_MARKET ) {
+				$state['items_skipped_dom']++;
+				continue;
+			}
+
 			$sync_result = vch_motors_sync_upsert_listing( $item, $settings );
 			if ( is_wp_error( $sync_result ) ) {
 				$state['items_failed']++;
@@ -347,6 +399,7 @@ function vch_motors_sync_fetch_export_page( $settings, $page, $updated_since ) {
 		'per_page'           => max( 1, (int) $settings['per_page'] ),
 		'sort_by'            => 'updated_at',
 		'sort_dir'           => 'asc',
+		'min_dom'            => (string) (int) VCH_MOTORS_SYNC_MIN_DAYS_ON_MARKET,
 		'include_unavailable'=> 'true',
 		'include_price_stats'=> empty( $settings['include_price_stats'] ) ? 'false' : 'true',
 	);
@@ -468,6 +521,7 @@ function vch_motors_sync_upsert_listing( $item, $settings ) {
 	vch_motors_sync_set_meta( $post_id, 'vch_available', ! empty( $item['available'] ) ? '1' : '0' );
 	vch_motors_sync_set_meta( $post_id, 'vch_last_seen_active', (string) ( $item['last_seen_active'] ?? '' ) );
 	vch_motors_sync_set_meta( $post_id, 'vch_updated_at', (string) ( $item['updated_at'] ?? '' ) );
+	vch_motors_sync_set_meta( $post_id, 'vch_days_on_market', vch_motors_sync_to_int( $item['days_on_market'] ?? null ) );
 
 	if ( empty( $item['available'] ) ) {
 		update_post_meta( $post_id, 'car_mark_as_sold', 'on' );

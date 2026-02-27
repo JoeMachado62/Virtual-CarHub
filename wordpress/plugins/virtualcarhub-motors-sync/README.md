@@ -12,6 +12,7 @@ This plugin imports inventory rows from the VirtualCarHub backend export API int
 - Sets sold flag (`car_mark_as_sold`) for unavailable listings.
 - Stores MarketCheck price comparison fields when enabled.
 - Supports scheduled sync (WP-Cron) and manual sync from wp-admin.
+- Enforces a hard floor: only listings with `days_on_market >= 45` are eligible for publish.
 
 ## Admin setup
 
@@ -43,6 +44,7 @@ The plugin is built to consume the current VirtualCarHub export contract includi
 - `images[]`, `thumbnail`, `available`, `updated_at`
 - `image_display_mode`, `inspection_status`, `has_inspection_report`, `photos_coming_soon`
 - `marketcheck_average_retail`, `price_delta_marketcheck`, `price_delta_marketcheck_pct`
+- `days_on_market`
 
 ## Notes
 

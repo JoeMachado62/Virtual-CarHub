@@ -17,7 +17,7 @@ Use a WordPress dealer theme for speed on front-end UX while keeping Virtual-Car
   - `format=csv` returns downloadable CSV
 - Query params:
   - `q, make, model, trim, body_type, source_type, state`
-  - `min_price, max_price, min_year, max_year`
+  - `min_price, max_price, min_year, max_year, min_dom, max_dom`
   - `has_images, include_unavailable, updated_since`
   - `sort_by (updated_at|price|year|mileage), sort_dir (asc|desc)`
   - `page, per_page`

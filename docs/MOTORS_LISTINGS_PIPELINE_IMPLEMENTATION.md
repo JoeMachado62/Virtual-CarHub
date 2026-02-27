@@ -17,6 +17,7 @@ Use Motors inventory and single-listing UX while keeping VirtualCarHub backend a
    - `auction` > `dealer_partner` / `dealer_wholesale` > `marketcheck`.
 3. WordPress plugin fetches pages from:
    - `GET /api/v1/inventory/wordpress/export?format=json`
+   - Plugin enforces `min_dom=45` on export fetch.
 4. Plugin upserts Motors listing posts by VIN (`vin_number`).
 5. Motors inventory and single-listing pages render from native listing post/meta/taxonomy data.
 
@@ -54,6 +55,7 @@ The WordPress plugin stores these in listing meta for reporting widgets or dashb
 
 - Scheduled sync via WP-Cron.
 - Manual sync from wp-admin (`Tools > VCH Motors Sync`).
+- Hard publish floor: only vehicles with `days_on_market >= 45`.
 - VIN-based idempotent upsert.
 - Sold handling via `car_mark_as_sold` when `available=false`.
 - Featured image + gallery sync with URL-fingerprint dedupe.

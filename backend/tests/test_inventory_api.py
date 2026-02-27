@@ -216,9 +216,12 @@ def test_wordpress_export_json_contract() -> None:
             max_price=None,
             min_year=None,
             max_year=None,
+            min_dom=None,
+            max_dom=None,
             has_images=None,
             include_unavailable=False,
             updated_since=None,
+            include_price_stats=False,
             sort_by="updated_at",
             sort_dir="desc",
             page=1,
@@ -266,9 +269,12 @@ def test_wordpress_export_csv_contract() -> None:
             max_price=None,
             min_year=None,
             max_year=None,
+            min_dom=None,
+            max_dom=None,
             has_images=None,
             include_unavailable=False,
             updated_since=None,
+            include_price_stats=False,
             sort_by="updated_at",
             sort_dir="desc",
             page=1,
@@ -307,6 +313,8 @@ def test_wordpress_export_can_include_marketcheck_price_stats(monkeypatch) -> No
             max_price=None,
             min_year=None,
             max_year=None,
+            min_dom=None,
+            max_dom=None,
             has_images=None,
             include_unavailable=False,
             updated_since=None,
@@ -328,3 +336,67 @@ def test_wordpress_export_can_include_marketcheck_price_stats(monkeypatch) -> No
     assert first["marketcheck_average_retail"] == 33000.0
     assert isinstance(first["price_delta_marketcheck"], float)
     assert isinstance(first["price_delta_marketcheck_pct"], float)
+
+
+def test_wordpress_export_filters_by_days_on_market() -> None:
+    init_db()
+    with SessionLocal() as db:
+        db.execute(delete(Vehicle).where(Vehicle.vin.in_(["1HGCM82633A004501", "1HGCM82633A004502"])))
+
+        db.add(
+            Vehicle(
+                vin="1HGCM82633A004501",
+                year=2021,
+                make="Toyota",
+                model="Camry",
+                price_asking=22995,
+                source_type="marketcheck",
+                available=True,
+                features_normalized={"days_on_market": 30},
+            )
+        )
+        db.add(
+            Vehicle(
+                vin="1HGCM82633A004502",
+                year=2020,
+                make="Honda",
+                model="Accord",
+                price_asking=21995,
+                source_type="marketcheck",
+                available=True,
+                features_normalized={"days_on_market": 60},
+            )
+        )
+        db.commit()
+
+        response = wordpress_inventory_export(
+            format="json",
+            q=None,
+            make=None,
+            model=None,
+            trim=None,
+            body_type=None,
+            source_type=None,
+            state=None,
+            min_price=None,
+            max_price=None,
+            min_year=None,
+            max_year=None,
+            min_dom=45,
+            max_dom=None,
+            has_images=None,
+            include_unavailable=False,
+            updated_since=None,
+            include_price_stats=False,
+            sort_by="updated_at",
+            sort_dir="desc",
+            page=1,
+            per_page=100,
+            db=db,
+        )
+
+    assert response["status"] == "ok"
+    items = response["data"]["items"]
+    vins = {item["vin"] for item in items}
+    assert "1HGCM82633A004501" not in vins
+    assert "1HGCM82633A004502" in vins

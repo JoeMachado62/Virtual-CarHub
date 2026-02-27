@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import asc, desc, func, or_, select
+from sqlalchemy import Integer, asc, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_service_token
@@ -968,6 +968,8 @@ def wordpress_inventory_export(
     max_price: float | None = Query(default=None),
     min_year: int | None = Query(default=None),
     max_year: int | None = Query(default=None),
+    min_dom: int | None = Query(default=None, ge=0),
+    max_dom: int | None = Query(default=None, ge=0),
     has_images: bool | None = Query(default=None),
     include_unavailable: bool = Query(default=False),
     updated_since: str | None = Query(default=None),
@@ -1019,6 +1021,10 @@ def wordpress_inventory_export(
         stmt = stmt.where(Vehicle.year >= min_year)
     if max_year is not None:
         stmt = stmt.where(Vehicle.year <= max_year)
+    if min_dom is not None:
+        stmt = stmt.where(Vehicle.features_normalized["days_on_market"].as_string().cast(Integer) >= min_dom)
+    if max_dom is not None:
+        stmt = stmt.where(Vehicle.features_normalized["days_on_market"].as_string().cast(Integer) <= max_dom)
     if has_images is True:
         stmt = stmt.where(func.coalesce(func.json_array_length(Vehicle.images), 0) > 0)
     if updated_since_at is not None:
