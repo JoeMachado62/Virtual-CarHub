@@ -1,16 +1,20 @@
+import { Suspense } from "react";
+
 import { InventoryExplorer } from "@/components/InventoryExplorer";
 
 export default function InventoryPage() {
   return (
-    <main>
-      <section className="hero" style={{ marginBottom: 12 }}>
-        <h1>Inventory</h1>
-        <p>
-          CarGurus-style discovery with sidebar filters, paginated results, and VIN-level detail pages that swap to
-          verified inspection media as deals advance.
+    <main className="page-stack">
+      <section className="section-shell page-hero compact">
+        <p className="section-eyebrow">Inventory</p>
+        <h1>Unified search across the same backend inventory engine.</h1>
+        <p className="muted-copy">
+          This route mirrors VInventory and can be kept as an internal alias while the public product language settles.
         </p>
       </section>
-      <InventoryExplorer />
+      <Suspense fallback={<div className="card">Loading inventory search...</div>}>
+        <InventoryExplorer />
+      </Suspense>
     </main>
   );
 }

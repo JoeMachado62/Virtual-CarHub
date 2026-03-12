@@ -10,7 +10,7 @@
 ## Local startup
 
 ```bash
-cd /var/www/paf-ghl/Virtual-CarHub
+cd /var/www/virtual-carhub
 docker compose up -d backend prometheus loki promtail grafana
 ```
 

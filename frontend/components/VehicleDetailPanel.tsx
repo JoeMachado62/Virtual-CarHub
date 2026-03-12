@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import Link from "next/link";
@@ -58,6 +59,8 @@ type VehicleDetail = {
   updated_at?: string | null;
 };
 
+const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
+
 export function VehicleDetailPanel({ vin }: { vin: string }) {
   const [vehicle, setVehicle] = useState<VehicleDetail | null>(null);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -111,7 +114,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   const disclosureImages = vehicle.display_context?.disclosure_images || [];
   const inspectionEvidence = vehicle.display_context?.inspection_images || [];
   const conditionReport = vehicle.display_context?.condition_report || {};
-  const primaryImage = selectedImage || resolveHeroImage(vehicle) || displayImages[0] || null;
+  const primaryImage = selectedImage || resolveHeroImage(vehicle) || displayImages[0] || FALLBACK_IMAGE;
 
   return (
     <div className="grid" style={{ gap: 12 }}>
@@ -143,11 +146,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
         </div>
 
         <div className="inventory-detail-image">
-          {primaryImage ? (
-            <img src={primaryImage} alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`} />
-          ) : (
-            <div className="inventory-media-fallback">No Photo</div>
-          )}
+          <img src={primaryImage} alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`} />
         </div>
       </section>
 
@@ -188,9 +187,9 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
           <p>Inspection Status: {inspectionStatusLabel(vehicle.inspection_status || vehicle.display_context?.inspection_status)}</p>
           <p>
             Source Priority:{" "}
-            {vehicle.source_type === "auction"
-              ? "Auction data (highest priority)"
-              : "MarketCheck/dealer data (overridden by auction when VIN overlaps)"}
+            {vehicle.source_type === "ove" || vehicle.source_type === "auction"
+              ? "Auction-grade inventory data (highest priority for overlapping VINs)"
+              : "Retail and dealer feed data (overridden by auction-grade sources when VIN overlaps)"}
           </p>
           {vehicle.source_url ? (
             <p>

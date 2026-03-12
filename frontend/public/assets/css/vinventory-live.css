@@ -1,40 +1,139 @@
-.vinv-panel {
-    background: rgba(15, 23, 42, 0.78);
-    border: 1px solid rgba(148, 163, 184, 0.24);
-    border-radius: 14px;
-    padding: 16px;
-    margin-bottom: 14px;
-    backdrop-filter: blur(8px);
+:root {
+    --vinv-bg: #eef0f3;
+    --vinv-surface: #ffffff;
+    --vinv-surface-strong: #ffffff;
+    --vinv-surface-alt: #f7f8fb;
+    --vinv-border: #e2e6ec;
+    --vinv-border-strong: #cfd6df;
+    --vinv-text: #253041;
+    --vinv-text-muted: #7d8796;
+    --vinv-heading: #101827;
+    --vinv-primary: #5f88ea;
+    --vinv-primary-dark: #4f78dd;
+    --vinv-secondary: #6d8ae5;
+    --vinv-secondary-dark: #4f78dd;
+    --vinv-chip: #eef3ff;
+    --vinv-chip-text: #5577d7;
+    --vinv-chip-border: #d8e4ff;
+    --vinv-success-bg: #eef3ff;
+    --vinv-success-text: #5577d7;
+    --vinv-danger-bg: #fff3f1;
+    --vinv-danger-text: #c15448;
+    --vinv-shadow: 0 10px 24px rgba(17, 24, 39, 0.05);
+    --vinv-radius: 14px;
 }
 
-.vinv-title {
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
+body.vinv-widget-page {
+    background: var(--vinv-bg) !important;
+    color: var(--vinv-text);
+    font-family: var(--font-main, "Inter", system-ui, sans-serif);
+}
+
+.vinv-widget-shell {
+    padding: 12px 0 32px;
+    min-height: 100vh;
+}
+
+.vinv-widget-frame {
+    max-width: 1340px;
+    margin: 0 auto;
+    min-height: calc(100vh - 44px);
+}
+
+.vinv-widget-layout {
+    display: grid;
+    grid-template-columns: 252px minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+    min-height: calc(100vh - 44px);
+}
+
+.vinv-sidebar,
+.vinv-results-pane,
+.vinv-modal-dialog {
+    background: var(--vinv-surface);
+    border: 1px solid var(--vinv-border);
+    box-shadow: var(--vinv-shadow);
+}
+
+.vinv-sidebar {
+    border: 0;
+    box-shadow: none;
+    max-height: calc(100vh - 44px);
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
+.vinv-sidebar-title {
     margin: 0 0 12px;
-    color: #f8fafc;
-    font-size: 1.05rem;
+    color: #171d29;
+    font-size: 1rem;
+    font-weight: 800;
+}
+
+.vinv-filter-group {
+    background: var(--vinv-surface);
+    border: 1px solid var(--vinv-border);
+    border-radius: var(--vinv-radius);
+    margin-bottom: 8px;
+    overflow: hidden;
+    box-shadow: var(--vinv-shadow);
+}
+
+.vinv-filter-group-head {
+    padding: 14px 18px 0;
+}
+
+.vinv-filter-group-head h2 {
+    margin: 0;
+    color: var(--vinv-heading);
+    font-family: var(--font-main, "Inter", system-ui, sans-serif);
+    font-size: 0.94rem;
     font-weight: 700;
+}
+
+.vinv-filter-group-body {
+    padding: 12px 14px 14px;
 }
 
 .vinv-field {
     margin-bottom: 10px;
 }
 
-.vinv-field label {
-    display: block;
-    margin-bottom: 6px;
-    font-size: 0.82rem;
-    color: #bfdbfe;
-    font-weight: 600;
+.vinv-field:last-child {
+    margin-bottom: 0;
 }
 
-.vinv-input,
-.vinv-select {
-    width: 100%;
-    border: 1px solid rgba(148, 163, 184, 0.3);
-    border-radius: 10px;
-    background: #0b1326;
-    color: #e2e8f0;
-    padding: 10px 12px;
-    font-size: 0.9rem;
+.vinv-field label,
+.vinv-inline-field label {
+    display: block;
+    margin-bottom: 6px;
+    color: #232b39;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.vinv-required {
+    color: #c15448;
+}
+
+.vinv-field-hint {
+    margin: 6px 0 0;
+    color: var(--vinv-text-muted);
+    font-size: 0.74rem;
+    line-height: 1.4;
 }
 
 .vinv-grid-2 {
@@ -43,182 +142,481 @@
     gap: 10px;
 }
 
-.vinv-toggle {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: #dbeafe;
-    font-size: 0.86rem;
-    margin-bottom: 8px;
-}
-
-.vinv-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.vinv-btn,
-.vinv-btn-ghost {
-    border: none;
+.vinv-input,
+.vinv-select {
+    width: 100%;
+    min-height: 42px;
+    border: 1px solid var(--vinv-border-strong) !important;
     border-radius: 10px;
-    padding: 9px 12px;
-    font-size: 0.85rem;
-    font-weight: 700;
-    cursor: pointer;
+    background: #ffffff !important;
+    color: var(--vinv-text) !important;
+    padding: 10px 12px;
+    font: inherit;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.vinv-input:focus,
+.vinv-select:focus {
+    outline: none;
+    border-color: rgba(95, 136, 234, 0.92) !important;
+    box-shadow: 0 0 0 3px rgba(95, 136, 234, 0.12);
+    background: #ffffff !important;
+}
+
+.vinv-select {
+    appearance: none;
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--vinv-text-muted) 50%),
+        linear-gradient(135deg, var(--vinv-text-muted) 50%, transparent 50%);
+    background-position:
+        calc(100% - 18px) calc(50% - 2px),
+        calc(100% - 12px) calc(50% - 2px);
+    background-size: 6px 6px, 6px 6px;
+    background-repeat: no-repeat;
+    padding-right: 34px;
+}
+
+.vinv-input-icon {
+    position: relative;
+}
+
+.vinv-input-icon i {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #8f98a5;
+}
+
+.vinv-input-icon .vinv-input {
+    padding-left: 40px;
+}
+
+.vinv-sidebar-actions {
+    display: flex;
+    gap: 10px;
+    padding: 16px 18px;
+    background: var(--vinv-surface);
+    border: 1px solid var(--vinv-border);
+    border-radius: var(--vinv-radius);
+    box-shadow: var(--vinv-shadow);
 }
 
 .vinv-btn {
-    background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
-    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 40px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    padding: 0 16px;
+    font-family: var(--font-main, "Inter", system-ui, sans-serif);
+    font-size: 0.86rem;
+    font-weight: 700;
+    text-decoration: none;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
 .vinv-btn:hover {
-    filter: brightness(1.08);
+    transform: translateY(-1px);
 }
 
-.vinv-btn-ghost {
+.vinv-btn-primary {
+    background: var(--vinv-primary);
+    color: #ffffff;
+    box-shadow: none;
+}
+
+.vinv-btn-primary:hover {
+    background: var(--vinv-primary-dark);
+    color: #ffffff;
+}
+
+.vinv-btn-secondary {
+    background: #eef3ff;
+    color: #5f7fdd;
+    border-color: #e0e8fb;
+}
+
+.vinv-btn-secondary:hover {
+    border-color: #c5d6fb;
+    color: #4f78dd;
+    background: #e8efff;
+}
+
+.vinv-results-pane {
     background: transparent;
-    color: #dbeafe;
-    border: 1px solid rgba(147, 197, 253, 0.45);
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    max-height: calc(100vh - 44px);
+    overflow-y: auto;
+    padding-right: 6px;
 }
 
-.vinv-header-row {
+.vinv-results-actions {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.vinv-results-breadcrumbs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    color: var(--vinv-text-muted);
+    font-size: 0.82rem;
+}
+
+.vinv-results-breadcrumbs strong {
+    color: var(--vinv-text-muted);
+    font-weight: 500;
+}
+
+.vinv-results-heading {
     display: flex;
     justify-content: space-between;
+    align-items: flex-end;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.vinv-results-heading h2 {
+    margin: 0 0 4px;
+    color: var(--vinv-heading);
+    font-family: var(--font-main, "Inter", system-ui, sans-serif);
+    font-size: 1.2rem;
+    line-height: 1.05;
+}
+
+.vinv-results-heading p {
+    margin: 0;
+    color: var(--vinv-text-muted);
+    font-size: 0.86rem;
+}
+
+.vinv-results-meta {
+    display: flex;
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
 }
 
-.vinv-meta {
-    display: flex;
-    flex-wrap: wrap;
+.vinv-status-chip,
+.vinv-filter-chip {
+    display: inline-flex;
+    align-items: center;
     gap: 8px;
-}
-
-.vinv-pill {
     border-radius: 999px;
-    border: 1px solid rgba(147, 197, 253, 0.42);
-    background: rgba(30, 64, 175, 0.22);
-    color: #dbeafe;
-    padding: 4px 10px;
-    font-size: 0.77rem;
+    border: 1px solid var(--vinv-chip-border);
+    background: var(--vinv-chip);
+    color: var(--vinv-chip-text);
+    padding: 6px 10px;
+    font-size: 0.74rem;
     font-weight: 700;
 }
 
-.vinv-alert {
-    border: 1px solid rgba(248, 113, 113, 0.45);
-    background: rgba(127, 29, 29, 0.35);
-    color: #fecaca;
-    border-radius: 10px;
-    padding: 10px 12px;
-    margin-bottom: 12px;
+.vinv-filter-chip strong {
+    font-weight: 800;
+}
+
+.vinv-mini-link {
+    color: var(--vinv-secondary);
+    font-size: 0.84rem;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.vinv-mini-link:hover {
+    color: var(--vinv-secondary-dark);
+}
+
+.vinv-results-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 10px 0 0;
+    border-top: 1px solid var(--vinv-border);
+}
+
+.vinv-active-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 40px;
+}
+
+.vinv-active-filters:empty::before {
+    content: "No filters selected";
+    color: var(--vinv-text-muted);
     font-size: 0.86rem;
 }
 
-.vinv-empty {
-    border: 1px dashed rgba(148, 163, 184, 0.36);
-    border-radius: 12px;
-    padding: 20px;
-    text-align: center;
-    color: #bfdbfe;
-    background: rgba(15, 23, 42, 0.4);
+.vinv-toolbar-controls {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: flex-end;
 }
 
-.vinv-card {
-    background: #0f172a;
-    border: 1px solid rgba(148, 163, 184, 0.24);
+.vinv-inline-field {
+    min-width: 180px;
+}
+
+.vinv-select-inline {
+    min-height: 40px;
+}
+
+.vinv-alert {
     border-radius: 14px;
+    border: 1px solid rgba(185, 56, 21, 0.18);
+    background: var(--vinv-danger-bg);
+    color: var(--vinv-danger-text);
+    padding: 14px 16px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 14px;
+}
+
+.vinv-results-list {
+    display: grid;
+    gap: 18px;
+}
+
+.vinv-empty {
+    border: 1px dashed var(--vinv-border-strong);
+    background: var(--vinv-surface);
+    border-radius: var(--vinv-radius);
+    padding: 44px 20px;
+    text-align: center;
+    color: var(--vinv-text-muted);
+    font-size: 0.96rem;
+}
+
+.vinv-listing-card {
+    display: grid;
+    grid-template-columns: minmax(260px, 355px) minmax(0, 1fr);
+    background: var(--vinv-surface);
+    border: 1px solid var(--vinv-border);
+    border-radius: var(--vinv-radius);
     overflow: hidden;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
+    transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.vinv-listing-card:hover {
+    box-shadow: 0 16px 32px rgba(17, 24, 39, 0.08);
+}
+
+.vinv-listing-media {
+    position: relative;
+    min-height: 188px;
+    background: #e8edf4;
 }
 
 .vinv-card-media {
     width: 100%;
-    height: 170px;
+    height: 100%;
+    min-height: 188px;
     object-fit: cover;
-    background: linear-gradient(135deg, #1e293b, #0b1225);
     display: block;
 }
 
-.vinv-card-body {
-    padding: 12px;
-    display: grid;
-    gap: 7px;
+.vinv-listing-badge {
+    position: absolute;
+    left: 16px;
+    top: 16px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    border-radius: 999px;
+    background: #f0a238;
+    color: #ffffff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
-.vinv-card-top {
-    display: flex;
-    justify-content: space-between;
+.vinv-listing-badge.auction {
+    background: #f0a238;
+    color: #ffffff;
+}
+
+.vinv-listing-media-button {
+    position: absolute;
+    left: 14px;
+    bottom: 16px;
+    display: inline-flex;
     align-items: center;
     gap: 8px;
-}
-
-.vinv-car-name {
-    margin: 0;
-    color: #f8fafc;
-    font-size: 0.98rem;
+    min-height: 28px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 6px;
+    background: rgba(85, 95, 110, 0.75);
+    color: #ffffff;
+    font-size: 0.72rem;
     font-weight: 700;
+    cursor: pointer;
 }
 
-.vinv-price {
+.vinv-listing-body {
+    display: grid;
+    gap: 12px;
+    padding: 16px 18px;
+}
+
+.vinv-listing-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.vinv-listing-title {
+    margin: 0 0 6px;
+    color: var(--vinv-heading);
+    font-family: var(--font-main, "Inter", system-ui, sans-serif);
+    font-size: 0.98rem;
+    line-height: 1.2;
+    font-weight: 600;
+}
+
+.vinv-listing-subtitle,
+.vinv-listing-meta {
     margin: 0;
-    font-size: 1.15rem;
-    color: #fb923c;
+    color: var(--vinv-text-muted);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.vinv-listing-price {
+    min-width: 132px;
+    text-align: left;
+}
+
+.vinv-listing-price strong {
+    display: block;
+    color: var(--vinv-heading);
+    font-family: var(--font-main, "Inter", system-ui, sans-serif);
+    font-size: 0.94rem;
+    line-height: 1;
     font-weight: 800;
 }
 
-.vinv-text {
-    margin: 0;
-    color: #bfdbfe;
-    font-size: 0.84rem;
+.vinv-listing-price span {
+    display: block;
+    color: var(--vinv-text-muted);
+    font-size: 0.8rem;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    margin-bottom: 6px;
 }
 
-.vinv-card-actions {
+.vinv-listing-price small {
+    display: block;
+    margin-top: 6px;
+    color: var(--vinv-text-muted);
+    font-size: 0.78rem;
+}
+
+.vinv-specs {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0;
+    border-top: 1px solid var(--vinv-border);
+    border-bottom: 1px solid var(--vinv-border);
+    padding: 12px 0;
+}
+
+.vinv-spec {
     display: flex;
-    gap: 8px;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    min-height: 42px;
+    border-right: 1px solid var(--vinv-border);
+}
+
+.vinv-spec:last-child {
+    border-right: 0;
+}
+
+.vinv-spec i {
+    color: #566173;
+    font-size: 0.96rem;
+}
+
+.vinv-spec span {
+    color: #465164;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.vinv-listing-actions {
+    display: flex;
+    gap: 10px;
     flex-wrap: wrap;
-    margin-top: 4px;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+.vinv-listing-buttons {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    width: 100%;
+}
+
+.vinv-listing-buttons .vinv-btn {
+    min-width: 154px;
+    flex: 1 1 0;
+}
+
+.vinv-pagination-wrap {
+    margin-top: 22px;
+}
+
+.vinv-pagination-wrap-top {
+    margin-top: 2px;
+    margin-bottom: 4px;
 }
 
 .vinv-paginate {
     display: flex;
     justify-content: center;
     align-items: center;
+    gap: 10px;
     flex-wrap: wrap;
-    gap: 8px;
 }
 
-.vinv-garage-list {
-    display: grid;
-    gap: 9px;
+.vinv-paginate .vinv-btn {
+    min-width: 44px;
+    min-height: 44px;
 }
 
-.vinv-garage-item {
-    border: 1px solid rgba(148, 163, 184, 0.3);
-    border-radius: 10px;
-    padding: 10px;
-    background: rgba(15, 23, 42, 0.55);
-}
-
-.vinv-garage-item p {
-    margin: 0;
-    color: #cbd5e1;
-    font-size: 0.83rem;
+.vinv-paginate .vinv-btn[disabled] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    transform: none;
 }
 
 .vinv-modal {
     position: fixed;
     inset: 0;
-    z-index: 12000;
     display: none;
     align-items: center;
     justify-content: center;
-    background: rgba(2, 6, 23, 0.74);
-    padding: 14px;
+    padding: 24px;
+    background: rgba(17, 24, 39, 0.35);
+    z-index: 12000;
 }
 
 .vinv-modal.open {
@@ -226,134 +624,266 @@
 }
 
 .vinv-modal-dialog {
-    width: min(1080px, 100%);
-    max-height: calc(100vh - 28px);
+    width: min(1120px, 100%);
+    max-height: calc(100vh - 48px);
     overflow: auto;
-    border-radius: 14px;
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    background: #0b1120;
-    padding: 14px;
-}
-
-.vinv-modal-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 10px;
-}
-
-.vinv-modal-content {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 12px;
-}
-
-.vinv-modal-main-image {
-    width: 100%;
-    height: 340px;
-    object-fit: cover;
-    border-radius: 12px;
-    border: 1px solid rgba(148, 163, 184, 0.3);
-    background: #111827;
-}
-
-.vinv-thumb-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 8px;
-}
-
-.vinv-thumb {
-    width: 86px;
-    height: 64px;
-    border-radius: 8px;
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    object-fit: cover;
-    cursor: pointer;
-}
-
-.vinv-modal-info {
-    color: #cbd5e1;
-    font-size: 0.9rem;
-    display: grid;
-    gap: 8px;
-}
-
-.vinv-modal-info h3 {
-    margin: 0;
-    color: #f8fafc;
-}
-
-.vinv-feature-wrap {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-
-.vinv-feature {
-    border-radius: 999px;
-    border: 1px solid rgba(251, 146, 60, 0.45);
-    color: #fed7aa;
-    background: rgba(124, 45, 18, 0.25);
-    padding: 3px 9px;
-    font-size: 0.75rem;
-}
-
-@media (max-width: 991px) {
-    .vinv-modal-content {
-        grid-template-columns: 1fr;
-    }
-
-    .vinv-grid-2 {
-        grid-template-columns: 1fr;
-    }
-}
-
-.vinv-modal-description {
-    margin: 0;
-    color: #dbeafe;
-    font-size: 0.88rem;
-    line-height: 1.45;
-    border-left: 3px solid rgba(59, 130, 246, 0.65);
-    padding-left: 10px;
-}
-
-.vinv-divider {
-    margin: 10px 0;
-    border: 0;
-    border-top: 1px solid rgba(148, 163, 184, 0.24);
+    padding: 22px;
+    border-radius: 18px;
 }
 
 .vinv-auth-dialog {
     width: min(460px, 100%);
 }
 
-.vinv-auth-message {
-    margin: 0 0 10px;
-    color: #dbeafe;
-    font-size: 0.9rem;
-    line-height: 1.35;
+.vinv-modal-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
 }
 
-.vinv-check-grid {
+.vinv-modal-title {
+    margin: 0;
+    color: var(--vinv-heading);
+    font-family: var(--font-main, "Inter", system-ui, sans-serif);
+    font-size: 1.15rem;
+}
+
+.vinv-modal-content {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+    gap: 18px;
+}
+
+.vinv-modal-main-image {
+    width: 100%;
+    height: 380px;
+    object-fit: cover;
+    border-radius: 14px;
+    border: 1px solid var(--vinv-border);
+    background: var(--vinv-surface-alt);
+}
+
+.vinv-thumb-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+
+.vinv-thumb {
+    width: 88px;
+    height: 66px;
+    object-fit: cover;
+    border-radius: 10px;
+    border: 1px solid var(--vinv-border);
+    cursor: pointer;
+}
+
+.vinv-modal-info {
+    display: grid;
+    gap: 10px;
+    color: var(--vinv-text);
+}
+
+.vinv-modal-info h3 {
+    margin: 0;
+    color: var(--vinv-heading);
+    font-family: var(--font-main, "Inter", system-ui, sans-serif);
+    font-size: 1.35rem;
+}
+
+.vinv-modal-info p {
+    margin: 0;
+    color: var(--vinv-text-muted);
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+
+.vinv-text {
+    color: var(--vinv-text-muted);
+}
+
+.vinv-meta,
+.vinv-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.vinv-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 7px 11px;
+    background: #eef3ff;
+    border: 1px solid #d8e4ff;
+    color: #5577d7;
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+}
+
+.vinv-modal-description {
+    border-left: 3px solid rgba(95, 136, 234, 0.55);
+    padding-left: 12px;
+}
+
+.vinv-modal-panel {
+    display: grid;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    border: 1px solid var(--vinv-border);
+    background: var(--vinv-surface-alt);
+}
+
+.vinv-modal-panel h4 {
+    margin: 0;
+    color: var(--vinv-heading);
+    font-size: 0.95rem;
+    font-weight: 700;
+}
+
+.vinv-modal-pricing {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.vinv-modal-data-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
+    gap: 10px 16px;
 }
 
-.vinv-check {
+.vinv-modal-data-row {
+    display: grid;
+    gap: 4px;
+}
+
+.vinv-modal-data-row span {
+    color: var(--vinv-text-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.vinv-modal-data-row strong {
+    color: var(--vinv-heading);
+    font-size: 0.92rem;
+    font-weight: 700;
+}
+
+.vinv-feature-wrap {
     display: flex;
-    align-items: center;
     gap: 8px;
-    color: #cbd5e1;
-    font-size: 0.84rem;
-    margin: 0;
+    flex-wrap: wrap;
 }
 
-.vinv-check input[type="checkbox"] {
-    width: 14px;
-    height: 14px;
-    accent-color: #2563eb;
+.vinv-feature {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    border: 1px solid #d8e4ff;
+    background: #eef3ff;
+    color: #5577d7;
+    padding: 7px 11px;
+    font-size: 0.76rem;
+    font-weight: 700;
+}
+
+.vinv-auth-message,
+.vinv-auth-status {
+    margin: 0 0 12px;
+    color: var(--vinv-text-muted);
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+
+.vinv-auth-status {
+    margin-top: 12px;
+}
+
+@media (max-width: 1240px) {
+    .vinv-widget-layout {
+        grid-template-columns: 240px minmax(0, 1fr);
+    }
+
+    .vinv-specs {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 1024px) {
+    .vinv-widget-shell {
+        padding: 16px 14px 28px;
+        min-height: auto;
+    }
+
+    .vinv-widget-layout,
+    .vinv-listing-card,
+    .vinv-modal-content {
+        grid-template-columns: 1fr;
+        min-height: auto;
+    }
+
+    .vinv-sidebar {
+        max-height: none;
+        overflow: visible;
+        padding-right: 0;
+    }
+
+    .vinv-results-pane {
+        max-height: none;
+        overflow: visible;
+        padding-right: 0;
+    }
+
+    .vinv-specs {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .vinv-listing-price {
+        text-align: left;
+        min-width: 0;
+    }
+
+    .vinv-modal-pricing,
+    .vinv-modal-data-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 640px) {
+    .vinv-filter-group-head,
+    .vinv-filter-group-body,
+    .vinv-sidebar-actions {
+        padding-left: 14px;
+        padding-right: 14px;
+    }
+
+    .vinv-grid-2,
+    .vinv-specs {
+        grid-template-columns: 1fr;
+    }
+
+    .vinv-results-heading h2 {
+        font-size: 1.05rem;
+    }
+
+    .vinv-listing-actions {
+        align-items: flex-start;
+    }
+
+    .vinv-listing-buttons,
+    .vinv-sidebar-actions {
+        width: 100%;
+        flex-direction: column;
+    }
+
+    .vinv-btn {
+        width: 100%;
+    }
 }

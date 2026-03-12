@@ -1,6 +1,8 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
@@ -165,7 +167,7 @@ const INITIAL_FILTERS: FilterState = {
   max_year: "",
   min_miles: "",
   max_miles: "",
-  has_images: true,
+  has_images: false,
   live_sync: true,
   sort_by: "updated_at",
   sort_dir: "desc",
@@ -193,7 +195,10 @@ const EMPTY_SYNC: SyncMeta = {
   error: null,
 };
 
+const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
+
 export function InventoryExplorer() {
+  const searchParams = useSearchParams();
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [authEmail, setAuthEmail] = useState("buyer@example.com");
   const [authPassword, setAuthPassword] = useState("BuyerPass123!");
@@ -227,6 +232,20 @@ export function InventoryExplorer() {
       if (saved.email) setAuthEmail(saved.email);
     }
   }, []);
+
+  useEffect(() => {
+    const q = searchParams.get("q") || "";
+    const sourceType = searchParams.get("source_type") || "";
+    if (!q && !sourceType) return;
+
+    const nextFilters = {
+      ...INITIAL_FILTERS,
+      q,
+      source_type: sourceType,
+    };
+    setFilters(nextFilters);
+    setAppliedFilters(nextFilters);
+  }, [searchParams]);
 
   useEffect(() => {
     void loadInventory(appliedFilters, page);
@@ -301,7 +320,7 @@ export function InventoryExplorer() {
     if (currentFilters.max_year.trim()) params.set("max_year", currentFilters.max_year.trim());
     if (currentFilters.min_miles.trim()) params.set("min_miles", currentFilters.min_miles.trim());
     if (currentFilters.max_miles.trim()) params.set("max_miles", currentFilters.max_miles.trim());
-    if (currentFilters.has_images) params.set("has_images", "true");
+    params.set("has_images", currentFilters.has_images ? "true" : "false");
     params.set("live_sync", currentFilters.live_sync ? "true" : "false");
     params.set("sync_limit", "72");
     params.set("sort_by", currentFilters.sort_by);
@@ -636,6 +655,7 @@ export function InventoryExplorer() {
                 onChange={(event) => setFilters((prev) => ({ ...prev, source_type: event.target.value }))}
               >
                 <option value="">Any Source</option>
+                <option value="ove">OVE / Manheim</option>
                 <option value="auction">Auction</option>
                 <option value="marketcheck">MarketCheck</option>
                 <option value="dealer_partner">Dealer Partner</option>
@@ -743,7 +763,7 @@ export function InventoryExplorer() {
                       {item.thumbnail ? (
                         <img src={item.thumbnail} alt={`${item.year} ${item.make} ${item.model}`} loading="lazy" />
                       ) : (
-                        <div className="inventory-media-fallback">No Photo</div>
+                        <img src={FALLBACK_IMAGE} alt={`${item.year} ${item.make} ${item.model}`} loading="lazy" />
                       )}
                     </div>
                   </Link>
@@ -770,7 +790,9 @@ export function InventoryExplorer() {
                     <p className="inventory-description">
                       {item.features_preview?.length
                         ? item.features_preview.join(" • ")
-                        : "Market-backed listing with synced specs and media."}
+                        : item.source_type === "ove"
+                          ? "Auction listing with live pricing. Condition reports unlock as the buyer workflow advances."
+                          : "Market-backed listing with synced specs and media."}
                     </p>
 
                     <div className="inventory-actions">
@@ -893,15 +915,18 @@ export function InventoryExplorer() {
               <div className="inventory-modal-body">
                 <section className="inventory-modal-main">
                   <div className="inventory-modal-image">
-                    {selectedVehiclePrimaryImage ? (
+                      {selectedVehiclePrimaryImage ? (
+                        <img
+                          src={selectedVehiclePrimaryImage}
+                          alt={`${selectedVehicle.year} ${selectedVehicle.make} ${selectedVehicle.model}`}
+                        />
+                      ) : (
                       <img
-                        src={selectedVehiclePrimaryImage}
+                        src={FALLBACK_IMAGE}
                         alt={`${selectedVehicle.year} ${selectedVehicle.make} ${selectedVehicle.model}`}
                       />
-                    ) : (
-                      <div className="inventory-media-fallback">No Photo</div>
-                    )}
-                  </div>
+                      )}
+                    </div>
                   {selectedVehicleImages.length > 1 ? (
                     <div className="inventory-thumbnails">
                       {selectedVehicleImages.map((image) => (

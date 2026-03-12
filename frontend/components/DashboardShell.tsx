@@ -71,7 +71,9 @@ export function DashboardShell() {
   }
 
   useEffect(() => {
+    // Refresh dashboard state when the authenticated session changes.
     void refreshData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth?.accessToken]);
 
   async function selectVehicle(vin: string) {

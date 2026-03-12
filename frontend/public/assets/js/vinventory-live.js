@@ -1,5 +1,15 @@
 (function () {
     const AUTH_KEY = 'vch_auth_session';
+    const SEARCH_CONTEXT_KEY = 'vch_inventory_search_context';
+    const DEFAULT_IMAGE = '/assets/images/about/05.webp';
+    const AUCTION_DEFAULT_IMAGE = '/assets/images/portfolio/VCH%20Auction%20default%20image.webp';
+    const CONDITION_REPORT_ELIGIBLE_FUNDING_STATES = {
+        PRE_APPROVED: true,
+        TERMS_ACCEPTED: true,
+        FINAL_APPROVAL_PENDING: true,
+        FULLY_FUNDED: true,
+        CASH_BUYER: true
+    };
 
     const state = {
         auth: null,
@@ -19,6 +29,7 @@
         modalImage: null,
         detailCache: {},
         facets: {},
+        taxonomy: {},
         pendingAction: null
     };
 
@@ -33,10 +44,12 @@
         form: document.getElementById('vinvFilterForm'),
         resetBtn: document.getElementById('vinvResetFilters'),
         grid: document.getElementById('vinvGrid'),
+        paginationTop: document.getElementById('vinvPaginationTop'),
         pagination: document.getElementById('vinvPagination'),
         error: document.getElementById('vinvError'),
         resultCount: document.getElementById('vinvResultCount'),
         syncBadge: document.getElementById('vinvSyncBadge'),
+        activeFilters: document.getElementById('vinvActiveFilters'),
 
         garageCount: document.getElementById('vinvGarageCount'),
         garageList: document.getElementById('vinvGarageList'),
@@ -85,6 +98,73 @@
         }
     }
 
+    function isAuctionSource(sourceType) {
+        return sourceType === 'ove' || sourceType === 'auction';
+    }
+
+    function isAuctionItem(item) {
+        return !!(item && (item.source_category === 'auction' || isAuctionSource(item.source_type)));
+    }
+
+    function fallbackImageFor(item) {
+        if (item && item.thumbnail) return item.thumbnail;
+        if (item && isAuctionItem(item)) return AUCTION_DEFAULT_IMAGE;
+        return DEFAULT_IMAGE;
+    }
+
+    function saveSearchContext() {
+        if (!el.form) return;
+        var filters = currentFilters();
+        try {
+            localStorage.setItem(SEARCH_CONTEXT_KEY, JSON.stringify({
+                zip_code: filters.zip_code,
+                radius: filters.radius || '50'
+            }));
+        } catch (error) {
+            return;
+        }
+    }
+
+    function restoreSearchContext() {
+        if (!el.form) return;
+        try {
+            var raw = localStorage.getItem(SEARCH_CONTEXT_KEY);
+            if (!raw) return;
+            var parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== 'object') return;
+            var zipInput = el.form.querySelector('[name="zip_code"]');
+            var radiusSelect = el.form.querySelector('[name="radius"]');
+            if (zipInput && parsed.zip_code) zipInput.value = String(parsed.zip_code).trim();
+            if (radiusSelect && parsed.radius) radiusSelect.value = String(parsed.radius).trim();
+        } catch (error) {
+            return;
+        }
+    }
+
+    function dealAllowsConditionReport() {
+        if (state.deal && typeof state.deal.condition_report_eligible === 'boolean') {
+            return state.deal.condition_report_eligible;
+        }
+        var fundingState = state.deal && state.deal.funding_state;
+        return !!(fundingState && CONDITION_REPORT_ELIGIBLE_FUNDING_STATES[fundingState]);
+    }
+
+    function conditionReportEligibilityMessage() {
+        if (state.deal && state.deal.condition_report_eligibility_reason) {
+            return state.deal.condition_report_eligibility_reason;
+        }
+        return 'Condition/inspection report requests require being a pre-approved buyer.';
+    }
+
+    function hasConditionReport(vehicle) {
+        return !!(
+            vehicle
+            && vehicle.condition_report
+            && typeof vehicle.condition_report === 'object'
+            && Object.keys(vehicle.condition_report).length
+        );
+    }
+
     function loadAuth() {
         try {
             var raw = localStorage.getItem(AUTH_KEY);
@@ -95,6 +175,23 @@
         } catch (error) {
             return null;
         }
+    }
+
+    function titleCase(value) {
+        return String(value || '')
+            .replace(/[_-]+/g, ' ')
+            .split(/\s+/)
+            .filter(Boolean)
+            .map(function (part) {
+                return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+            })
+            .join(' ');
+    }
+
+    function formatFilterValue(label, value) {
+        if (label === 'State') return String(value || '').toUpperCase();
+        if (label === 'Source' && ['ove', 'auction'].indexOf(String(value || '').toLowerCase()) !== -1) return 'Auction';
+        return titleCase(value);
     }
 
     function saveAuth(auth) {
@@ -198,8 +295,10 @@
             max_year: (fd.get('max_year') || '').toString().trim(),
             min_miles: (fd.get('min_miles') || '').toString().trim(),
             max_miles: (fd.get('max_miles') || '').toString().trim(),
+            zip_code: (fd.get('zip_code') || '').toString().trim(),
+            radius: (fd.get('radius') || '50').toString().trim(),
             has_images: !!fd.get('has_images'),
-            live_sync: !!fd.get('live_sync'),
+            live_sync: !!(fd.get('zip_code') || '').toString().trim() && (fd.get('source_type') || '').toString().trim() !== 'auction',
             sort_by: (fd.get('sort_by') || 'updated_at').toString(),
             sort_dir: (fd.get('sort_dir') || 'desc').toString()
         };
@@ -240,21 +339,50 @@
         }
     }
 
+    function updateDependentTaxonomyOptions() {
+        if (!el.form) return;
+        var filters = currentFilters();
+        var lookup = (state.taxonomy && state.taxonomy.lookup) || {};
+        var modelsByMake = lookup.models_by_make || {};
+        var trimsByMakeModel = lookup.trims_by_make_model || {};
+
+        var modelOptions = filters.make ? (modelsByMake[filters.make] || []).map(function (item) {
+            return { item: item, count: 0 };
+        }) : [];
+        setSelectOptions('filterModel', modelOptions, {
+            placeholder: filters.make ? 'Select Model' : 'Choose Make First',
+            keepValue: filters.model
+        });
+
+        var trimKey = filters.make && filters.model ? filters.make + '|||' + filters.model : '';
+        var trimOptions = trimKey ? (trimsByMakeModel[trimKey] || []).map(function (item) {
+            return { item: item, count: 0 };
+        }) : [];
+        setSelectOptions('filterTrim', trimOptions, {
+            placeholder: 'Any Trim',
+            keepValue: filters.trim
+        });
+    }
+
     async function loadFacets() {
         var filters = currentFilters();
         var params = new URLSearchParams();
 
         if (filters.make) params.set('make', filters.make);
         if (filters.model) params.set('model', filters.model);
+        if (filters.trim) params.set('trim', filters.trim);
         if (filters.body_type) params.set('body_type', filters.body_type);
         if (filters.state) params.set('state', filters.state);
         if (filters.inventory_type) params.set('inventory_type', filters.inventory_type);
+        if (filters.source_type) params.set('source_type', filters.source_type);
         if (filters.min_price) params.set('min_price', filters.min_price);
         if (filters.max_price) params.set('max_price', filters.max_price);
         if (filters.min_year) params.set('min_year', filters.min_year);
         if (filters.max_year) params.set('max_year', filters.max_year);
+        if (filters.zip_code) params.set('zip_code', filters.zip_code);
+        if (filters.radius) params.set('radius', filters.radius);
         params.set('has_images', filters.has_images ? 'true' : 'false');
-        params.set('use_marketcheck', 'true');
+        params.set('use_marketcheck', 'false');
 
         var response = await api('/api/vch/inventory/facets?' + params.toString());
         if (response.status !== 'ok' || !response.data || !response.data.facets) {
@@ -262,19 +390,22 @@
         }
 
         state.facets = response.data.facets;
+        state.taxonomy = response.data.taxonomy || {};
 
-        setSelectOptions('filterMake', state.facets.make, {
+        setSelectOptions('filterMinYear', state.taxonomy.years, {
+            placeholder: 'From',
+            keepValue: filters.min_year
+        });
+        setSelectOptions('filterMaxYear', state.taxonomy.years, {
+            placeholder: 'To',
+            keepValue: filters.max_year
+        });
+
+        setSelectOptions('filterMake', state.taxonomy.make || state.facets.make, {
             placeholder: 'Any Make',
             keepValue: filters.make
         });
-        setSelectOptions('filterModel', state.facets.model, {
-            placeholder: filters.make ? 'Select Model' : 'Choose Make First',
-            keepValue: filters.model
-        });
-        setSelectOptions('filterTrim', state.facets.trim, {
-            placeholder: 'Any Trim',
-            keepValue: filters.trim
-        });
+        updateDependentTaxonomyOptions();
         setSelectOptions('filterBody', state.facets.body_type, {
             placeholder: 'Any Body',
             keepValue: filters.body_type
@@ -337,7 +468,9 @@
         if (filters.max_year) params.set('max_year', filters.max_year);
         if (filters.min_miles) params.set('min_miles', filters.min_miles);
         if (filters.max_miles) params.set('max_miles', filters.max_miles);
-        if (filters.has_images) params.set('has_images', 'true');
+        if (filters.zip_code) params.set('zip_code', filters.zip_code);
+        if (filters.radius) params.set('radius', filters.radius);
+        params.set('has_images', filters.has_images ? 'true' : 'false');
         if (filters.live_sync) {
             params.set('live_sync', 'true');
             params.set('sync_limit', '120');
@@ -348,7 +481,7 @@
         params.set('page', String(page || 1));
 
         setError('');
-        el.grid.innerHTML = '<div class="col-12"><div class="vinv-empty">Loading inventory...</div></div>';
+        el.grid.innerHTML = '<div class="vinv-empty">Loading inventory...</div>';
 
         var response = await api('/api/vch/inventory/search?' + params.toString());
         if (response.status !== 'ok' || !response.data) {
@@ -389,13 +522,17 @@
                     ' | +' + (state.sync.inserted || 0) +
                     ' new / ' + (state.sync.updated || 0) +
                     ' updated / ' + synced + ' filtered';
+            } else if (!currentFilters().zip_code) {
+                el.syncBadge.textContent = 'Local Search | Add ZIP for MarketCheck';
             } else {
                 el.syncBadge.textContent = 'Local Search';
             }
         }
 
+        renderActiveFilters();
+
         if (!state.rows.length) {
-            el.grid.innerHTML = '<div class="col-12"><div class="vinv-empty">No vehicles match your filters.</div></div>';
+            el.grid.innerHTML = '<div class="vinv-empty">No vehicles match your filters.</div>';
         } else {
             el.grid.innerHTML = state.rows.map(renderCard).join('');
         }
@@ -403,39 +540,118 @@
         renderPagination();
     }
 
+    function renderActiveFilters() {
+        if (!el.activeFilters) return;
+
+        var filters = currentFilters();
+        var chips = [];
+
+        if (filters.q) chips.push({ label: 'Search', value: filters.q });
+        if (filters.make) chips.push({ label: 'Make', value: filters.make });
+        if (filters.model) chips.push({ label: 'Model', value: filters.model });
+        if (filters.trim) chips.push({ label: 'Trim', value: filters.trim });
+        if (filters.body_type) chips.push({ label: 'Body', value: filters.body_type });
+        if (filters.inventory_type) chips.push({ label: 'Condition', value: filters.inventory_type });
+        if (filters.source_type) chips.push({ label: 'Source', value: filters.source_type });
+        if (filters.fuel_type) chips.push({ label: 'Fuel', value: filters.fuel_type });
+        if (filters.transmission) chips.push({ label: 'Transmission', value: filters.transmission });
+        if (filters.drivetrain) chips.push({ label: 'Drive', value: filters.drivetrain });
+        if (filters.state) chips.push({ label: 'State', value: filters.state });
+        if (filters.zip_code) chips.push({ label: 'ZIP', value: filters.zip_code });
+        if (filters.radius) chips.push({ label: 'Radius', value: filters.radius + ' miles' });
+        if (filters.exterior_color) chips.push({ label: 'Exterior', value: filters.exterior_color });
+        if (filters.interior_color) chips.push({ label: 'Interior', value: filters.interior_color });
+
+        if (filters.min_price || filters.max_price) {
+            chips.push({
+                label: 'Price',
+                value: [
+                    filters.min_price ? formatMoney(filters.min_price) : 'Any',
+                    filters.max_price ? formatMoney(filters.max_price) : 'Any'
+                ].join(' - ')
+            });
+        }
+
+        if (filters.min_year || filters.max_year) {
+            chips.push({
+                label: 'Year',
+                value: [
+                    filters.min_year || 'Any',
+                    filters.max_year || 'Any'
+                ].join(' - ')
+            });
+        }
+
+        if (filters.min_miles || filters.max_miles) {
+            chips.push({
+                label: 'Miles',
+                value: [
+                    filters.min_miles ? formatNumber(filters.min_miles) : 'Any',
+                    filters.max_miles ? formatNumber(filters.max_miles) : 'Any'
+                ].join(' - ')
+            });
+        }
+
+        el.activeFilters.innerHTML = chips.map(function (chip) {
+            return '<span class="vinv-filter-chip"><strong>' + escapeHtml(chip.label) + ':</strong> ' + escapeHtml(formatFilterValue(chip.label, chip.value)) + '</span>';
+        }).join('');
+    }
+
     function renderCard(item) {
         var title = ((item.year || '') + ' ' + (item.make || '') + ' ' + (item.model || '')).trim();
         var inGarage = state.garage.some(function (g) { return g.vin === item.vin; });
-        var condition = item.inventory_type || (item.certified ? 'certified' : 'used');
-        var dom = item.days_on_market !== null && item.days_on_market !== undefined ? item.days_on_market + ' DOM' : 'DOM N/A';
+        var auctionListing = isAuctionItem(item);
+        var badgeLabel = auctionListing ? 'Auction' : titleCase(item.inventory_type || (item.certified ? 'certified' : 'used') || 'listing');
+        var subtitleBits = [];
+        var imageCount = Array.isArray(item.images) ? item.images.length : Number(item.images_count || 0);
+        var marketLabel = item.source_label || (auctionListing ? 'Auction' : 'Inventory');
+        if (item.trim) subtitleBits.push(item.trim);
+        if (item.body_type) subtitleBits.push(item.body_type);
+        if (item.drivetrain) subtitleBits.push(item.drivetrain);
+        else if (item.transmission) subtitleBits.push(item.transmission);
 
         return [
-            '<div class="col-lg-4 col-md-6 col-sm-12">',
-            '  <article class="vinv-card">',
-            '    <img class="vinv-card-media" src="' + escapeAttr(item.thumbnail || '/assets/images/portfolio/01.webp') + '" alt="' + escapeAttr(title) + '">',
-            '    <div class="vinv-card-body">',
-            '      <div class="vinv-card-top">',
-            '        <h5 class="vinv-car-name">' + escapeHtml(title || item.vin) + '</h5>',
-            '        <span class="vinv-pill">' + escapeHtml((condition || 'listing').toString().toUpperCase()) + '</span>',
+            '<article class="vinv-listing-card">',
+            '  <div class="vinv-listing-media">',
+            '    <img class="vinv-card-media" src="' + escapeAttr(fallbackImageFor(item)) + '" alt="' + escapeAttr(title || item.vin) + '">',
+            '    <span class="vinv-listing-badge' + (auctionListing ? ' auction' : '') + '">' + escapeHtml(badgeLabel) + '</span>',
+            '    <button class="vinv-listing-media-button" type="button" data-action="detail" data-vin="' + escapeAttr(item.vin) + '"><i class="fa-regular fa-images"></i> ' + imageCount + ' Photos</button>',
+            '  </div>',
+            '  <div class="vinv-listing-body">',
+            '    <div class="vinv-listing-top">',
+            '      <div>',
+            '        <h3 class="vinv-listing-title">' + escapeHtml(title || item.vin) + '</h3>',
+            '        <p class="vinv-listing-subtitle">' + escapeHtml(subtitleBits.join(' | ') || 'Vehicle details pending') + '</p>',
+            '        <p class="vinv-listing-meta">' + escapeHtml(marketLabel) + ' | VIN ' + escapeHtml(item.vin) + '</p>',
             '      </div>',
-            '      <p class="vinv-price">' + formatMoney(item.price_asking) + '</p>',
-            '      <p class="vinv-text">' + escapeHtml(item.trim || 'Base') + ' | ' + escapeHtml(item.body_type || 'Vehicle') + ' | ' + escapeHtml(item.drivetrain || item.transmission || 'N/A') + '</p>',
-            '      <p class="vinv-text">' + formatNumber(item.odometer) + ' miles | ' + escapeHtml(item.location_state || 'NA') + ' ' + escapeHtml(item.location_zip || '') + '</p>',
-            '      <p class="vinv-text">' + escapeHtml(item.exterior_color || item.interior_color || 'Color not listed') + ' | ' + escapeHtml(dom) + '</p>',
-            '      <p class="vinv-text">VIN: ' + escapeHtml(item.vin) + '</p>',
-            '      <div class="vinv-card-actions">',
-            '        <button class="vinv-btn" data-action="detail" data-vin="' + escapeAttr(item.vin) + '">View</button>',
-            '        <button class="vinv-btn-ghost" data-action="garage" data-vin="' + escapeAttr(item.vin) + '">' + (inGarage ? 'In Garage' : 'Add to My Garage') + '</button>',
+            '      <div class="vinv-listing-price">',
+            '        <strong>' + formatMoney(item.price_asking) + '</strong>',
+            '        <small>' + escapeHtml((item.location_state || 'NA') + (item.location_zip ? ' ' + item.location_zip : '')) + '</small>',
             '      </div>',
             '    </div>',
-            '  </article>',
-            '</div>'
+            '    <div class="vinv-specs">',
+            '      <div class="vinv-spec"><i class="fa-solid fa-car-side"></i><div><span>' + escapeHtml(item.body_type || 'Vehicle') + '</span></div></div>',
+            '      <div class="vinv-spec"><i class="fa-regular fa-calendar"></i><div><span>' + escapeHtml(String(item.year || 'N/A')) + '</span></div></div>',
+            '      <div class="vinv-spec"><i class="fa-solid fa-gears"></i><div><span>' + escapeHtml(item.transmission || 'Automatic') + '</span></div></div>',
+            '      <div class="vinv-spec"><i class="fa-solid fa-gas-pump"></i><div><span>' + escapeHtml(item.fuel_type || item.engine_type || 'N/A') + '</span></div></div>',
+            '      <div class="vinv-spec"><i class="fa-solid fa-gauge-high"></i><div><span>' + escapeHtml(formatNumber(item.odometer)) + ' mi</span></div></div>',
+            '    </div>',
+            '    <div class="vinv-listing-actions">',
+            '      <div class="vinv-listing-buttons">',
+            '        <button class="vinv-btn vinv-btn-secondary" type="button" data-action="garage" data-vin="' + escapeAttr(item.vin) + '">' + (inGarage ? 'Saved in My Garage' : 'Add to My Garage') + '</button>',
+            auctionListing ? '        <button class="vinv-btn vinv-btn-secondary" type="button" data-action="condition-report" data-vin="' + escapeAttr(item.vin) + '">Condition report</button>' : '',
+            '        <button class="vinv-btn vinv-btn-secondary" type="button" data-action="detail" data-vin="' + escapeAttr(item.vin) + '">View details</button>',
+            '      </div>',
+            '    </div>',
+            '  </div>',
+            '</article>'
         ].join('');
     }
 
     function renderPagination() {
         var p = state.pagination || {};
         if (!p.total_pages || p.total_pages <= 1) {
+            if (el.paginationTop) el.paginationTop.innerHTML = '';
             el.pagination.innerHTML = '';
             return;
         }
@@ -446,13 +662,14 @@
         var end = Math.min(totalPages, current + 2);
 
         var html = '<div class="vinv-paginate">';
-        html += '<button class="vinv-btn-ghost" data-page="' + Math.max(current - 1, 1) + '" ' + (p.has_prev ? '' : 'disabled') + '>Previous</button>';
+        html += '<button class="vinv-btn vinv-btn-secondary" data-page="' + Math.max(current - 1, 1) + '" ' + (p.has_prev ? '' : 'disabled') + '>Previous</button>';
         for (var i = start; i <= end; i += 1) {
-            html += '<button class="' + (i === current ? 'vinv-btn' : 'vinv-btn-ghost') + '" data-page="' + i + '">' + i + '</button>';
+            html += '<button class="' + (i === current ? 'vinv-btn vinv-btn-primary' : 'vinv-btn vinv-btn-secondary') + '" data-page="' + i + '">' + i + '</button>';
         }
-        html += '<button class="vinv-btn-ghost" data-page="' + (current + 1) + '" ' + (p.has_next ? '' : 'disabled') + '>Next</button>';
+        html += '<button class="vinv-btn vinv-btn-secondary" data-page="' + (current + 1) + '" ' + (p.has_next ? '' : 'disabled') + '>Next</button>';
         html += '</div>';
 
+        if (el.paginationTop) el.paginationTop.innerHTML = html;
         el.pagination.innerHTML = html;
     }
 
@@ -473,7 +690,7 @@
             var vehicle = await loadVehicleDetail(vin);
             state.modalVehicle = vehicle;
             var displayImages = vehicle.display_images || vehicle.images || [];
-            state.modalImage = displayImages[0] || vehicle.hero_image || '/assets/images/portfolio/01.webp';
+            state.modalImage = displayImages[0] || vehicle.hero_image || fallbackImageFor(vehicle);
             renderModal();
             el.modal.classList.add('open');
         } catch (error) {
@@ -520,6 +737,8 @@
             await addGarage(pending.vin, { skipPrompt: true });
         } else if (pending.type === 'acquire') {
             await startAcquisition(pending.vin, { skipPrompt: true });
+        } else if (pending.type === 'condition-report') {
+            await requestConditionReport(pending.vin, { skipPrompt: true });
         }
     }
 
@@ -683,7 +902,64 @@
         closeModal();
     }
 
+    async function requestConditionReport(vin, options) {
+        var opts = options || {};
+        var auth = opts.skipPrompt && state.auth && state.auth.access_token ? state.auth : await requireAuth({ type: 'condition-report', vin: vin });
+        if (!auth) return;
+
+        if (!state.deal) {
+            await loadDeal();
+        }
+
+        if (!dealAllowsConditionReport()) {
+            var eligibilityMessage = conditionReportEligibilityMessage();
+            setError(eligibilityMessage);
+            window.alert(eligibilityMessage);
+            return;
+        }
+
+        var response = await api('/api/vch/me/vehicles/' + encodeURIComponent(vin) + '/condition-report-request', {
+            method: 'POST',
+            token: auth.access_token
+        });
+
+        if (response.status !== 'ok') {
+            if (isAuthFailure(response)) {
+                clearAuth();
+                openAuthPrompt('Log in with your buyer account to request a VCH condition report.', { type: 'condition-report', vin: vin });
+                return;
+            }
+
+            var errorMessage = response.error && response.error.message
+                ? response.error.message
+                : 'Unable to request condition report';
+            setError(errorMessage);
+            if (response.http_status === 403) {
+                window.alert(errorMessage);
+            }
+            return;
+        }
+
+        setError('');
+        state.detailCache[vin] = null;
+        window.alert(
+            response.data && response.data.message
+                ? response.data.message
+                : 'Condition report requested.'
+        );
+        if (response.data && response.data.already_available) {
+            await openDetail(vin);
+        }
+    }
+
     function renderGarage() {
+        if (!el.garageList) {
+            if (el.garageCount) {
+                el.garageCount.textContent = state.garage.length + ' saved';
+            }
+            return;
+        }
+
         if (el.garageCount) {
             el.garageCount.textContent = state.garage.length + ' saved';
         }
@@ -702,9 +978,9 @@
                 '<p>' + formatMoney(v.price_asking) + ' | ' + escapeHtml(v.location_state || 'NA') + ' ' + escapeHtml(v.location_zip || '') + '</p>',
                 '<p>VIN: ' + escapeHtml(item.vin) + ' | Status: ' + escapeHtml(item.status || 'saved') + '</p>',
                 '<div class="vinv-actions" style="margin-top:8px;">',
-                '<button class="vinv-btn-ghost" data-garage-action="open" data-vin="' + escapeAttr(item.vin) + '">Open</button>',
-                '<button class="vinv-btn" data-garage-action="acquire" data-vin="' + escapeAttr(item.vin) + '">Start Acquisition</button>',
-                '<button class="vinv-btn-ghost" data-garage-action="remove" data-vin="' + escapeAttr(item.vin) + '">Remove</button>',
+                '<button class="vinv-btn vinv-btn-secondary" data-garage-action="open" data-vin="' + escapeAttr(item.vin) + '">Open</button>',
+                '<button class="vinv-btn vinv-btn-primary" data-garage-action="acquire" data-vin="' + escapeAttr(item.vin) + '">Start Acquisition</button>',
+                '<button class="vinv-btn vinv-btn-secondary" data-garage-action="remove" data-vin="' + escapeAttr(item.vin) + '">Remove</button>',
                 '</div>',
                 '</div>'
             ].join('');
@@ -720,7 +996,8 @@
 
         var title = ((v.year || '') + ' ' + (v.make || '') + ' ' + (v.model || '')).trim();
         var displayImages = v.display_images || v.images || [];
-        var image = state.modalImage || displayImages[0] || '/assets/images/portfolio/01.webp';
+        var auctionListing = isAuctionItem(v);
+        var image = state.modalImage || displayImages[0] || fallbackImageFor(v);
         var thumbs = displayImages.slice(0, 20).map(function (url) {
             return '<img class="vinv-thumb" src="' + escapeAttr(url) + '" alt="thumb" data-thumb="' + escapeAttr(url) + '">';
         }).join('');
@@ -734,8 +1011,40 @@
         if (v.certified) badges.push('<span class="vinv-pill">CERTIFIED</span>');
         if (v.single_owner) badges.push('<span class="vinv-pill">1 OWNER</span>');
         if (v.clean_title) badges.push('<span class="vinv-pill">CLEAN TITLE</span>');
+        if (v.source_label) badges.push('<span class="vinv-pill">' + escapeHtml(String(v.source_label).toUpperCase()) + '</span>');
 
         var description = v.description ? '<p class="vinv-modal-description">' + escapeHtml(v.description) + '</p>' : '<p class="vinv-text">Listing description not provided by source.</p>';
+        var reportSummary = '';
+        if (auctionListing && hasConditionReport(v)) {
+            reportSummary = '<p class="vinv-text">VCH condition report is available for this auction listing.</p>';
+        } else if (auctionListing) {
+            reportSummary = '<p class="vinv-text">This auction listing is showing a placeholder image until a VCH condition report is ordered and synced.</p>';
+        }
+
+        var odometerText = formatNumber(v.odometer) + ' ' + escapeHtml(v.odometer_units || 'mi');
+        var sellerComments = v.seller_comments
+            ? '<div class="vinv-modal-panel"><h4>Seller Comments</h4><p>' + escapeHtml(v.seller_comments) + '</p></div>'
+            : '';
+        var auctionMeta = [
+            { label: 'VIN', value: v.vin },
+            { label: 'Year', value: v.year },
+            { label: 'Make', value: v.make },
+            { label: 'Model', value: v.model },
+            { label: 'Trim', value: v.trim || 'Base' },
+            { label: 'Exterior Color', value: v.exterior_color || 'N/A' },
+            { label: 'Interior Color', value: v.interior_color || 'N/A' },
+            { label: 'Odometer', value: odometerText },
+            { label: 'Drivetrain', value: v.drivetrain || 'N/A' },
+            { label: 'Transmission', value: v.transmission_type || v.transmission || 'N/A' },
+            { label: 'Engine', value: v.engine_type || v.fuel_type || 'N/A' },
+            { label: 'MMR', value: v.mmr ? formatMoney(v.mmr) : 'N/A' },
+            { label: 'Condition Grade', value: v.condition_report_grade || v.condition_grade || 'N/A' },
+            { label: 'Pickup Location', value: v.pickup_location || 'N/A' },
+            { label: 'Auction House', value: v.auction_house || 'N/A' },
+            { label: 'Auction Status', value: v.inventory_status || v.inventory_label || 'N/A' }
+        ].map(function (row) {
+            return '<div class="vinv-modal-data-row"><span>' + escapeHtml(row.label) + '</span><strong>' + escapeHtml(String(row.value)) + '</strong></div>';
+        }).join('');
 
         el.modalBody.innerHTML = [
             '<div class="vinv-modal-content">',
@@ -747,16 +1056,18 @@
             '    <h3>' + escapeHtml(title || v.vin) + '</h3>',
             '    <div class="vinv-meta">' + badges.join('') + '</div>',
             '    <p class="vinv-price">' + formatMoney(v.price_asking) + '</p>',
-            '    <p>VIN: ' + escapeHtml(v.vin) + '</p>',
-            '    <p>' + escapeHtml(v.trim || 'Base') + ' | ' + escapeHtml(v.body_type || 'Vehicle') + ' | ' + escapeHtml(v.drivetrain || 'N/A') + '</p>',
-            '    <p>' + formatNumber(v.odometer) + ' miles | ' + escapeHtml(v.city || '') + (v.city ? ', ' : '') + escapeHtml(v.location_state || 'NA') + ' ' + escapeHtml(v.location_zip || '') + '</p>',
-            '    <p>Engine: ' + escapeHtml(v.engine_type || v.fuel_type || 'N/A') + ' | Transmission: ' + escapeHtml(v.transmission || 'N/A') + ' | Ext/Int: ' + escapeHtml(v.exterior_color || 'N/A') + ' / ' + escapeHtml(v.interior_color || 'N/A') + '</p>',
-            '    <p>Days on Market: ' + escapeHtml(String(v.days_on_market || 'N/A')) + ' | Dealer: ' + escapeHtml(v.dealer_name || 'N/A') + '</p>',
+            '    <div class="vinv-modal-panel">',
+            '      <h4>Vehicle Details</h4>',
+            '      <div class="vinv-modal-data-grid">' + auctionMeta + '</div>',
+            '    </div>',
             description,
+            reportSummary,
+            sellerComments,
             '    <div class="vinv-feature-wrap">' + (features || '<span class="vinv-feature">No listed features</span>') + '</div>',
             '    <div class="vinv-actions">',
-            '      <button class="vinv-btn" data-modal-action="garage" data-vin="' + escapeAttr(v.vin) + '">Add to My Garage</button>',
-            '      <button class="vinv-btn-ghost" data-modal-action="acquire" data-vin="' + escapeAttr(v.vin) + '">Start Acquisition</button>',
+            '      <button class="vinv-btn vinv-btn-primary" data-modal-action="garage" data-vin="' + escapeAttr(v.vin) + '">Add to My Garage</button>',
+            auctionListing ? '      <button class="vinv-btn vinv-btn-secondary" data-modal-action="condition-report" data-vin="' + escapeAttr(v.vin) + '">' + (hasConditionReport(v) ? 'Refresh Condition Report' : 'Order Condition Report') + '</button>' : '',
+            '      <button class="vinv-btn vinv-btn-secondary" data-modal-action="acquire" data-vin="' + escapeAttr(v.vin) + '">Start Acquisition</button>',
             '    </div>',
             '  </div>',
             '</div>'
@@ -808,26 +1119,42 @@
         if (el.form) {
             el.form.addEventListener('submit', function (event) {
                 event.preventDefault();
-                loadInventory(1);
+                saveSearchContext();
+                loadFacets().then(function () {
+                    loadInventory(1);
+                });
             });
 
             el.form.addEventListener('change', function (event) {
                 var target = event.target;
                 if (!target || !target.name) return;
 
+                if (target.name === 'zip_code' || target.name === 'radius') {
+                    saveSearchContext();
+                }
+
                 if (target.name === 'make') {
                     var modelSelect = el.form.querySelector('select[name="model"]');
                     var trimSelect = el.form.querySelector('select[name="trim"]');
                     if (modelSelect) modelSelect.value = '';
                     if (trimSelect) trimSelect.value = '';
-                    loadFacets();
+                    updateDependentTaxonomyOptions();
                     return;
                 }
 
-                if (target.name === 'model' || target.name === 'body_type' || target.name === 'state' || target.name === 'inventory_type') {
-                    loadFacets();
+                if (target.name === 'model') {
+                    var nextTrimSelect = el.form.querySelector('select[name="trim"]');
+                    if (nextTrimSelect) nextTrimSelect.value = '';
+                    updateDependentTaxonomyOptions();
                 }
             });
+
+            var zipInput = el.form.querySelector('input[name="zip_code"]');
+            if (zipInput) {
+                zipInput.addEventListener('blur', function () {
+                    saveSearchContext();
+                });
+            }
         }
 
         if (el.resetBtn) {
@@ -840,11 +1167,12 @@
                 var sortBy = el.form.querySelector('select[name="sort_by"]');
                 var sortDir = el.form.querySelector('select[name="sort_dir"]');
 
-                if (hasImages) hasImages.checked = true;
+                if (hasImages) hasImages.checked = false;
                 if (liveSync) liveSync.checked = true;
                 if (sortBy) sortBy.value = 'updated_at';
                 if (sortDir) sortDir.value = 'desc';
 
+                updateDependentTaxonomyOptions();
                 loadFacets().then(function () {
                     loadInventory(1);
                 });
@@ -853,14 +1181,17 @@
 
         if (el.grid) {
             el.grid.addEventListener('click', async function (event) {
-                var btn = event.target.closest('button');
+                var btn = event.target.closest('[data-action]');
                 if (!btn) return;
+                event.preventDefault();
                 var action = btn.getAttribute('data-action');
                 var vin = btn.getAttribute('data-vin');
                 if (!action || !vin) return;
 
                 if (action === 'detail') {
                     await openDetail(vin);
+                } else if (action === 'condition-report') {
+                    await requestConditionReport(vin);
                 } else if (action === 'garage') {
                     var inGarage = state.garage.some(function (g) { return g.vin === vin; });
                     if (inGarage) return;
@@ -871,6 +1202,15 @@
 
         if (el.pagination) {
             el.pagination.addEventListener('click', function (event) {
+                var btn = event.target.closest('button[data-page]');
+                if (!btn || btn.disabled) return;
+                var page = Number(btn.getAttribute('data-page') || '1');
+                loadInventory(page);
+            });
+        }
+
+        if (el.paginationTop) {
+            el.paginationTop.addEventListener('click', function (event) {
                 var btn = event.target.closest('button[data-page]');
                 if (!btn || btn.disabled) return;
                 var page = Number(btn.getAttribute('data-page') || '1');
@@ -923,6 +1263,8 @@
 
                 if (action === 'garage') {
                     await addGarage(vin);
+                } else if (action === 'condition-report') {
+                    await requestConditionReport(vin);
                 } else if (action === 'acquire') {
                     await startAcquisition(vin);
                 }
@@ -995,6 +1337,7 @@
 
     async function init() {
         bindEvents();
+        restoreSearchContext();
 
         var auth = loadAuth();
         if (auth && auth.access_token) {

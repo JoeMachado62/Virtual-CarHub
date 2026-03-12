@@ -25,8 +25,11 @@ export default function AdminPage() {
   }, []);
 
   return (
-    <main>
-      <h1>Admin Workspace</h1>
+    <main className="page-stack">
+      <section className="section-shell page-hero compact">
+        <p className="section-eyebrow">Internal</p>
+        <h1>Admin workspace</h1>
+      </section>
       <div className="card">
         <p>Service-token backed operations view (MVP internal console).</p>
         <button className="button" onClick={loadDeals}>

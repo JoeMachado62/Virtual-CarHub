@@ -11,7 +11,7 @@ Greenfield implementation of the `VirtualCarHub_PRD_v2.md` in a standalone proje
 ## Quick Start (Local)
 
 ```bash
-cd /var/www/paf-ghl/Virtual-CarHub
+cd /var/www/virtual-carhub
 cp backend/.env.example backend/.env
 cp frontend/.env.local.example frontend/.env.local
 

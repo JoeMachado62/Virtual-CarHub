@@ -1,16 +1,20 @@
+import { Suspense } from "react";
+
 import { InventoryExplorer } from "@/components/InventoryExplorer";
 
 export default function VInventoryPage() {
   return (
-    <main>
-      <section className="hero" style={{ marginBottom: 12 }}>
-        <h1>Inventory</h1>
-        <p>
-          CarGurus-style discovery with sidebar filters, paginated results, and VIN-level detail pages that swap to
-          verified inspection media as deals advance.
+    <main className="page-stack">
+      <section className="section-shell page-hero compact">
+        <p className="section-eyebrow">VInventory</p>
+        <h1>Search live inventory, save vehicles, and move buyers into action.</h1>
+        <p className="muted-copy">
+          This is the controlled search surface for auction and retail inventory, not a disconnected marketing page.
         </p>
       </section>
-      <InventoryExplorer />
+      <Suspense fallback={<div className="card">Loading inventory search...</div>}>
+        <InventoryExplorer />
+      </Suspense>
     </main>
   );
 }
