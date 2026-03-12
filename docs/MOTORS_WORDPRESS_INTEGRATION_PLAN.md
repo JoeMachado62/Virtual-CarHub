@@ -6,12 +6,13 @@ Use a WordPress dealer theme for speed on front-end UX while keeping Virtual-Car
 ## Current Status
 - Inventory API already enforces source priority where `auction` data overrides `marketcheck` data.
 - New backend export endpoint is available:
-  - `GET /api/vch/inventory/wordpress/export?format=json`
-  - `GET /api/vch/inventory/wordpress/export?format=csv`
+  - `GET https://app.virtualcarhub.com/v1/inventory/wordpress/export?format=json`
+  - `GET https://app.virtualcarhub.com/v1/inventory/wordpress/export?format=csv`
 - Export includes filters and pagination compatible with listing sync workflows.
 
 ## Export Contract (Implemented)
-- Endpoint: `/api/vch/inventory/wordpress/export`
+- Endpoint: `https://app.virtualcarhub.com/v1/inventory/wordpress/export`
+- DNS/TLS prerequisite: `app.virtualcarhub.com` must resolve to `168.231.71.194` with a valid Let's Encrypt certificate on this VPS.
 - Formats:
   - `format=json` returns `{ status, data, error }`
   - `format=csv` returns downloadable CSV
@@ -25,7 +26,7 @@ Use a WordPress dealer theme for speed on front-end UX while keeping Virtual-Car
   - `external_id` (VIN), `title`, `slug`, `price`, `mileage`, `images`, `thumbnail`
   - `fuel_type`, `transmission`, `drivetrain`, colors, ownership/title flags
   - `source_type`, `source_priority`
-  - `vdp_url` (`https://virtualcarhub.com/vinventory-details.html?vin=...`)
+  - `vdp_url` (`https://virtualcarhub.com/vinventory/{vin}`)
 
 ## Motors Implementation Approach
 1. Install Motors in WordPress and use a child theme for all customizations.
@@ -47,6 +48,6 @@ Use a WordPress dealer theme for speed on front-end UX while keeping Virtual-Car
 ## Next Execution Steps
 1. Upload Motors theme zip into the project workspace so child-theme overrides can be implemented and versioned.
 2. Stand up a WordPress instance (`staging.virtualcarhub.com`) for import and template mapping.
-3. Implement importer job (cron/manual) against `/api/vch/inventory/wordpress/export?format=csv`.
+3. Implement importer job (cron/manual) against `https://app.virtualcarhub.com/v1/inventory/wordpress/export?format=csv`.
 4. Build Motors child-theme templates for inventory archive and VDP UI parity with current brand.
 5. Add smoke tests for import freshness and VDP rendering parity.
