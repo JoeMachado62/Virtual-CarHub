@@ -4,7 +4,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
+import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
+import { AuthState, loadAuthState } from "@/lib/auth";
 
 type DisplayMode = "MARKETING" | "INSPECTION_PENDING" | "INSPECTION_REPORT";
 type InspectionStatus = "NOT_STARTED" | "PENDING" | "INGESTED" | "NORMALIZED" | "VERIFIED" | "FAILED";
@@ -52,6 +55,16 @@ type VehicleDetail = {
   inspection_status?: InspectionStatus;
   has_inspection_report?: boolean;
   display_context?: VehicleDisplayContext;
+  source_label?: string | null;
+  auction_house?: string | null;
+  pickup_location?: string | null;
+  inventory_status?: string | null;
+  inventory_label?: string | null;
+  condition_report_grade?: string | null;
+  seller_comments?: string | null;
+  condition_report?: Record<string, unknown>;
+  listing_snapshot?: Record<string, unknown>;
+  mmr?: number | null;
   features_raw: string[];
   features_normalized: Record<string, number>;
   available: boolean;
@@ -62,10 +75,18 @@ type VehicleDetail = {
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
 
 export function VehicleDetailPanel({ vin }: { vin: string }) {
+  const [auth, setAuth] = useState<AuthState | null>(null);
   const [vehicle, setVehicle] = useState<VehicleDetail | null>(null);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAuth(loadAuthState());
+  }, []);
 
   useEffect(() => {
     async function loadVehicle() {
@@ -110,11 +131,105 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     );
   }
 
+  const currentVehicle = vehicle;
   const displayImages = resolveDisplayImages(vehicle);
   const disclosureImages = vehicle.display_context?.disclosure_images || [];
   const inspectionEvidence = vehicle.display_context?.inspection_images || [];
   const conditionReport = vehicle.display_context?.condition_report || {};
   const primaryImage = selectedImage || resolveHeroImage(vehicle) || displayImages[0] || FALLBACK_IMAGE;
+
+  async function addToGarage() {
+    if (!auth?.accessToken) {
+      setActionError("Sign in from VInventory before saving vehicles to My Garage.");
+      setActionMessage(null);
+      return;
+    }
+
+    setActionLoading("garage");
+    setActionError(null);
+    setActionMessage(null);
+    const response = await apiFetch<{
+      ove_detail_refresh?: {
+        queued?: boolean;
+        deduplicated?: boolean;
+      } | null;
+    }>(`/me/garage/${encodeURIComponent(currentVehicle.vin)}`, { method: "POST" }, auth.accessToken);
+
+    if (response.status !== "ok") {
+      setActionError(response.error?.message || "Unable to save vehicle to garage.");
+      setActionLoading(null);
+      return;
+    }
+
+    setActionMessage(
+      response.data.ove_detail_refresh?.queued
+        ? response.data.ove_detail_refresh.deduplicated
+          ? "Vehicle saved. Auction detail refresh was already in progress."
+          : "Vehicle saved. Auction detail refresh queued for the back office."
+        : "Vehicle saved to My Garage."
+    );
+    setActionLoading(null);
+  }
+
+  async function startAcquisition() {
+    if (!auth?.accessToken) {
+      setActionError("Sign in from VInventory before starting acquisition.");
+      setActionMessage(null);
+      return;
+    }
+
+    setActionLoading("acquire");
+    setActionError(null);
+    setActionMessage(null);
+    const response = await apiFetch(
+      `/me/garage/${encodeURIComponent(currentVehicle.vin)}/acquire`,
+      { method: "POST" },
+      auth.accessToken
+    );
+    if (response.status !== "ok") {
+      setActionError(response.error?.message || "Unable to start acquisition.");
+      setActionLoading(null);
+      return;
+    }
+
+    setActionMessage("Acquisition started. Redirecting to My Garage.");
+    setActionLoading(null);
+    window.location.href = `/dashboard?vin=${encodeURIComponent(currentVehicle.vin)}`;
+  }
+
+  async function requestConditionReport() {
+    if (!auth?.accessToken) {
+      setActionError("Sign in from VInventory before requesting a condition report.");
+      setActionMessage(null);
+      return;
+    }
+
+    setActionLoading("condition-report");
+    setActionError(null);
+    setActionMessage(null);
+    const response = await apiFetch<{
+      message?: string;
+      already_available?: boolean;
+    }>(
+      `/me/vehicles/${encodeURIComponent(currentVehicle.vin)}/condition-report-request`,
+      { method: "POST" },
+      auth.accessToken
+    );
+
+    if (response.status !== "ok") {
+      setActionError(response.error?.message || "Unable to request condition report.");
+      setActionLoading(null);
+      return;
+    }
+
+    setActionMessage(
+      response.data.message ||
+        (response.data.already_available
+          ? "Condition report is already available for this vehicle."
+          : "Condition report requested. Refresh this page after the scraper sync completes.")
+    );
+    setActionLoading(null);
+  }
 
   return (
     <div className="grid" style={{ gap: 12 }}>
@@ -135,7 +250,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
           </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <span className="badge">VIN {vehicle.vin}</span>
-            <span className="badge">Source: {vehicle.source_type || "unknown"}</span>
+            <span className="badge">Source: {vehicle.source_label || vehicle.source_type || "unknown"}</span>
             <span className="badge">Condition: {vehicle.condition_grade || "N/A"}</span>
             <span className="badge">
               {vehicle.location_state || "NA"} {vehicle.location_zip || ""}
@@ -209,33 +324,52 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
         </section>
       ) : null}
 
-      {vehicle.display_mode === "INSPECTION_REPORT" || vehicle.display_context?.mode === "INSPECTION_REPORT" ? (
-        <section className="grid two">
-          <article className="card">
-            <h3>Inspection Evidence</h3>
-            <p>Inspection images: {inspectionEvidence.length}</p>
-            <p>Disclosure images: {disclosureImages.length}</p>
-            {disclosureImages.length ? (
-              <div className="inventory-feature-grid">
-                {disclosureImages.map((image) => (
-                  <a className="badge" key={image} href={image} target="_blank" rel="noreferrer">
-                    Disclosure Photo
-                  </a>
-                ))}
-              </div>
-            ) : (
-              <p style={{ marginBottom: 0 }}>No disclosure photos provided.</p>
-            )}
-          </article>
-          <article className="card">
-            <h3>Condition Report</h3>
-            {Object.keys(conditionReport).length ? (
-              <pre style={{ marginBottom: 0, whiteSpace: "pre-wrap" }}>{JSON.stringify(conditionReport, null, 2)}</pre>
-            ) : (
-              <p style={{ marginBottom: 0 }}>Condition report data is not yet available.</p>
-            )}
-          </article>
-        </section>
+      {vehicle.source_type === "ove" || vehicle.source_type === "auction" ? (
+        <>
+          <section className="inventory-actions">
+            <button className="button" onClick={addToGarage} disabled={actionLoading !== null}>
+              {actionLoading === "garage" ? "Saving..." : "Add to My Garage"}
+            </button>
+            <button className="button ghost" onClick={startAcquisition} disabled={actionLoading !== null}>
+              {actionLoading === "acquire" ? "Starting..." : "Start Acquisition"}
+            </button>
+            {!vehicle.has_inspection_report ? (
+              <button className="button ghost" onClick={requestConditionReport} disabled={actionLoading !== null}>
+                {actionLoading === "condition-report" ? "Requesting..." : "Request Condition Report"}
+              </button>
+            ) : null}
+          </section>
+          {actionError ? <section className="card">{actionError}</section> : null}
+          {actionMessage ? <section className="card">{actionMessage}</section> : null}
+          <section className="grid two">
+            <article className="card">
+              <h3>Inspection Evidence</h3>
+              <p>Inspection images: {inspectionEvidence.length}</p>
+              <p>Disclosure images: {disclosureImages.length}</p>
+              {disclosureImages.length ? (
+                <div className="inventory-feature-grid">
+                  {disclosureImages.map((image) => (
+                    <a className="badge" key={image} href={image} target="_blank" rel="noreferrer">
+                      Disclosure Photo
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ marginBottom: 0 }}>No disclosure photos provided.</p>
+              )}
+            </article>
+            <ConditionReportCard
+              report={vehicle.condition_report || conditionReport}
+              grade={vehicle.condition_report_grade || vehicle.condition_grade}
+              sellerComments={vehicle.seller_comments}
+              auctionHouse={vehicle.auction_house}
+              pickupLocation={vehicle.pickup_location}
+              inventoryStatus={vehicle.inventory_status || vehicle.inventory_label}
+              mmr={vehicle.mmr}
+            />
+          </section>
+          <AuctionSnapshotCard snapshot={vehicle.listing_snapshot} />
+        </>
       ) : null}
 
       <section className="card">

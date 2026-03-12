@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
+import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
 import { AuthState, clearAuthState, loadAuthState, saveAuthState } from "@/lib/auth";
 
@@ -77,6 +79,21 @@ type VehicleDetail = {
   inspection_status?: InspectionStatus;
   has_inspection_report?: boolean;
   display_context?: VehicleDisplayContext;
+  source_label?: string | null;
+  auction_house?: string | null;
+  pickup_location?: string | null;
+  inventory_status?: string | null;
+  inventory_label?: string | null;
+  condition_report_grade?: string | null;
+  seller_comments?: string | null;
+  condition_report?: Record<string, unknown>;
+  listing_snapshot?: Record<string, unknown>;
+  ove_detail?: {
+    source_platform?: string;
+    page_url?: string | null;
+    last_synced_at?: string | null;
+  } | null;
+  mmr?: number | null;
   features_raw: string[];
   features_normalized: Record<string, number>;
   available: boolean;
@@ -121,6 +138,10 @@ type GarageItem = {
   updated_at: string;
   acquisition_started_at?: string | null;
   deal_stage: string;
+  display_mode: DisplayMode;
+  inspection_status: InspectionStatus;
+  has_inspection_report: boolean;
+  display_context?: VehicleDisplayContext;
   vehicle: {
     year?: number | null;
     make?: string | null;
@@ -224,6 +245,7 @@ export function InventoryExplorer() {
   const [garageLoading, setGarageLoading] = useState(false);
   const [garageActionVin, setGarageActionVin] = useState<string | null>(null);
   const [garageError, setGarageError] = useState<string | null>(null);
+  const [garageNotice, setGarageNotice] = useState<string | null>(null);
 
   useEffect(() => {
     const saved = loadAuthState();
@@ -347,6 +369,7 @@ export function InventoryExplorer() {
   async function loadGarage(accessToken: string) {
     setGarageLoading(true);
     setGarageError(null);
+    setGarageNotice(null);
     const response = await apiFetch<GarageItem[]>("/me/garage", {}, accessToken);
     if (response.status !== "ok") {
       setGarageItems([]);
@@ -405,6 +428,7 @@ export function InventoryExplorer() {
   function requireAuthForGarageAction(): AuthState | null {
     if (!auth?.accessToken) {
       setGarageError("Sign in to save vehicles to your account-wide garage.");
+      setGarageNotice(null);
       return null;
     }
     return auth;
@@ -415,16 +439,30 @@ export function InventoryExplorer() {
     if (!session) return;
     setGarageActionVin(vin);
     setGarageError(null);
-    const response = await apiFetch<GarageItem>(`/me/garage/${encodeURIComponent(vin)}`, { method: "POST" }, session.accessToken);
+    setGarageNotice(null);
+    const response = await apiFetch<{
+      garage_item: GarageItem;
+      ove_detail_refresh?: {
+        queued?: boolean;
+        deduplicated?: boolean;
+      } | null;
+    }>(`/me/garage/${encodeURIComponent(vin)}`, { method: "POST" }, session.accessToken);
     if (response.status !== "ok") {
       setGarageError(response.error?.message || "Unable to save vehicle to garage.");
       setGarageActionVin(null);
       return;
     }
     setGarageItems((prev) => {
-      const remaining = prev.filter((item) => item.vin !== response.data.vin);
-      return [response.data, ...remaining];
+      const remaining = prev.filter((item) => item.vin !== response.data.garage_item.vin);
+      return [response.data.garage_item, ...remaining];
     });
+    setGarageNotice(
+      response.data.ove_detail_refresh?.queued
+        ? response.data.ove_detail_refresh.deduplicated
+          ? "Auction detail refresh was already queued for this vehicle."
+          : "Auction detail refresh queued. Images and condition data will update when the scraper responds."
+        : "Vehicle saved to My Garage."
+    );
     setGarageActionVin(null);
   }
 
@@ -433,6 +471,7 @@ export function InventoryExplorer() {
     if (!session) return;
     setGarageActionVin(vin);
     setGarageError(null);
+    setGarageNotice(null);
     const response = await apiFetch<{ vin: string; status: string }>(
       `/me/garage/${encodeURIComponent(vin)}`,
       { method: "DELETE" },
@@ -452,9 +491,14 @@ export function InventoryExplorer() {
     if (!session) return;
     setGarageActionVin(vin);
     setGarageError(null);
+    setGarageNotice(null);
     const response = await apiFetch<{
       garage_item: GarageItem;
       deal: { id: string; stage: string; selected_vin: string };
+      ove_detail_refresh?: {
+        queued?: boolean;
+        deduplicated?: boolean;
+      } | null;
     }>(`/me/garage/${encodeURIComponent(vin)}/acquire`, { method: "POST" }, session.accessToken);
     if (response.status !== "ok") {
       setGarageError(response.error?.message || "Unable to start acquisition.");
@@ -466,8 +510,45 @@ export function InventoryExplorer() {
       const remaining = prev.filter((item) => item.vin !== response.data.garage_item.vin);
       return [response.data.garage_item, ...remaining];
     });
+    setGarageNotice(
+      response.data.ove_detail_refresh?.queued
+        ? response.data.ove_detail_refresh.deduplicated
+          ? "Acquisition started. Auction detail refresh was already in progress."
+          : "Acquisition started and auction detail refresh queued for the back office."
+        : "Acquisition started."
+    );
     setGarageActionVin(null);
     window.location.href = `/dashboard?vin=${encodeURIComponent(vin)}`;
+  }
+
+  async function requestConditionReport(vin: string) {
+    const session = requireAuthForGarageAction();
+    if (!session) return;
+    setGarageActionVin(vin);
+    setGarageError(null);
+    setGarageNotice(null);
+
+    const response = await apiFetch<{
+      queued?: boolean;
+      deduplicated?: boolean;
+      already_available?: boolean;
+      message?: string;
+    }>(`/me/vehicles/${encodeURIComponent(vin)}/condition-report-request`, { method: "POST" }, session.accessToken);
+
+    if (response.status !== "ok") {
+      setGarageError(response.error?.message || "Unable to request condition report.");
+      setGarageActionVin(null);
+      return;
+    }
+
+    await loadGarage(session.accessToken);
+    setGarageNotice(
+      response.data.message ||
+        (response.data.already_available
+          ? "Condition report is already available for this vehicle."
+          : "Condition report requested. The back office scraper queue has been updated.")
+    );
+    setGarageActionVin(null);
   }
 
   const pageButtons = useMemo(() => {
@@ -802,6 +883,15 @@ export function InventoryExplorer() {
                       <button className="button ghost" onClick={() => openVehicleModal(item.vin)}>
                         Quick View
                       </button>
+                      {item.source_type === "ove" || item.source_type === "auction" ? (
+                        <button
+                          className="button ghost"
+                          onClick={() => requestConditionReport(item.vin)}
+                          disabled={garageActionVin === item.vin}
+                        >
+                          {garageActionVin === item.vin ? "Requesting..." : "Condition Report"}
+                        </button>
+                      ) : null}
                       <button
                         className="button ghost"
                         onClick={() => addToGarage(item.vin)}
@@ -851,6 +941,7 @@ export function InventoryExplorer() {
               <span className="badge">{garageItems.length} saved</span>
             </div>
             {garageError ? <p style={{ color: "#b42318", margin: 0 }}>{garageError}</p> : null}
+            {garageNotice ? <p style={{ color: "#027a48", margin: 0 }}>{garageNotice}</p> : null}
             {garageLoading ? <p style={{ margin: 0 }}>Loading garage...</p> : null}
             {!garageLoading && !garageItems.length ? (
               <p style={{ marginBottom: 0 }}>Save vehicles here to persist by account and deal.</p>
@@ -865,11 +956,24 @@ export function InventoryExplorer() {
                       </p>
                       <p style={{ margin: 0 }}>VIN: {item.vin}</p>
                       <p style={{ margin: 0 }}>Status: {item.status}</p>
+                      <p style={{ margin: 0 }}>
+                        {displayModeLabel(item.display_mode)} | {inspectionStatusLabel(item.inspection_status)}
+                      </p>
+                      {item.has_inspection_report ? <p style={{ margin: 0 }}>Condition report available</p> : null}
                     </div>
                     <div className="inventory-actions">
                       <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}` as any}>
                         Open
                       </Link>
+                      {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") && !item.has_inspection_report ? (
+                        <button
+                          className="button ghost"
+                          onClick={() => requestConditionReport(item.vin)}
+                          disabled={garageActionVin === item.vin}
+                        >
+                          {garageActionVin === item.vin ? "Requesting..." : "Condition Report"}
+                        </button>
+                      ) : null}
                       <button
                         className="button"
                         onClick={() => startAcquisition(item.vin)}
@@ -985,6 +1089,22 @@ export function InventoryExplorer() {
                     <p style={{ marginBottom: 0 }}>{selectedVehicle.display_context.disclaimer}</p>
                   ) : null}
 
+                  {selectedVehicle.source_type === "ove" || selectedVehicle.source_type === "auction" ? (
+                    <>
+                      <ConditionReportCard
+                        report={selectedVehicle.condition_report}
+                        grade={selectedVehicle.condition_report_grade || selectedVehicle.condition_grade}
+                        sellerComments={selectedVehicle.seller_comments}
+                        auctionHouse={selectedVehicle.auction_house}
+                        pickupLocation={selectedVehicle.pickup_location}
+                        inventoryStatus={selectedVehicle.inventory_status || selectedVehicle.inventory_label}
+                        mmr={selectedVehicle.mmr}
+                        title="Auction Condition Summary"
+                      />
+                      <AuctionSnapshotCard snapshot={selectedVehicle.listing_snapshot} />
+                    </>
+                  ) : null}
+
                   <div className="inventory-actions">
                     <button
                       className="button"
@@ -997,6 +1117,15 @@ export function InventoryExplorer() {
                           ? "In Garage"
                           : "Add to My Garage"}
                     </button>
+                    {(selectedVehicle.source_type === "ove" || selectedVehicle.source_type === "auction") && !selectedVehicle.has_inspection_report ? (
+                      <button
+                        className="button ghost"
+                        onClick={() => requestConditionReport(selectedVehicle.vin)}
+                        disabled={garageActionVin === selectedVehicle.vin}
+                      >
+                        {garageActionVin === selectedVehicle.vin ? "Requesting..." : "Request Condition Report"}
+                      </button>
+                    ) : null}
                     <button
                       className="button ghost"
                       onClick={() => startAcquisition(selectedVehicle.vin)}

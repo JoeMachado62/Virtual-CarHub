@@ -9,11 +9,34 @@ import { Recommendation, RecommendationCards } from "@/components/Recommendation
 import { apiFetch } from "@/lib/api";
 import { AuthState, clearAuthState, loadAuthState, saveAuthState } from "@/lib/auth";
 
+type GarageItem = {
+  id: string;
+  vin: string;
+  status: string;
+  deal_stage: string;
+  inspection_status: string;
+  has_inspection_report: boolean;
+  vehicle: {
+    year?: number | null;
+    make?: string | null;
+    model?: string | null;
+    trim?: string | null;
+    price_asking?: number | null;
+    location_state?: string | null;
+    location_zip?: string | null;
+    source_type?: string | null;
+  };
+};
+
 export function DashboardShell() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [dealStage, setDealStage] = useState("LEAD");
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [notifications, setNotifications] = useState<{ id: string; message: string }[]>([]);
+  const [garageItems, setGarageItems] = useState<GarageItem[]>([]);
+  const [garageMessage, setGarageMessage] = useState<string | null>(null);
+  const [garageError, setGarageError] = useState<string | null>(null);
+  const [garageActionVin, setGarageActionVin] = useState<string | null>(null);
   const [email, setEmail] = useState("buyer@example.com");
   const [password, setPassword] = useState("BuyerPass123!");
   const [loading, setLoading] = useState(false);
@@ -59,15 +82,17 @@ export function DashboardShell() {
   async function refreshData() {
     if (!auth?.accessToken) return;
 
-    const [deal, recs, notes] = await Promise.all([
+    const [deal, recs, notes, garage] = await Promise.all([
       apiFetch<{ stage: string }>("/me/deal", {}, auth.accessToken),
       apiFetch<Recommendation[]>("/me/recommendations", {}, auth.accessToken),
-      apiFetch<{ id: string; message: string }[]>("/me/notifications", {}, auth.accessToken)
+      apiFetch<{ id: string; message: string }[]>("/me/notifications", {}, auth.accessToken),
+      apiFetch<GarageItem[]>("/me/garage", {}, auth.accessToken)
     ]);
 
     if (deal.status === "ok") setDealStage(deal.data.stage);
     if (recs.status === "ok") setRecommendations(recs.data || []);
     if (notes.status === "ok") setNotifications(notes.data || []);
+    if (garage.status === "ok") setGarageItems(garage.data || []);
   }
 
   useEffect(() => {
@@ -99,6 +124,47 @@ export function DashboardShell() {
       auth.accessToken
     );
     await refreshData();
+  }
+
+  async function requestConditionReport(vin: string) {
+    if (!auth?.accessToken) return;
+    setGarageActionVin(vin);
+    setGarageError(null);
+    setGarageMessage(null);
+    const response = await apiFetch<{ message?: string; already_available?: boolean }>(
+      `/me/vehicles/${vin}/condition-report-request`,
+      { method: "POST" },
+      auth.accessToken
+    );
+    if (response.status !== "ok") {
+      setGarageError(response.error?.message || "Unable to request condition report.");
+      setGarageActionVin(null);
+      return;
+    }
+    setGarageMessage(
+      response.data.message ||
+        (response.data.already_available
+          ? "Condition report is already available."
+          : "Condition report requested. The auction queue has been updated.")
+    );
+    await refreshData();
+    setGarageActionVin(null);
+  }
+
+  async function startGarageAcquisition(vin: string) {
+    if (!auth?.accessToken) return;
+    setGarageActionVin(vin);
+    setGarageError(null);
+    setGarageMessage(null);
+    const response = await apiFetch(`/me/garage/${vin}/acquire`, { method: "POST" }, auth.accessToken);
+    if (response.status !== "ok") {
+      setGarageError(response.error?.message || "Unable to start acquisition.");
+      setGarageActionVin(null);
+      return;
+    }
+    setGarageMessage("Acquisition started. Returning the latest garage state.");
+    await refreshData();
+    setGarageActionVin(null);
   }
 
   if (!isAuthenticated) {
@@ -151,6 +217,51 @@ export function DashboardShell() {
         <DealTracker stage={dealStage} />
       </section>
 
+      <section className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <h2 style={{ margin: 0 }}>My Garage</h2>
+          <span className="badge">{garageItems.length} saved</span>
+        </div>
+        {garageError ? <p style={{ color: "#b42318", margin: 0 }}>{garageError}</p> : null}
+        {garageMessage ? <p style={{ color: "#027a48", margin: 0 }}>{garageMessage}</p> : null}
+        {!garageItems.length ? (
+          <p style={{ marginBottom: 0 }}>Saved auction and inventory vehicles will appear here.</p>
+        ) : (
+          <div className="inventory-garage-grid">
+            {garageItems.map((item) => (
+              <article key={item.id} className="inventory-garage-item">
+                <div>
+                  <strong>{garageTitle(item)}</strong>
+                  <p style={{ margin: 0 }}>
+                    {formatMoney(item.vehicle.price_asking)} | {garageLocation(item)}
+                  </p>
+                  <p style={{ margin: 0 }}>VIN: {item.vin}</p>
+                  <p style={{ margin: 0 }}>Status: {item.status}</p>
+                  <p style={{ margin: 0 }}>Inspection: {item.inspection_status}</p>
+                </div>
+                <div className="inventory-actions">
+                  <a className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}`}>
+                    Open
+                  </a>
+                  {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") && !item.has_inspection_report ? (
+                    <button
+                      className="button ghost"
+                      onClick={() => requestConditionReport(item.vin)}
+                      disabled={garageActionVin === item.vin}
+                    >
+                      {garageActionVin === item.vin ? "Requesting..." : "Condition Report"}
+                    </button>
+                  ) : null}
+                  <button className="button" onClick={() => startGarageAcquisition(item.vin)} disabled={garageActionVin === item.vin}>
+                    {garageActionVin === item.vin ? "Starting..." : "Start Acquisition"}
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
       <QuickMatchForm accessToken={accessToken} onCompleted={refreshData} />
 
       <section>
@@ -175,4 +286,18 @@ export function DashboardShell() {
       </section>
     </div>
   );
+}
+
+function garageTitle(item: GarageItem): string {
+  const title = `${item.vehicle.year || ""} ${item.vehicle.make || ""} ${item.vehicle.model || ""}`.trim();
+  return title || item.vin;
+}
+
+function garageLocation(item: GarageItem): string {
+  return `${item.vehicle.location_state || "NA"} ${item.vehicle.location_zip || ""}`.trim();
+}
+
+function formatMoney(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "N/A";
+  return `$${value.toLocaleString()}`;
 }

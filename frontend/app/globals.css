@@ -867,6 +867,30 @@ textarea {
   margin: 0;
 }
 
+.inventory-modal-data-grid {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.vinv-modal-data-row {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.8rem 0.9rem;
+  background: var(--surface-soft);
+  display: grid;
+  gap: 0.2rem;
+}
+
+.vinv-modal-data-row span {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.vinv-modal-data-row strong {
+  line-height: 1.45;
+}
+
 .inventory-detail-top {
   display: grid;
   gap: 1rem;
