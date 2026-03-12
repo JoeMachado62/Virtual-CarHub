@@ -5,17 +5,25 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import Integer, asc, desc, func, or_, select
+from fastapi.params import Param
+from sqlalchemy import Integer, asc, case, desc, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_service_token, require_wordpress_export_auth
 from app.core.config import settings
+from app.core.constants import InventorySourceType
 from app.core.responses import ok
 from app.db.session import get_db
 from app.integrations.marketcheck_client import MarketCheckClient
-from app.models.entities import Vehicle
+from app.models.entities import OveVehicleDetail, Vehicle
 from app.services.image_pipeline_service import resolve_vehicle_card_media, resolve_vehicle_display_context
+from app.services.inventory_taxonomy_service import (
+    MIN_TAXONOMY_YEAR,
+    get_inventory_taxonomy_facets,
+    sync_marketcheck_taxonomy_cache,
+)
 from app.services.inventory_service import SOURCE_PRIORITY, ingest_marketcheck_inventory, seed_inventory
+from app.services.zip_radius_service import normalize_zip_code, zip_codes_within_radius
 
 router = APIRouter()
 
@@ -44,9 +52,17 @@ WORDPRESS_EXPORT_COLUMNS = [
     "model",
     "trim",
     "body_type",
+    "sub_body_type",
     "drivetrain",
     "fuel_type",
     "transmission",
+    "engine_type",
+    "cylinders",
+    "mpg_combined",
+    "city_mpg",
+    "highway_mpg",
+    "ev_range",
+    "towing_capacity_lbs",
     "mileage",
     "price",
     "condition_grade",
@@ -84,6 +100,12 @@ WORDPRESS_EXPORT_COLUMNS = [
 ]
 
 SLUG_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+PUBLIC_AUCTION_SOURCE = "auction"
+PUBLIC_RETAIL_SOURCE = "retail"
+VCH_MARGIN = 1500.0
+AUCTION_BUY_FEE_UNDER_50K = 1000.0
+AUCTION_BUY_FEE_OVER_50K = 1300.0
+AGED_INVENTORY_MIN_DOM = 50
 
 
 def _marketcheck_client() -> MarketCheckClient:
@@ -175,6 +197,102 @@ def _to_iso(value: datetime | None) -> str | None:
     return normalized.astimezone(UTC).isoformat()
 
 
+def _is_auction_source(source_type: str | None) -> bool:
+    normalized = (source_type or "").strip().lower()
+    return normalized in {
+        InventorySourceType.AUCTION.value,
+        InventorySourceType.OVE.value,
+    }
+
+
+def _public_source_value(source_type: str | None) -> str:
+    return PUBLIC_AUCTION_SOURCE if _is_auction_source(source_type) else (source_type or "")
+
+
+def _public_source_label(source_type: str | None) -> str:
+    if _is_auction_source(source_type):
+        return "Auction"
+    normalized = (source_type or "").strip()
+    if not normalized:
+        return "Inventory"
+    return normalized.replace("_", " ").title()
+
+
+def _auction_buy_fee(base_price: float | None) -> float:
+    amount = _to_float(base_price) or 0.0
+    return AUCTION_BUY_FEE_UNDER_50K if amount <= 50000 else AUCTION_BUY_FEE_OVER_50K
+
+
+def _pricing_breakdown(base_price: float | None) -> dict[str, float | None]:
+    source_price = _to_float(base_price)
+    if source_price is None:
+        return {
+            "source_price": None,
+            "buy_fee": None,
+            "margin": VCH_MARGIN,
+            "advertised_price": None,
+        }
+    buy_fee = _auction_buy_fee(source_price)
+    return {
+        "source_price": round(source_price, 2),
+        "buy_fee": round(buy_fee, 2),
+        "margin": round(VCH_MARGIN, 2),
+        "advertised_price": round(source_price + buy_fee + VCH_MARGIN, 2),
+    }
+
+
+def _advertised_price_expr():
+    return case(
+        (Vehicle.price_asking <= 50000, Vehicle.price_asking + AUCTION_BUY_FEE_UNDER_50K + VCH_MARGIN),
+        else_=Vehicle.price_asking + AUCTION_BUY_FEE_OVER_50K + VCH_MARGIN,
+    )
+
+
+def _aged_inventory_dom_expr():
+    return Vehicle.features_normalized["days_on_market"].as_string().cast(Integer)
+
+
+def _apply_source_type_filter(stmt, source_type: str | None):
+    if not source_type:
+        return stmt
+    normalized = source_type.strip().lower()
+    if normalized == PUBLIC_AUCTION_SOURCE:
+        return stmt.where(
+            func.lower(Vehicle.source_type).in_(
+                [InventorySourceType.AUCTION.value, InventorySourceType.OVE.value]
+            )
+        )
+    if normalized == InventorySourceType.OVE.value:
+        return stmt.where(func.lower(Vehicle.source_type) == InventorySourceType.OVE.value)
+    return stmt.where(func.lower(Vehicle.source_type) == normalized)
+
+
+def _zip_radius_values(zip_code: str | None, radius: int | None) -> tuple[str, ...] | None:
+    normalized = normalize_zip_code(zip_code)
+    if not normalized:
+        return None
+    if radius is None:
+        return (normalized,)
+    return zip_codes_within_radius(normalized, radius)
+
+
+def _apply_zip_radius_filter(stmt, zip_code: str | None, radius: int | None):
+    zip_values = _zip_radius_values(zip_code, radius)
+    if zip_values is None:
+        return stmt
+    if not zip_values:
+        return stmt.where(false())
+    return stmt.where(Vehicle.location_zip.in_(zip_values))
+
+
+def _normalized_pick(normalized: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = normalized.get(key)
+        if value not in (None, "", []):
+            return value
+    return None
+
+
 def _parse_iso8601(value: str | None) -> datetime | None:
     if value in (None, ""):
         return None
@@ -198,6 +316,10 @@ def _normalize_slug_part(value: Any) -> str:
     return SLUG_NON_ALNUM_RE.sub("-", text.lower()).strip("-")
 
 
+def _resolve_direct_param(value: Any) -> Any:
+    return value.default if isinstance(value, Param) else value
+
+
 def _build_vehicle_title(vehicle: Vehicle) -> str:
     parts = [str(vehicle.year), vehicle.make, vehicle.model]
     trim = _to_str(vehicle.trim)
@@ -219,7 +341,7 @@ def _build_vehicle_slug(vehicle: Vehicle) -> str:
 
 
 def _build_vdp_links(vin: str) -> tuple[str, str]:
-    path = f"/vinventory-details.html?vin={vin}"
+    path = f"/vinventory/{vin}"
     base = settings.public_web_base_url.rstrip("/")
     return path, f"{base}{path}"
 
@@ -250,6 +372,7 @@ def _serialize_wordpress_vehicle(db: Session, vehicle: Vehicle) -> dict[str, Any
     source_name = (vehicle.source_type or "").lower()
     source_priority = SOURCE_PRIORITY.get(source_name, 0)
     vdp_path, vdp_url = _build_vdp_links(vehicle.vin)
+    pricing = _pricing_breakdown(vehicle.price_asking)
 
     return {
         "external_id": vehicle.vin,
@@ -261,11 +384,19 @@ def _serialize_wordpress_vehicle(db: Session, vehicle: Vehicle) -> dict[str, Any
         "model": vehicle.model,
         "trim": vehicle.trim,
         "body_type": vehicle.body_type,
+        "sub_body_type": vehicle.sub_body_type,
         "drivetrain": vehicle.drivetrain,
         "fuel_type": normalized.get("fuel_type"),
         "transmission": normalized.get("transmission"),
+        "engine_type": vehicle.engine_type,
+        "cylinders": vehicle.cylinders,
+        "mpg_combined": vehicle.mpg_combined,
+        "city_mpg": normalized.get("city_mpg"),
+        "highway_mpg": normalized.get("highway_mpg"),
+        "ev_range": vehicle.ev_range,
+        "towing_capacity_lbs": vehicle.towing_capacity_lbs,
         "mileage": vehicle.odometer,
-        "price": vehicle.price_asking,
+        "price": pricing["advertised_price"],
         "condition_grade": vehicle.condition_grade,
         "inventory_type": normalized.get("inventory_type"),
         "certified": normalized.get("certified"),
@@ -279,6 +410,9 @@ def _serialize_wordpress_vehicle(db: Session, vehicle: Vehicle) -> dict[str, Any
         "zip": vehicle.location_zip,
         "dealer_name": normalized.get("dealer_name"),
         "source_type": vehicle.source_type,
+        "source_category": PUBLIC_AUCTION_SOURCE if _is_auction_source(vehicle.source_type) else PUBLIC_RETAIL_SOURCE,
+        "source_filter_value": _public_source_value(vehicle.source_type),
+        "source_label": _public_source_label(vehicle.source_type),
         "source_priority": source_priority,
         "source_url": vehicle.source_url,
         "thumbnail": image_urls[0] if image_urls else None,
@@ -290,6 +424,10 @@ def _serialize_wordpress_vehicle(db: Session, vehicle: Vehicle) -> dict[str, Any
         "images": image_urls,
         "features": features,
         "description": normalized.get("description"),
+        "source_price": pricing["source_price"],
+        "buy_fee": pricing["buy_fee"],
+        "margin": pricing["margin"],
+        "pricing": pricing,
         "marketcheck_average_retail": None,
         "price_delta_marketcheck": None,
         "price_delta_marketcheck_pct": None,
@@ -402,9 +540,17 @@ def _serialize_wordpress_csv_row(item: dict[str, Any]) -> dict[str, Any]:
         "model": item.get("model") or "",
         "trim": item.get("trim") or "",
         "body_type": item.get("body_type") or "",
+        "sub_body_type": item.get("sub_body_type") or "",
         "drivetrain": item.get("drivetrain") or "",
         "fuel_type": item.get("fuel_type") or "",
         "transmission": item.get("transmission") or "",
+        "engine_type": item.get("engine_type") or "",
+        "cylinders": item.get("cylinders") or "",
+        "mpg_combined": item.get("mpg_combined") or "",
+        "city_mpg": item.get("city_mpg") or "",
+        "highway_mpg": item.get("highway_mpg") or "",
+        "ev_range": item.get("ev_range") or "",
+        "towing_capacity_lbs": item.get("towing_capacity_lbs") or "",
         "mileage": item.get("mileage") or "",
         "price": item.get("price") or "",
         "condition_grade": item.get("condition_grade") or "",
@@ -475,11 +621,27 @@ def _build_marketcheck_search_params(
     clean_title: bool | None,
     min_dom: int | None,
     max_dom: int | None,
+    zip_code: str | None,
+    radius: int | None,
 ) -> dict[str, Any]:
+    search_text = (q or "").strip()
+    inferred_make = None
+    inferred_model = None
+    inferred_trim = None
+    if search_text and len(search_text) != 17 and not any([make, model, trim]):
+        parts = [part for part in search_text.replace("/", " ").split() if part]
+        if len(parts) == 1:
+            inferred_make = parts[0]
+        elif len(parts) >= 2:
+            inferred_make = parts[0]
+            inferred_model = parts[1]
+            if len(parts) >= 3:
+                inferred_trim = " ".join(parts[2:])
+
     params: dict[str, Any] = {
-        "make": make,
-        "model": model,
-        "trim": trim,
+        "make": make or inferred_make,
+        "model": model or inferred_model,
+        "trim": trim or inferred_trim,
         "body_type": body_type,
         "car_type": body_type,
         "state": state.upper() if state else None,
@@ -489,11 +651,13 @@ def _build_marketcheck_search_params(
         "fuel_type": fuel_type,
         "transmission": transmission,
         "inventory_type": inventory_type,
-        "vin": q.strip().upper() if q and len(q.strip()) == 17 else None,
+        "vin": search_text.upper() if search_text and len(search_text) == 17 else None,
         "has_photo": has_images if has_images is True else None,
         "certified": str(certified).lower() if certified is not None else None,
         "carfax_1_owner": str(single_owner).lower() if single_owner is not None else None,
         "carfax_clean_title": str(clean_title).lower() if clean_title is not None else None,
+        "zip": zip_code,
+        "radius": radius,
     }
 
     if min_price is not None and max_price is not None:
@@ -505,6 +669,10 @@ def _build_marketcheck_search_params(
             params["year_range"] = f"{min_year}-{max_year}"
     if min_dom is not None and max_dom is not None:
         params["dom_range"] = f"{min_dom}-{max_dom}"
+    elif min_dom is not None:
+        params["dom_range"] = f"{min_dom}-9999"
+    elif max_dom is not None:
+        params["dom_range"] = f"0-{max_dom}"
 
     return {k: v for k, v in params.items() if v not in (None, "")}
 
@@ -584,18 +752,48 @@ def _fetch_marketcheck_listing_by_vehicle(client: MarketCheckClient, vehicle: Ve
     return listing
 
 
-def _local_facets(db: Session, *, make: str | None, model: str | None, state: str | None, body_type: str | None) -> dict[str, Any]:
+def _local_facets(
+    db: Session,
+    *,
+    make: str | None,
+    model: str | None,
+    trim: str | None,
+    state: str | None,
+    body_type: str | None,
+    inventory_type: str | None,
+    min_price: float | None,
+    max_price: float | None,
+    min_year: int | None,
+    max_year: int | None,
+    zip_code: str | None,
+    radius: int | None,
+    has_images: bool | None,
+    source_type: str | None,
+) -> dict[str, Any]:
     stmt = select(Vehicle).where(Vehicle.available.is_(True))
+    advertised_price = _advertised_price_expr()
     if make:
         stmt = stmt.where(func.lower(Vehicle.make) == make.lower())
     if model:
         stmt = stmt.where(func.lower(Vehicle.model) == model.lower())
+    if trim:
+        stmt = stmt.where(func.lower(Vehicle.trim) == trim.lower())
     if state:
         stmt = stmt.where(func.lower(Vehicle.location_state) == state.lower())
     if body_type:
         stmt = stmt.where(func.lower(Vehicle.body_type) == body_type.lower())
+    stmt = _apply_source_type_filter(stmt, source_type)
+    if min_price is not None:
+        stmt = stmt.where(advertised_price >= min_price)
+    if max_price is not None:
+        stmt = stmt.where(advertised_price <= max_price)
+    if min_year is not None:
+        stmt = stmt.where(Vehicle.year >= min_year)
+    if max_year is not None:
+        stmt = stmt.where(Vehicle.year <= max_year)
+    stmt = _apply_zip_radius_filter(stmt, zip_code, radius)
 
-    rows = db.scalars(stmt.limit(5000)).all()
+    rows = db.scalars(stmt).all()
 
     facets: dict[str, dict[str, int]] = {name: {} for name in FACET_FIELDS}
     for row in rows:
@@ -606,6 +804,11 @@ def _local_facets(db: Session, *, make: str | None, model: str | None, state: st
             facets[name][text] = facets[name].get(text, 0) + 1
 
         normalized = row.features_normalized or {}
+        if inventory_type and (_to_str(normalized.get("inventory_type", "")) or "").lower() != inventory_type.lower():
+            continue
+        if has_images is True and not row.images:
+            continue
+
         add("make", row.make)
         add("model", row.model)
         add("trim", row.trim)
@@ -688,24 +891,35 @@ def inventory_stats(db: Session = Depends(get_db)) -> dict:
 def inventory_facets(
     make: str | None = Query(default=None),
     model: str | None = Query(default=None),
+    trim: str | None = Query(default=None),
     body_type: str | None = Query(default=None),
     state: str | None = Query(default=None, min_length=2, max_length=2),
     inventory_type: str | None = Query(default=None),
+    source_type: str | None = Query(default=None),
     min_price: float | None = Query(default=None),
     max_price: float | None = Query(default=None),
     min_year: int | None = Query(default=None),
     max_year: int | None = Query(default=None),
+    zip_code: str | None = Query(default=None),
+    radius: int | None = Query(default=None, ge=1, le=500),
     has_images: bool | None = Query(default=True),
     use_marketcheck: bool = Query(default=True),
     db: Session = Depends(get_db),
 ) -> dict:
+    taxonomy = get_inventory_taxonomy_facets(
+        db,
+        min_year=min_year,
+        max_year=max_year,
+        make=make,
+        model=model,
+    )
     if use_marketcheck and settings.has_marketcheck:
         client = _marketcheck_client()
         params = _build_marketcheck_search_params(
             q=None,
             make=make,
             model=model,
-            trim=None,
+            trim=trim,
             body_type=body_type,
             state=state,
             min_price=min_price,
@@ -734,12 +948,58 @@ def inventory_facets(
                     "source": "marketcheck",
                     "num_found": payload.get("num_found", 0) if isinstance(payload, dict) else 0,
                     "facets": facets,
+                    "taxonomy": taxonomy,
                 }
             )
         except Exception:
             pass
 
-    return ok({"source": "local", "num_found": 0, "facets": _local_facets(db, make=make, model=model, state=state, body_type=body_type)})
+    return ok(
+        {
+            "source": "local",
+            "num_found": 0,
+            "facets": _local_facets(
+                db,
+                make=make,
+                model=model,
+                trim=trim,
+                state=state,
+                body_type=body_type,
+                inventory_type=inventory_type,
+                min_price=min_price,
+                max_price=max_price,
+                min_year=min_year,
+                max_year=max_year,
+                zip_code=zip_code,
+                radius=radius,
+                has_images=has_images,
+                source_type=source_type,
+            ),
+            "taxonomy": taxonomy,
+        }
+    )
+
+
+@router.post("/taxonomy/sync", dependencies=[Depends(require_service_token)])
+def sync_inventory_taxonomy(
+    start_year: int = Query(default=MIN_TAXONOMY_YEAR, ge=MIN_TAXONOMY_YEAR, le=2100),
+    end_year: int = Query(default=datetime.now(UTC).year + 1, ge=MIN_TAXONOMY_YEAR, le=2100),
+    db: Session = Depends(get_db),
+) -> dict:
+    if not settings.has_marketcheck:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="MarketCheck live taxonomy sync is not configured",
+        )
+
+    report = sync_marketcheck_taxonomy_cache(
+        db,
+        client=_marketcheck_client(),
+        start_year=start_year,
+        end_year=end_year,
+    )
+    db.commit()
+    return ok(report.to_dict())
 
 
 @router.get("/search")
@@ -749,6 +1009,8 @@ def search_inventory(
     model: str | None = Query(default=None),
     trim: str | None = Query(default=None),
     body_type: str | None = Query(default=None),
+    inventory_type: str | None = Query(default=None),
+    certified: bool | None = Query(default=None),
     source_type: str | None = Query(default=None),
     state: str | None = Query(default=None, min_length=2, max_length=2),
     exterior_color: str | None = Query(default=None),
@@ -756,8 +1018,6 @@ def search_inventory(
     drivetrain: str | None = Query(default=None),
     fuel_type: str | None = Query(default=None),
     transmission: str | None = Query(default=None),
-    inventory_type: str | None = Query(default=None),
-    certified: bool | None = Query(default=None),
     single_owner: bool | None = Query(default=None),
     clean_title: bool | None = Query(default=None),
     min_dom: int | None = Query(default=None, ge=0),
@@ -768,6 +1028,8 @@ def search_inventory(
     max_year: int | None = Query(default=None),
     min_miles: int | None = Query(default=None),
     max_miles: int | None = Query(default=None),
+    zip_code: str | None = Query(default=None),
+    radius: int | None = Query(default=None, ge=1, le=500),
     has_images: bool | None = Query(default=None),
     sort_by: str = Query(default="updated_at", pattern="^(updated_at|price_asking|year|odometer)$"),
     sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
@@ -790,7 +1052,7 @@ def search_inventory(
         "error": None,
         "synced_vins": [],
     }
-    synced_vins: list[str] = []
+    effective_min_dom = max(min_dom or 0, AGED_INVENTORY_MIN_DOM)
 
     if live_sync and settings.marketcheck_api_key:
         client = _marketcheck_client()
@@ -815,8 +1077,10 @@ def search_inventory(
             certified=certified,
             single_owner=single_owner,
             clean_title=clean_title,
-            min_dom=min_dom,
+            min_dom=effective_min_dom,
             max_dom=max_dom,
+            zip_code=zip_code,
+            radius=radius,
         )
         try:
             report = ingest_marketcheck_inventory(
@@ -829,7 +1093,6 @@ def search_inventory(
             db.commit()
             report_data = report.to_dict()
             sync.update({"executed": True, **report_data})
-            synced_vins = report_data.get("synced_vins", [])
         except Exception as exc:  # pragma: no cover - integration failures are environment dependent
             db.rollback()
             sync.update(
@@ -841,9 +1104,6 @@ def search_inventory(
             )
 
     stmt = select(Vehicle).where(Vehicle.available.is_(True))
-    if synced_vins:
-        stmt = stmt.where(Vehicle.vin.in_(synced_vins))
-
     if q:
         text = f"%{q.lower()}%"
         stmt = stmt.where(
@@ -862,16 +1122,28 @@ def search_inventory(
         stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")) == trim.lower())
     if body_type:
         stmt = stmt.where(func.lower(Vehicle.body_type) == body_type.lower())
-    if source_type:
-        stmt = stmt.where(func.lower(Vehicle.source_type) == source_type.lower())
+    if inventory_type:
+        stmt = stmt.where(
+            func.lower(func.coalesce(Vehicle.features_normalized["inventory_type"].as_string(), "")) == inventory_type.lower()
+        )
+    if certified is not None:
+        certified_expr = func.lower(func.coalesce(Vehicle.features_normalized["certified"].as_string(), ""))
+        if certified:
+            stmt = stmt.where(certified_expr.in_(["true", "1", "yes"]))
+        else:
+            stmt = stmt.where(certified_expr.in_(["false", "0", "no"]))
+    stmt = _apply_source_type_filter(stmt, source_type)
     if state:
         stmt = stmt.where(func.lower(Vehicle.location_state) == state.lower())
     if drivetrain:
         stmt = stmt.where(func.lower(func.coalesce(Vehicle.drivetrain, "")) == drivetrain.lower())
+    dom_expr = _aged_inventory_dom_expr()
+    auction_expr = func.lower(Vehicle.source_type).in_([InventorySourceType.OVE.value, InventorySourceType.AUCTION.value])
+    advertised_price = _advertised_price_expr()
     if min_price is not None:
-        stmt = stmt.where(Vehicle.price_asking >= min_price)
+        stmt = stmt.where(advertised_price >= min_price)
     if max_price is not None:
-        stmt = stmt.where(Vehicle.price_asking <= max_price)
+        stmt = stmt.where(advertised_price <= max_price)
     if min_year is not None:
         stmt = stmt.where(Vehicle.year >= min_year)
     if max_year is not None:
@@ -880,14 +1152,18 @@ def search_inventory(
         stmt = stmt.where(Vehicle.odometer >= min_miles)
     if max_miles is not None:
         stmt = stmt.where(Vehicle.odometer <= max_miles)
+    stmt = stmt.where(or_(auction_expr, dom_expr >= effective_min_dom))
+    if max_dom is not None:
+        stmt = stmt.where(or_(auction_expr, dom_expr <= max_dom))
     if has_images is True:
         stmt = stmt.where(func.coalesce(func.json_array_length(Vehicle.images), 0) > 0)
+    stmt = _apply_zip_radius_filter(stmt, zip_code, radius)
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
     sort_columns = {
         "updated_at": Vehicle.updated_at,
-        "price_asking": Vehicle.price_asking,
+        "price_asking": advertised_price,
         "year": Vehicle.year,
         "odometer": Vehicle.odometer,
     }
@@ -903,6 +1179,7 @@ def search_inventory(
     for row in rows:
         media = resolve_vehicle_card_media(db, vehicle=row)
         normalized = row.features_normalized or {}
+        pricing = _pricing_breakdown(row.price_asking)
         items.append(
             {
                 "vin": row.vin,
@@ -913,11 +1190,18 @@ def search_inventory(
                 "trim": row.trim,
                 "body_type": row.body_type,
                 "drivetrain": row.drivetrain,
-                "price_asking": row.price_asking,
+                "price_asking": pricing["advertised_price"],
+                "source_price": pricing["source_price"],
+                "buy_fee": pricing["buy_fee"],
+                "margin": pricing["margin"],
+                "pricing": pricing,
                 "odometer": row.odometer,
                 "location_state": row.location_state,
                 "location_zip": row.location_zip,
                 "source_type": row.source_type,
+                "source_category": PUBLIC_AUCTION_SOURCE if _is_auction_source(row.source_type) else PUBLIC_RETAIL_SOURCE,
+                "source_filter_value": _public_source_value(row.source_type),
+                "source_label": _public_source_label(row.source_type),
                 "thumbnail": media.thumbnail,
                 "images_count": len(row.images or []),
                 "features_preview": (row.features_raw or [])[:5],
@@ -935,6 +1219,10 @@ def search_inventory(
                 "certified": normalized.get("certified"),
                 "dealer_name": normalized.get("dealer_name"),
                 "city": normalized.get("city"),
+                "auction_house": normalized.get("auction_house"),
+                "pickup_location": normalized.get("pickup_location"),
+                "inventory_status": normalized.get("status"),
+                "inventory_label": normalized.get("inventory"),
             }
         )
 
@@ -963,6 +1251,8 @@ def wordpress_inventory_export(
     model: str | None = Query(default=None),
     trim: str | None = Query(default=None),
     body_type: str | None = Query(default=None),
+    inventory_type: str | None = Query(default=None),
+    certified: bool | None = Query(default=None),
     source_type: str | None = Query(default=None),
     state: str | None = Query(default=None, min_length=2, max_length=2),
     min_price: float | None = Query(default=None),
@@ -975,12 +1265,22 @@ def wordpress_inventory_export(
     include_unavailable: bool = Query(default=False),
     updated_since: str | None = Query(default=None),
     include_price_stats: bool = Query(default=False),
+    zip_code: str | None = Query(default=None),
+    radius: int | None = Query(default=None, ge=1, le=500),
+    topup_if_below: int | None = Query(default=None, ge=1, le=500),
+    topup_limit: int | None = Query(default=None, ge=1, le=500),
     sort_by: str = Query(default="updated_at", pattern="^(updated_at|price|year|mileage)$"),
     sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
 ) -> Any:
+    inventory_type = _resolve_direct_param(inventory_type)
+    certified = _resolve_direct_param(certified)
+    zip_code = _resolve_direct_param(zip_code)
+    radius = _resolve_direct_param(radius)
+    topup_if_below = _resolve_direct_param(topup_if_below)
+    topup_limit = _resolve_direct_param(topup_limit)
     updated_since_at = _parse_iso8601(updated_since)
     if updated_since and updated_since_at is None:
         raise HTTPException(
@@ -1010,14 +1310,24 @@ def wordpress_inventory_export(
         stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")) == trim.lower())
     if body_type:
         stmt = stmt.where(func.lower(Vehicle.body_type) == body_type.lower())
-    if source_type:
-        stmt = stmt.where(func.lower(Vehicle.source_type) == source_type.lower())
+    if inventory_type:
+        stmt = stmt.where(
+            func.lower(func.coalesce(Vehicle.features_normalized["inventory_type"].as_string(), "")) == inventory_type.lower()
+        )
+    if certified is not None:
+        certified_expr = func.lower(func.coalesce(Vehicle.features_normalized["certified"].as_string(), ""))
+        if certified:
+            stmt = stmt.where(certified_expr.in_(["true", "1", "yes"]))
+        else:
+            stmt = stmt.where(certified_expr.in_(["false", "0", "no"]))
+    stmt = _apply_source_type_filter(stmt, source_type)
     if state:
         stmt = stmt.where(func.lower(Vehicle.location_state) == state.lower())
+    advertised_price = _advertised_price_expr()
     if min_price is not None:
-        stmt = stmt.where(Vehicle.price_asking >= min_price)
+        stmt = stmt.where(advertised_price >= min_price)
     if max_price is not None:
-        stmt = stmt.where(Vehicle.price_asking <= max_price)
+        stmt = stmt.where(advertised_price <= max_price)
     if min_year is not None:
         stmt = stmt.where(Vehicle.year >= min_year)
     if max_year is not None:
@@ -1033,9 +1343,70 @@ def wordpress_inventory_export(
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
+    effective_topup_min = topup_if_below if topup_if_below is not None else settings.wordpress_export_topup_min_results
+    effective_topup_limit = topup_limit if topup_limit is not None else settings.wordpress_export_topup_limit
+    effective_topup_zip = (zip_code or settings.wordpress_export_topup_zip).strip()
+    effective_topup_radius = radius if radius is not None else settings.wordpress_export_topup_radius
+    topup_feature_enabled = bool(topup_if_below is not None) or settings.wordpress_export_topup_enabled
+
+    topup: dict[str, Any] | None = None
+    should_attempt_topup = (
+        page == 1
+        and updated_since_at is None
+        and topup_feature_enabled
+        and settings.has_marketcheck
+        and total < max(1, effective_topup_min)
+    )
+    if should_attempt_topup:
+        search_params = _build_marketcheck_search_params(
+            q=q,
+            make=make,
+            model=model,
+            trim=trim,
+            body_type=body_type,
+            state=state,
+            min_price=min_price,
+            max_price=max_price,
+            min_year=min_year,
+            max_year=max_year,
+            has_images=has_images,
+            exterior_color=None,
+            interior_color=None,
+            drivetrain=None,
+            fuel_type=None,
+            transmission=None,
+            inventory_type=inventory_type,
+            certified=certified,
+            single_owner=None,
+            clean_title=None,
+            min_dom=min_dom,
+            max_dom=max_dom,
+        )
+        if effective_topup_zip:
+            search_params.update(
+                {
+                    "zip": effective_topup_zip,
+                    "radius": max(1, effective_topup_radius),
+                }
+            )
+        try:
+            report = ingest_marketcheck_inventory(
+                db,
+                client=_marketcheck_client(),
+                limit=min(500, max(1, effective_topup_limit)),
+                start=0,
+                search_params=search_params,
+            )
+            db.commit()
+            topup = report.to_dict()
+            total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+        except Exception as exc:  # pragma: no cover
+            db.rollback()
+            topup = {"executed": True, "error": str(exc)}
+
     sort_columns = {
         "updated_at": Vehicle.updated_at,
-        "price": Vehicle.price_asking,
+        "price": advertised_price,
         "year": Vehicle.year,
         "mileage": Vehicle.odometer,
     }
@@ -1071,6 +1442,7 @@ def wordpress_inventory_export(
             "format": format,
             "generated_at": _to_iso(datetime.now(UTC)),
             "source_priority": SOURCE_PRIORITY,
+            "topup": topup,
             "price_stats": {
                 "requested": include_price_stats,
                 "enabled": bool(settings.has_marketcheck),
@@ -1122,6 +1494,20 @@ def get_inventory_vehicle(vin: str, db: Session = Depends(get_db)) -> dict:
             merged_features.append(value)
 
     normalized = vehicle.features_normalized or {}
+    pricing = _pricing_breakdown(vehicle.price_asking)
+    ove_detail = db.get(OveVehicleDetail, vehicle.vin)
+    ove_payload = None
+    if ove_detail:
+        ove_payload = {
+            "source_platform": ove_detail.source_platform.value,
+            "seller_comments": ove_detail.seller_comments,
+            "images": ove_detail.images_json or [],
+            "condition_report": ove_detail.condition_report_json or {},
+            "listing_snapshot": ove_detail.listing_snapshot_json or {},
+            "sync_metadata": ove_detail.sync_metadata_json or {},
+            "page_url": ove_detail.page_url,
+            "last_synced_at": ove_detail.last_synced_at,
+        }
 
     return ok(
         {
@@ -1142,11 +1528,18 @@ def get_inventory_vehicle(vin: str, db: Session = Depends(get_db)) -> dict:
             "towing_capacity_lbs": vehicle.towing_capacity_lbs,
             "odometer": vehicle.odometer,
             "condition_grade": vehicle.condition_grade,
-            "price_asking": vehicle.price_asking,
+            "price_asking": pricing["advertised_price"],
+            "source_price": pricing["source_price"],
+            "buy_fee": pricing["buy_fee"],
+            "margin": pricing["margin"],
+            "pricing": pricing,
             "price_wholesale_est": vehicle.price_wholesale_est,
             "location_zip": vehicle.location_zip,
             "location_state": vehicle.location_state,
             "source_type": vehicle.source_type,
+            "source_category": PUBLIC_AUCTION_SOURCE if _is_auction_source(vehicle.source_type) else PUBLIC_RETAIL_SOURCE,
+            "source_filter_value": _public_source_value(vehicle.source_type),
+            "source_label": _public_source_label(vehicle.source_type),
             "images": vehicle.images or [],
             "display_images": resolved_images,
             "hero_image": hero_image,
@@ -1164,6 +1557,18 @@ def get_inventory_vehicle(vin: str, db: Session = Depends(get_db)) -> dict:
             "transmission": listing_meta.get("transmission") or normalized.get("transmission"),
             "inventory_type": listing_meta.get("inventory_type") or normalized.get("inventory_type"),
             "days_on_market": listing_meta.get("days_on_market") or normalized.get("days_on_market"),
+            "auction_house": _normalized_pick(normalized, "auction_house"),
+            "pickup_location": _normalized_pick(normalized, "pickup_location"),
+            "inventory_status": _normalized_pick(normalized, "status"),
+            "inventory_label": _normalized_pick(normalized, "inventory"),
+            "odometer_units": _normalized_pick(normalized, "odometer_units") or "mi",
+            "transmission_type": listing_meta.get("transmission") or normalized.get("transmission"),
+            "condition_report_grade": (
+                _normalized_pick(normalized, "condition_report_grade", "condition_grade")
+                or vehicle.condition_grade
+                or ((ove_detail.condition_report_json or {}).get("grade") if ove_detail else None)
+            ),
+            "mmr": _normalized_pick(normalized, "mmr", "mmr_value", "manheim_mmr"),
             "single_owner": (
                 listing_meta.get("single_owner")
                 if listing_meta.get("single_owner") is not None
@@ -1182,6 +1587,10 @@ def get_inventory_vehicle(vin: str, db: Session = Depends(get_db)) -> dict:
             "dealer_name": listing_meta.get("dealer_name") or normalized.get("dealer_name"),
             "city": listing_meta.get("city") or normalized.get("city"),
             "features_normalized": normalized,
+            "seller_comments": ove_detail.seller_comments if ove_detail else None,
+            "condition_report": ove_detail.condition_report_json if ove_detail else {},
+            "listing_snapshot": ove_detail.listing_snapshot_json if ove_detail else {},
+            "ove_detail": ove_payload,
             "available": vehicle.available,
             "last_seen_active": vehicle.last_seen_active,
             "updated_at": vehicle.updated_at,

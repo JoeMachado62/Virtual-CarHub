@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.constants import (
+    AuctionPlatform,
     DealState,
     ImageContext,
     ImageDisplayMode,
@@ -23,6 +24,7 @@ from app.models.entities import (
     VehicleInspectionImage,
     VehicleInspectionReport,
 )
+from app.services.object_storage import resolve_storage_url
 
 
 INSPECTION_DRIVEN_STATES = {
@@ -57,6 +59,26 @@ def sync_marketcheck_source_assets(
     listing_id: str | None,
     image_urls: list[str],
 ) -> None:
+    sync_source_assets(
+        db,
+        vin=vin,
+        listing_id=listing_id,
+        image_urls=image_urls,
+        source_kind="marketcheck",
+    )
+
+
+def sync_source_assets(
+    db: Session,
+    *,
+    vin: str,
+    listing_id: str | None,
+    image_urls: list[str],
+    source_kind: str,
+    source_platform: AuctionPlatform | None = None,
+    context: ImageContext = ImageContext.MARKETING,
+    role: str = "reference",
+) -> None:
     if not image_urls:
         return
 
@@ -78,9 +100,10 @@ def sync_marketcheck_source_assets(
             asset = VehicleImageAsset(
                 vin=vin,
                 tier=ImageTier.SOURCE_CACHE,
-                context=ImageContext.MARKETING,
-                role="reference",
-                source_kind="marketcheck",
+                context=context,
+                role=role,
+                source_kind=source_kind,
+                source_platform=source_platform,
                 source_listing_id=listing_id,
                 external_url=url,
                 display_order=index,
@@ -94,6 +117,10 @@ def sync_marketcheck_source_assets(
             continue
 
         asset.source_listing_id = listing_id
+        asset.source_kind = source_kind
+        asset.source_platform = source_platform
+        asset.context = context
+        asset.role = role
         asset.display_order = index
         asset.is_primary = index == 0
         asset.active = True
@@ -243,7 +270,7 @@ def resolve_vehicle_display_context(
             .order_by(VehicleInspectionImage.display_order.asc(), VehicleInspectionImage.created_at.asc())
         ).all()
         for row in report_images:
-            link = row.source_url or row.storage_key
+            link = row.source_url or resolve_storage_url(row.storage_key)
             if not link:
                 continue
             if row.image_type == "disclosure":
@@ -341,7 +368,7 @@ def _load_current_inspection_report(
 
 
 def _asset_url(asset: VehicleImageAsset) -> str | None:
-    return asset.external_url or asset.storage_key
+    return asset.external_url or resolve_storage_url(asset.storage_key)
 
 
 def _fingerprint(*, vin: str, tier: ImageTier, payload: list[str]) -> str:

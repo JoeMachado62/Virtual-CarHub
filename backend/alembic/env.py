@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -9,6 +10,11 @@ from app.db.base import Base
 from app.models import *  # noqa: F401,F403
 
 config = context.config
+
+database_url_override = os.getenv("DATABASE_URL")
+if database_url_override:
+    # Alembic config parser treats '%' specially; escape it if present in URL.
+    config.set_main_option("sqlalchemy.url", database_url_override.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

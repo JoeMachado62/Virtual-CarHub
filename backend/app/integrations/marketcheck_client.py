@@ -57,6 +57,14 @@ class MarketCheckClient(ExternalServiceClient):
         payload = self._with_api_key(payload)
         return self._request("GET", "/search/car/active", params=payload)
 
+    def get_terms(self, field: str, params: dict | None = None) -> dict:
+        if not self.live:
+            return {"terms": [], "field": field, "source": "stub"}
+        payload = {"field": field}
+        payload.update(params or {})
+        payload = self._with_api_key(payload)
+        return self._request("GET", "/specs/car/terms", params=payload)
+
     def get_price(self, vin: str) -> dict:
         if not self.live:
             return {"vin": vin, "average_retail": 30000, "source": "stub"}

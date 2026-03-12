@@ -34,3 +34,17 @@ uvicorn app.main:app --reload --port 8000
   - `GHL_DOCUMENTS_ENABLED=true`
   - `GHL_RETURN_AUTHORIZATION_TEMPLATE_ID=<template_id>`
 - Prometheus metrics are exposed at `/metrics` when `METRICS_ENABLED=true`.
+
+## DB + Storage Ops
+
+- Postgres backup:
+  - `bash scripts/db/backup_postgres.sh`
+- Postgres restore:
+  - `bash scripts/db/restore_postgres.sh /path/to/backup.dump`
+- SQLite -> Postgres migration utility:
+  - `cd backend && .venv/bin/python scripts/migrate_sqlite_to_postgres.py --sqlite-path ./virtual_carhub.db --truncate-target`
+- Alembic uses `DATABASE_URL` when present in environment (no longer forced to sqlite from `alembic.ini`).
+- Object storage URL resolution supports:
+  - `OBJECT_STORAGE_PUBLIC_BASE_URL`
+  - `AWS_CLOUDFRONT_DOMAIN`
+  - `S3_ASSETS_BUCKET` + `AWS_REGION` (+ optional `AWS_S3_ENDPOINT_URL`)

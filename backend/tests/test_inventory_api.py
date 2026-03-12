@@ -5,12 +5,14 @@ from sqlalchemy import delete, select
 from app.api.v1 import routers as api_routers
 from app.api.v1.routers.inventory import (
     get_inventory_vehicle,
+    inventory_facets,
     search_inventory,
     wordpress_inventory_export,
 )
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
-from app.models.entities import Vehicle
+from app.models.entities import Vehicle, VehicleTaxonomyCache
+from app.services.inventory_taxonomy_service import sync_marketcheck_taxonomy_cache
 from app.services.inventory_service import (
     ingest_marketcheck_inventory,
     seed_inventory,
@@ -38,6 +40,46 @@ class StubMarketCheckPriceClient:
             "vin": vin,
             "average_retail": self._average_retail,
         }
+
+
+class StubMarketCheckTaxonomyClient:
+    def __init__(self) -> None:
+        self.live = True
+
+    def get_terms(self, field: str, params: dict | None = None) -> dict:
+        params = params or {}
+        year = int(params.get("year", 0) or 0)
+        make = params.get("make")
+        model = params.get("model")
+
+        if field == "make":
+            if year == 2024:
+                return {"terms": ["Honda", "Toyota"]}
+            if year == 2025:
+                return {"terms": ["Honda"]}
+            return {"terms": []}
+
+        if field == "model":
+            if year == 2024 and make == "Honda":
+                return {"terms": ["Civic", "Accord"]}
+            if year == 2024 and make == "Toyota":
+                return {"terms": ["Camry"]}
+            if year == 2025 and make == "Honda":
+                return {"terms": ["Civic"]}
+            return {"terms": []}
+
+        if field == "trim":
+            if year == 2024 and make == "Honda" and model == "Civic":
+                return {"terms": ["EX", "Sport"]}
+            if year == 2024 and make == "Honda" and model == "Accord":
+                return {"terms": ["Touring"]}
+            if year == 2024 and make == "Toyota" and model == "Camry":
+                return {"terms": ["SE"]}
+            if year == 2025 and make == "Honda" and model == "Civic":
+                return {"terms": ["Sport Touring"]}
+            return {"terms": []}
+
+        return {"terms": []}
 
 
 def test_ingest_marketcheck_inventory_inserts_rows() -> None:
@@ -195,6 +237,313 @@ def test_inventory_search_and_detail_contract() -> None:
             assert "hero_image" in detail["data"]
             assert "display_mode" in detail["data"]
             assert "inspection_status" in detail["data"]
+
+
+def test_search_auction_source_and_pricing_are_public_facing() -> None:
+    init_db()
+    vin = "1GNEK13ZX3R298984"
+    listing_id = "ove-test-1GNEK13ZX3R298984"
+    with SessionLocal() as db:
+        db.execute(delete(Vehicle).where(Vehicle.vin == vin))
+        db.execute(delete(Vehicle).where(Vehicle.listing_id == listing_id))
+        db.add(
+            Vehicle(
+                vin=vin,
+                listing_id=listing_id,
+                year=2022,
+                make="Cadillac",
+                model="Escalade",
+                trim="Premium Luxury",
+                body_type="SUV",
+                drivetrain="AWD",
+                odometer=15420,
+                price_asking=50000,
+                location_zip="33312",
+                location_state="FL",
+                source_type="ove",
+                source_url="https://example.com/source",
+                features_normalized={
+                    "transmission": "Automatic",
+                    "exterior_color": "Black",
+                    "interior_color": "Tan",
+                    "auction_house": "Manheim Fort Lauderdale",
+                    "pickup_location": "FL - FORT LAUDERDALE",
+                    "status": "Live",
+                    "inventory": "Buy Now",
+                },
+                available=True,
+                quality_firewall_pass=True,
+            )
+        )
+        db.commit()
+
+        response = search_inventory(
+            q=None,
+            make="Cadillac",
+            model=None,
+            trim=None,
+            body_type=None,
+            source_type="auction",
+            state=None,
+            exterior_color=None,
+            interior_color=None,
+            drivetrain=None,
+            fuel_type=None,
+            transmission=None,
+            inventory_type=None,
+            certified=None,
+            single_owner=None,
+            clean_title=None,
+            min_dom=None,
+            max_dom=None,
+            min_price=52500,
+            max_price=52500,
+            min_year=None,
+            max_year=None,
+            min_miles=None,
+            max_miles=None,
+            zip_code=None,
+            radius=None,
+            has_images=None,
+            sort_by="price_asking",
+            sort_dir="asc",
+            live_sync=False,
+            sync_limit=72,
+            page=1,
+            per_page=10,
+            db=db,
+        )
+
+        assert response["status"] == "ok"
+        items = response["data"]["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["source_filter_value"] == "auction"
+        assert item["source_label"] == "Auction"
+        assert item["source_category"] == "auction"
+        assert item["price_asking"] == 52500.0
+        assert item["source_price"] == 50000.0
+        assert item["buy_fee"] == 1000.0
+        assert item["margin"] == 1500.0
+
+        detail = get_inventory_vehicle(vin=vin, db=db)
+        assert detail["status"] == "ok"
+        assert detail["data"]["price_asking"] == 52500.0
+        assert detail["data"]["source_label"] == "Auction"
+        assert detail["data"]["pickup_location"] == "FL - FORT LAUDERDALE"
+
+
+def test_search_enforces_aged_inventory_for_retail_but_bypasses_auction_dom() -> None:
+    init_db()
+    with SessionLocal() as db:
+        for vin in ["1M8GDM9AXKP042788", "1M8GDM9AXKP042789", "1M8GDM9AXKP042780"]:
+            db.execute(delete(Vehicle).where(Vehicle.vin == vin))
+        db.commit()
+
+        db.add_all(
+            [
+                Vehicle(
+                    vin="1M8GDM9AXKP042788",
+                    listing_id="retail-fresh-1",
+                    year=2021,
+                    make="BMW",
+                    model="X5",
+                    price_asking=30000,
+                    source_type="marketcheck",
+                    available=True,
+                    features_normalized={"days_on_market": 12},
+                ),
+                Vehicle(
+                    vin="1M8GDM9AXKP042789",
+                    listing_id="retail-aged-1",
+                    year=2021,
+                    make="BMW",
+                    model="X7",
+                    price_asking=32000,
+                    source_type="marketcheck",
+                    available=True,
+                    features_normalized={"days_on_market": 65},
+                ),
+                Vehicle(
+                    vin="1M8GDM9AXKP042780",
+                    listing_id="auction-fresh-1",
+                    year=2021,
+                    make="BMW",
+                    model="XM",
+                    price_asking=28000,
+                    source_type="ove",
+                    available=True,
+                    features_normalized={"days_on_market": 5, "source_platform": "manheim"},
+                ),
+            ]
+        )
+        db.commit()
+
+        response = search_inventory(
+            q=None,
+            make="BMW",
+            model=None,
+            trim=None,
+            body_type=None,
+            inventory_type=None,
+            certified=None,
+            source_type=None,
+            state=None,
+            exterior_color=None,
+            interior_color=None,
+            drivetrain=None,
+            fuel_type=None,
+            transmission=None,
+            single_owner=None,
+            clean_title=None,
+            min_dom=None,
+            max_dom=None,
+            min_price=None,
+            max_price=None,
+            min_year=None,
+            max_year=None,
+            min_miles=None,
+            max_miles=None,
+            zip_code=None,
+            radius=None,
+            has_images=None,
+            sort_by="updated_at",
+            sort_dir="desc",
+            live_sync=False,
+            sync_limit=72,
+            page=1,
+            per_page=20,
+            db=db,
+        )
+
+        vins = {item["vin"] for item in response["data"]["items"]}
+        assert "1M8GDM9AXKP042788" not in vins
+        assert "1M8GDM9AXKP042789" in vins
+        assert "1M8GDM9AXKP042780" in vins
+
+
+def test_search_applies_zip_radius_to_auction_inventory() -> None:
+    init_db()
+    near_vin = "2T1BURHE0JC074111"
+    far_vin = "2T1BURHE0JC074112"
+    with SessionLocal() as db:
+        for vin in [near_vin, far_vin]:
+            db.execute(delete(Vehicle).where(Vehicle.vin == vin))
+        db.commit()
+
+        db.add_all(
+            [
+                Vehicle(
+                    vin=near_vin,
+                    listing_id="ove-near-1",
+                    year=2022,
+                    make="Toyota",
+                    model="Camry",
+                    price_asking=28000,
+                    location_zip="33312",
+                    location_state="FL",
+                    source_type="ove",
+                    available=True,
+                    quality_firewall_pass=True,
+                ),
+                Vehicle(
+                    vin=far_vin,
+                    listing_id="ove-far-1",
+                    year=2022,
+                    make="Toyota",
+                    model="Camry",
+                    price_asking=28000,
+                    location_zip="90210",
+                    location_state="CA",
+                    source_type="ove",
+                    available=True,
+                    quality_firewall_pass=True,
+                ),
+            ]
+        )
+        db.commit()
+
+        response = search_inventory(
+            q=None,
+            make="Toyota",
+            model=None,
+            trim=None,
+            body_type=None,
+            inventory_type=None,
+            certified=None,
+            source_type="auction",
+            state=None,
+            exterior_color=None,
+            interior_color=None,
+            drivetrain=None,
+            fuel_type=None,
+            transmission=None,
+            single_owner=None,
+            clean_title=None,
+            min_dom=None,
+            max_dom=None,
+            min_price=None,
+            max_price=None,
+            min_year=None,
+            max_year=None,
+            min_miles=None,
+            max_miles=None,
+            zip_code="33312",
+            radius=50,
+            has_images=None,
+            sort_by="updated_at",
+            sort_dir="desc",
+            live_sync=False,
+            sync_limit=72,
+            page=1,
+            per_page=25,
+            db=db,
+        )
+
+        assert response["status"] == "ok"
+        vins = {item["vin"] for item in response["data"]["items"]}
+        assert near_vin in vins
+        assert far_vin not in vins
+
+
+def test_inventory_taxonomy_cache_sync_and_facets() -> None:
+    init_db()
+    client = StubMarketCheckTaxonomyClient()
+
+    with SessionLocal() as db:
+        db.execute(delete(VehicleTaxonomyCache))
+        db.commit()
+
+        report = sync_marketcheck_taxonomy_cache(db, client=client, start_year=2024, end_year=2025)
+        db.commit()
+
+        assert report.inserted == 5
+        assert report.deleted == 0
+
+        response = inventory_facets(
+            make="Honda",
+            model="Civic",
+            trim=None,
+            body_type=None,
+            state=None,
+            inventory_type=None,
+            source_type=None,
+            min_price=None,
+            max_price=None,
+            min_year=2024,
+            max_year=2025,
+            has_images=False,
+            use_marketcheck=False,
+            db=db,
+        )
+
+    assert response["status"] == "ok"
+    taxonomy = response["data"]["taxonomy"]
+    assert taxonomy["source"] == "taxonomy_cache"
+    assert [bucket["item"] for bucket in taxonomy["years"]] == ["2025", "2024"]
+    assert [bucket["item"] for bucket in taxonomy["make"]] == ["Honda", "Toyota"]
+    assert [bucket["item"] for bucket in taxonomy["model"]] == ["Accord", "Civic"]
+    assert [bucket["item"] for bucket in taxonomy["trim"]] == ["EX", "Sport", "Sport Touring"]
 
 
 def test_wordpress_export_json_contract() -> None:

@@ -1,10 +1,12 @@
 # S3 MarketCheck Cache Roadmap
 
-## Current State (as of 2026-02-26)
+## Current State (as of 2026-02-27)
 
 - VirtualCarHub persists normalized inventory rows in the `vehicles` table.
 - Image source references are persisted in `vehicle_image_assets` and related image-job tables.
-- There is no AWS S3 client integration in backend runtime code yet.
+- Backend now includes object-storage URL resolution hooks for `storage_key` fields
+  (cards/VDP can render public URLs from S3/CloudFront-style config).
+- There is still no active read-through MarketCheck payload cache in runtime path yet.
 - There is no object-store cache layer that serves MarketCheck payloads by VIN.
 
 ## Decision for now

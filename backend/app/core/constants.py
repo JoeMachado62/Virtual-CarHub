@@ -52,6 +52,14 @@ class Actor(StrEnum):
     HUMAN = "human"
 
 
+class InventorySourceType(StrEnum):
+    MARKETCHECK = "marketcheck"
+    DEALER_PARTNER = "dealer_partner"
+    DEALER_WHOLESALE = "dealer_wholesale"
+    AUCTION = "auction"
+    OVE = "ove"
+
+
 class ImageTier(StrEnum):
     SOURCE_CACHE = "SOURCE_CACHE"
     TIER2_HERO = "TIER2_HERO"
@@ -90,3 +98,11 @@ class AuctionPlatform(StrEnum):
     MANHEIM = "manheim"
     OPENLANE = "openlane"
     ALLY_SMART_AUCTION = "ally-smart-auction"
+
+
+class OveDetailRequestStatus(StrEnum):
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELED = "CANCELED"

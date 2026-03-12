@@ -10,6 +10,10 @@ class Settings(BaseSettings):
 
     vch_env: Literal["local", "staging", "production"] = "local"
     database_url: str = Field(default="sqlite:///./virtual_carhub.db", alias="DATABASE_URL")
+    database_pool_size: int = Field(default=20, alias="DATABASE_POOL_SIZE")
+    database_max_overflow: int = Field(default=40, alias="DATABASE_MAX_OVERFLOW")
+    database_pool_timeout_seconds: int = Field(default=30, alias="DATABASE_POOL_TIMEOUT_SECONDS")
+    database_pool_recycle_seconds: int = Field(default=1800, alias="DATABASE_POOL_RECYCLE_SECONDS")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
 
     jwt_secret_key: str = Field(default="dev-secret", alias="JWT_SECRET_KEY")
@@ -25,10 +29,27 @@ class Settings(BaseSettings):
 
     service_token: str = Field(default="dev-service-token", alias="SERVICE_TOKEN")
     wordpress_export_bearer_token: str = Field(default="", alias="WORDPRESS_EXPORT_BEARER_TOKEN")
+    wordpress_export_topup_enabled: bool = Field(default=False, alias="WORDPRESS_EXPORT_TOPUP_ENABLED")
+    wordpress_export_topup_min_results: int = Field(default=35, alias="WORDPRESS_EXPORT_TOPUP_MIN_RESULTS")
+    wordpress_export_topup_zip: str = Field(default="", alias="WORDPRESS_EXPORT_TOPUP_ZIP")
+    wordpress_export_topup_radius: int = Field(default=25, alias="WORDPRESS_EXPORT_TOPUP_RADIUS")
+    wordpress_export_topup_limit: int = Field(default=200, alias="WORDPRESS_EXPORT_TOPUP_LIMIT")
     cors_origins: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
     public_web_base_url: str = Field(default="https://virtualcarhub.com", alias="PUBLIC_WEB_BASE_URL")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_file_path: str = Field(default="/var/log/virtual-carhub/backend.log", alias="LOG_FILE_PATH")
+    object_storage_provider: Literal["none", "s3"] = Field(default="none", alias="OBJECT_STORAGE_PROVIDER")
+    object_storage_public_base_url: str = Field(default="", alias="OBJECT_STORAGE_PUBLIC_BASE_URL")
+    aws_region: str = Field(default="us-east-1", alias="AWS_REGION")
+    aws_s3_endpoint_url: str = Field(default="", alias="AWS_S3_ENDPOINT_URL")
+    aws_cloudfront_domain: str = Field(default="", alias="AWS_CLOUDFRONT_DOMAIN")
+    s3_assets_bucket: str = Field(default="", alias="S3_ASSETS_BUCKET")
+    s3_marketcheck_cache_bucket: str = Field(default="", alias="S3_MARKETCHECK_CACHE_BUCKET")
+    marketcheck_cache_enabled: bool = Field(default=False, alias="MARKETCHECK_CACHE_ENABLED")
+    marketcheck_cache_ttl_detail_seconds: int = Field(default=21600, alias="MARKETCHECK_CACHE_TTL_DETAIL_SECONDS")
+    marketcheck_cache_ttl_search_seconds: int = Field(default=900, alias="MARKETCHECK_CACHE_TTL_SEARCH_SECONDS")
+    marketcheck_cache_ttl_facets_seconds: int = Field(default=3600, alias="MARKETCHECK_CACHE_TTL_FACETS_SECONDS")
+    marketcheck_cache_ttl_price_seconds: int = Field(default=86400, alias="MARKETCHECK_CACHE_TTL_PRICE_SECONDS")
 
     # Live integration toggles
     marketcheck_live_enabled: bool = Field(default=False, alias="MARKETCHECK_LIVE_ENABLED")
@@ -131,6 +152,10 @@ class Settings(BaseSettings):
     @property
     def has_ghl_custom_objects(self) -> bool:
         return self.has_ghl and self.ghl_custom_objects_enabled
+
+    @property
+    def has_s3_assets(self) -> bool:
+        return self.object_storage_provider == "s3" and bool(self.s3_assets_bucket)
 
 
 @lru_cache(maxsize=1)

@@ -25,6 +25,7 @@ from app.core.constants import (
     ImageJobStatus,
     ImageTier,
     InspectionStatus,
+    OveDetailRequestStatus,
 )
 from app.db.base import Base, TimestampMixin
 
@@ -115,6 +116,22 @@ class Vehicle(Base, TimestampMixin):
     last_seen_active: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     quality_firewall_pass: Mapped[bool | None] = mapped_column(Boolean)
+
+
+class VehicleTaxonomyCache(Base, TimestampMixin):
+    __tablename__ = "vehicle_taxonomy_cache"
+    __table_args__ = (
+        UniqueConstraint("year", "make", "model", "trim", name="uq_vehicle_taxonomy_cache_ymmt"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source: Mapped[str] = mapped_column(String(40), default="marketcheck", nullable=False, index=True)
+    year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    make: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    model: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    trim: Mapped[str] = mapped_column(String(120), default="", nullable=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class VehicleImageAsset(Base, TimestampMixin):
@@ -213,6 +230,58 @@ class VehicleInspectionImage(Base, TimestampMixin):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
 
     report: Mapped[VehicleInspectionReport] = relationship(back_populates="images")
+
+
+class OveVehicleDetail(Base, TimestampMixin):
+    __tablename__ = "ove_vehicle_details"
+
+    vin: Mapped[str] = mapped_column(
+        ForeignKey("vehicles.vin", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    source_platform: Mapped[AuctionPlatform] = mapped_column(
+        Enum(AuctionPlatform),
+        default=AuctionPlatform.MANHEIM,
+        nullable=False,
+        index=True,
+    )
+    seller_comments: Mapped[str | None] = mapped_column(Text)
+    images_json: Mapped[list] = mapped_column(JSON, default=list)
+    condition_report_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    listing_snapshot_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    sync_metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    raw_payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    page_url: Mapped[str | None] = mapped_column(String(1200))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class OveDetailRequest(Base, TimestampMixin):
+    __tablename__ = "ove_detail_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    vin: Mapped[str] = mapped_column(String(17), index=True, nullable=False)
+    source_platform: Mapped[AuctionPlatform] = mapped_column(
+        Enum(AuctionPlatform),
+        default=AuctionPlatform.MANHEIM,
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[OveDetailRequestStatus] = mapped_column(
+        Enum(OveDetailRequestStatus),
+        default=OveDetailRequestStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
+    requested_by: Mapped[str] = mapped_column(String(80), default="system")
+    request_source: Mapped[str] = mapped_column(String(80), default="api")
+    reason: Mapped[str | None] = mapped_column(String(255))
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    detail_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class VehicleMatch(Base, TimestampMixin):

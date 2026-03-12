@@ -5,12 +5,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_deal, get_current_user
-from app.core.constants import DealState
+from app.core.constants import AuctionPlatform, DealState, FundingState, InventorySourceType
 from app.core.responses import ok
 from app.db.session import get_db
-from app.models.entities import Document, GarageItem, Notification, Shipment, User, Vehicle, VehicleMatch
+from app.models.entities import Document, GarageItem, Notification, OveVehicleDetail, Shipment, User, Vehicle, VehicleMatch
 from app.schemas.profile import ProfileUpdateRequest, QuickMatchRequest
 from app.schemas.returns import InitiateReturnRequest
+from app.schemas.ove_inventory import OveDetailRequestEnqueueRequest
+from app.services.audit_service import log_event
 from app.services.deal_service import advance_deal_to, transition_deal_state
 from app.services.image_pipeline_service import (
     ensure_tier3_processing_job,
@@ -18,10 +20,33 @@ from app.services.image_pipeline_service import (
     resolve_vehicle_display_context,
 )
 from app.services.matching_service import run_matching
+from app.services.ove_inventory_service import enqueue_ove_detail_request
 from app.services.profile_service import apply_full_profile, apply_quick_match, get_or_create_profile
 from app.services.return_service import initiate_return
 
 router = APIRouter()
+
+CONDITION_REPORT_ELIGIBLE_FUNDING_STATES = {
+    FundingState.PRE_APPROVED,
+    FundingState.TERMS_ACCEPTED,
+    FundingState.FINAL_APPROVAL_PENDING,
+    FundingState.FULLY_FUNDED,
+    FundingState.CASH_BUYER,
+}
+
+SHOPPING_STAGE_ORDER = [
+    DealState.LEAD,
+    DealState.PRE_QUALIFYING,
+    DealState.QUALIFIED,
+    DealState.ENGAGED,
+    DealState.PROFILED,
+    DealState.MATCHING,
+    DealState.VEHICLE_SELECTED,
+    DealState.FUNDING,
+    DealState.ACQUISITION_PENDING,
+    DealState.ACQUIRED,
+    DealState.IN_TRANSIT,
+]
 
 
 def _normalize_vin(vin: str) -> str:
@@ -29,6 +54,69 @@ def _normalize_vin(vin: str) -> str:
     if len(normalized) != 17:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="VIN must be 17 characters")
     return normalized
+
+
+def _deal_stage_at_or_before(stage: DealState, target: DealState) -> bool:
+    try:
+        return SHOPPING_STAGE_ORDER.index(stage) <= SHOPPING_STAGE_ORDER.index(target)
+    except ValueError:
+        return False
+
+
+def _condition_report_eligibility(deal) -> tuple[bool, str]:
+    if deal.funding_state in CONDITION_REPORT_ELIGIBLE_FUNDING_STATES:
+        return True, "Eligible to request a VCH condition report."
+    return False, "Condition/inspection report requests require a pre-approved buyer account."
+
+
+def _infer_auction_platform(vehicle: Vehicle, ove_detail: OveVehicleDetail | None) -> AuctionPlatform:
+    if ove_detail:
+        return ove_detail.source_platform
+
+    source_url = (vehicle.source_url or "").lower()
+    if "openlane" in source_url:
+        return AuctionPlatform.OPENLANE
+    if "ally" in source_url:
+        return AuctionPlatform.ALLY_SMART_AUCTION
+    return AuctionPlatform.MANHEIM
+
+
+def _enqueue_auction_detail_refresh(
+    db: Session,
+    *,
+    vehicle: Vehicle,
+    current_deal,
+    current_user: User,
+    ove_detail: OveVehicleDetail | None = None,
+    priority: int,
+    reason: str,
+) -> tuple[dict[str, str | bool] | None, AuctionPlatform | None]:
+    if vehicle.source_type not in {InventorySourceType.OVE.value, InventorySourceType.AUCTION.value}:
+        return None, None
+
+    source_platform = _infer_auction_platform(vehicle, ove_detail)
+    request, deduplicated = enqueue_ove_detail_request(
+        db,
+        vin=vehicle.vin,
+        payload=OveDetailRequestEnqueueRequest(
+            source_platform=source_platform,
+            priority=priority,
+            request_source="buyer_portal",
+            requested_by=current_user.email or current_user.id,
+            reason=reason,
+            metadata={
+                "deal_id": current_deal.id,
+                "user_id": current_user.id,
+                "selected_vin": current_deal.selected_vin == vehicle.vin,
+            },
+        ),
+    )
+    return {
+        "queued": True,
+        "deduplicated": deduplicated,
+        "request_id": request.id,
+        "status": request.status.value,
+    }, source_platform
 
 
 def _serialize_garage_item(
@@ -158,20 +246,22 @@ def put_profile(
     apply_full_profile(profile, payload)
 
     if payload.is_complete:
-        advance_deal_to(
-            db,
-            deal=current_deal,
-            target_state=DealState.PROFILED,
-            actor="buyer",
-            reason="full_profile_completed",
-        )
-        advance_deal_to(
-            db,
-            deal=current_deal,
-            target_state=DealState.MATCHING,
-            actor="system",
-            reason="matching_run_triggered",
-        )
+        if _deal_stage_at_or_before(current_deal.stage, DealState.PROFILED):
+            advance_deal_to(
+                db,
+                deal=current_deal,
+                target_state=DealState.PROFILED,
+                actor="buyer",
+                reason="full_profile_completed",
+            )
+        if _deal_stage_at_or_before(current_deal.stage, DealState.MATCHING):
+            advance_deal_to(
+                db,
+                deal=current_deal,
+                target_state=DealState.MATCHING,
+                actor="system",
+                reason="matching_run_triggered",
+            )
         run_matching(db, profile=profile, deal=current_deal, limit=10)
 
     db.commit()
@@ -188,13 +278,14 @@ def post_quick_match(
     profile = get_or_create_profile(db, current_user.id)
     apply_quick_match(profile, payload)
 
-    advance_deal_to(
-        db,
-        deal=current_deal,
-        target_state=DealState.MATCHING,
-        actor="system",
-        reason="quick_matching_run_triggered",
-    )
+    if _deal_stage_at_or_before(current_deal.stage, DealState.MATCHING):
+        advance_deal_to(
+            db,
+            deal=current_deal,
+            target_state=DealState.MATCHING,
+            actor="system",
+            reason="quick_matching_run_triggered",
+        )
 
     matches = run_matching(db, profile=profile, deal=current_deal, limit=10)
     db.commit()
@@ -220,11 +311,14 @@ def post_quick_match(
 
 @router.get("/deal")
 def get_deal(current_deal=Depends(get_current_deal)) -> dict:
+    condition_report_eligible, condition_report_reason = _condition_report_eligibility(current_deal)
     return ok(
         {
             "id": current_deal.id,
             "stage": current_deal.stage.value,
             "funding_state": current_deal.funding_state.value,
+            "condition_report_eligible": condition_report_eligible,
+            "condition_report_eligibility_reason": condition_report_reason,
             "assigned_agent": current_deal.assigned_agent,
             "human_checkpoint_required": current_deal.human_checkpoint_required,
             "selected_vin": current_deal.selected_vin,
@@ -385,10 +479,116 @@ def add_to_garage(
         trigger_event="garage_saved",
         source_image_urls=vehicle.images or [],
     )
+    ove_refresh, source_platform = _enqueue_auction_detail_refresh(
+        db,
+        vehicle=vehicle,
+        current_deal=current_deal,
+        current_user=current_user,
+        priority=120,
+        reason=f"garage_saved:{current_deal.id}",
+    )
+
+    if ove_refresh:
+        log_event(
+            db,
+            deal_id=current_deal.id,
+            event_type="buyer_auction_detail_refresh_requested",
+            actor="buyer",
+            payload={
+                "vin": vehicle.vin,
+                "trigger": "garage_saved",
+                "source_platform": source_platform.value,
+                **ove_refresh,
+            },
+        )
 
     db.commit()
     db.refresh(item)
-    return ok(_serialize_garage_item(db, item, vehicle, deal_stage=current_deal.stage))
+    return ok(
+        {
+            "garage_item": _serialize_garage_item(db, item, vehicle, deal_stage=current_deal.stage),
+            "ove_detail_refresh": ove_refresh,
+        }
+    )
+
+
+@router.post("/vehicles/{vin}/condition-report-request")
+def request_vehicle_condition_report(
+    vin: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    current_deal=Depends(get_current_deal),
+) -> dict:
+    normalized_vin = _normalize_vin(vin)
+    eligible, reason = _condition_report_eligibility(current_deal)
+    if not eligible:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
+
+    vehicle = db.get(Vehicle, normalized_vin)
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found in inventory")
+    if vehicle.source_type not in {InventorySourceType.OVE.value, InventorySourceType.AUCTION.value}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Condition report requests are only supported for auction inventory.",
+        )
+
+    ove_detail = db.get(OveVehicleDetail, normalized_vin)
+    if ove_detail and ove_detail.condition_report_json:
+        response = {
+            "vin": normalized_vin,
+            "eligible": True,
+            "already_available": True,
+            "queued": False,
+            "request_id": None,
+            "status": "available",
+            "message": "Condition report already available.",
+        }
+        log_event(
+            db,
+            deal_id=current_deal.id,
+            event_type="buyer_condition_report_requested",
+            actor="buyer",
+            payload={**response, "user_id": current_user.id},
+        )
+        db.commit()
+        return ok(response)
+
+    ove_refresh, source_platform = _enqueue_auction_detail_refresh(
+        db,
+        vehicle=vehicle,
+        current_deal=current_deal,
+        current_user=current_user,
+        ove_detail=ove_detail,
+        priority=200 if current_deal.selected_vin == normalized_vin else 100,
+        reason=f"buyer_condition_report_request:{current_deal.id}",
+    )
+    assert ove_refresh is not None
+
+    response = {
+        "vin": normalized_vin,
+        "eligible": True,
+        "already_available": False,
+        **ove_refresh,
+        "message": (
+            "Condition report request already in progress."
+            if ove_refresh["deduplicated"]
+            else "Condition report requested. We will refresh the listing when it is ready."
+        ),
+    }
+    log_event(
+        db,
+        deal_id=current_deal.id,
+        event_type="buyer_condition_report_requested",
+        actor="buyer",
+        payload={
+            **response,
+            "user_id": current_user.id,
+            "source_platform": source_platform.value,
+        },
+    )
+    db.commit()
+    return ok(response)
 
 
 @router.delete("/garage/{vin}")
@@ -480,6 +680,28 @@ def start_garage_acquisition(
         trigger_event="garage_acquisition_started",
         source_image_urls=vehicle.images or [],
     )
+    ove_refresh, source_platform = _enqueue_auction_detail_refresh(
+        db,
+        vehicle=vehicle,
+        current_deal=current_deal,
+        current_user=current_user,
+        priority=220,
+        reason=f"garage_acquisition_started:{current_deal.id}",
+    )
+
+    if ove_refresh:
+        log_event(
+            db,
+            deal_id=current_deal.id,
+            event_type="buyer_auction_detail_refresh_requested",
+            actor="buyer",
+            payload={
+                "vin": vehicle.vin,
+                "trigger": "garage_acquisition_started",
+                "source_platform": source_platform.value,
+                **ove_refresh,
+            },
+        )
 
     db.commit()
     db.refresh(item)
@@ -491,6 +713,7 @@ def start_garage_acquisition(
                 "stage": current_deal.stage.value,
                 "selected_vin": current_deal.selected_vin,
             },
+            "ove_detail_refresh": ove_refresh,
         }
     )
 

@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.integrations.marketcheck_client import MarketCheckClient
+from app.core.constants import InventorySourceType
 from app.models.entities import Vehicle
 from app.services.image_pipeline_service import ensure_tier2_hero_job, sync_marketcheck_source_assets
 
@@ -106,10 +107,11 @@ MOCK_VEHICLES = [
 
 
 SOURCE_PRIORITY: dict[str, int] = {
-    "marketcheck": 1,
-    "dealer_partner": 2,
-    "dealer_wholesale": 2,
-    "auction": 3,
+    InventorySourceType.MARKETCHECK.value: 1,
+    InventorySourceType.DEALER_PARTNER.value: 2,
+    InventorySourceType.DEALER_WHOLESALE.value: 2,
+    InventorySourceType.AUCTION.value: 3,
+    InventorySourceType.OVE.value: 4,
 }
 
 PRIMARY_SOURCE_FIELDS = (
@@ -205,59 +207,81 @@ def ingest_marketcheck_inventory(
     start: int = 0,
     search_params: dict[str, Any] | None = None,
 ) -> InventoryIngestReport:
-    params: dict[str, Any] = {"rows": limit, "start": start}
-    if search_params:
-        params.update({k: v for k, v in search_params.items() if v not in (None, "")})
-
-    payload = client.search_inventory(params)
-    listings = payload.get("listings", [])
-    if not isinstance(listings, list):
-        listings = []
-
     report = InventoryIngestReport(
         source="marketcheck",
-        fetched=len(listings),
+        fetched=0,
         mode="live" if client.live else "stub",
     )
     now = datetime.now(UTC)
+    filtered_params = {k: v for k, v in (search_params or {}).items() if v not in (None, "")}
+    remaining = max(1, int(limit))
+    cursor = max(0, int(start))
+    page_guard = 0
+    # Some MarketCheck plans cap per-call rows lower than requested; page forward until exhausted.
+    while remaining > 0 and page_guard < 100:
+        batch_rows = min(remaining, 100)
+        params: dict[str, Any] = {"rows": batch_rows, "start": cursor}
+        params.update(filtered_params)
 
-    for raw_listing in listings:
-        if not isinstance(raw_listing, dict):
-            report.skipped_invalid += 1
-            continue
+        payload = client.search_inventory(params)
+        listings = payload.get("listings", [])
+        if not isinstance(listings, list):
+            listings = []
+        if not listings:
+            break
 
-        normalized = normalize_marketcheck_listing(raw_listing, now=now)
-        if not normalized:
-            report.skipped_invalid += 1
-            continue
+        report.fetched += len(listings)
 
-        existing = db.get(Vehicle, normalized["vin"])
-        action = upsert_vehicle_with_source_priority(existing=existing, incoming=normalized, incoming_source="marketcheck")
-        if action == "inserted":
-            db.add(Vehicle(**normalized))
-            report.inserted += 1
-        elif action == "updated":
-            report.updated += 1
-        else:
-            report.skipped_priority += 1
-        vin = normalized["vin"]
-        if vin not in report.synced_vins:
-            report.synced_vins.append(vin)
+        for raw_listing in listings:
+            if not isinstance(raw_listing, dict):
+                report.skipped_invalid += 1
+                continue
 
-        # Tier 4-ready model keeps source cache records independent from vehicle row shape.
-        images = normalized.get("images") or []
-        sync_marketcheck_source_assets(
-            db,
-            vin=normalized["vin"],
-            listing_id=normalized.get("listing_id"),
-            image_urls=images,
-        )
-        ensure_tier2_hero_job(
-            db,
-            vin=normalized["vin"],
-            trigger_event="marketcheck_ingest",
-            primary_image_url=images[0] if images else None,
-        )
+            normalized = normalize_marketcheck_listing(raw_listing, now=now)
+            if not normalized:
+                report.skipped_invalid += 1
+                continue
+
+            existing = db.get(Vehicle, normalized["vin"])
+            action = upsert_vehicle_with_source_priority(
+                existing=existing,
+                incoming=normalized,
+                incoming_source="marketcheck",
+            )
+            if action == "inserted":
+                db.add(Vehicle(**normalized))
+                report.inserted += 1
+            elif action == "updated":
+                report.updated += 1
+            else:
+                report.skipped_priority += 1
+            vin = normalized["vin"]
+            if vin not in report.synced_vins:
+                report.synced_vins.append(vin)
+
+            # Tier 4-ready model keeps source cache records independent from vehicle row shape.
+            images = normalized.get("images") or []
+            sync_marketcheck_source_assets(
+                db,
+                vin=normalized["vin"],
+                listing_id=normalized.get("listing_id"),
+                image_urls=images,
+            )
+            ensure_tier2_hero_job(
+                db,
+                vin=normalized["vin"],
+                trigger_event="marketcheck_ingest",
+                primary_image_url=images[0] if images else None,
+            )
+
+        got = len(listings)
+        remaining -= got
+        cursor += got
+        page_guard += 1
+
+        num_found = payload.get("num_found")
+        if isinstance(num_found, int) and cursor >= num_found:
+            break
 
     db.flush()
     return report
@@ -372,6 +396,37 @@ def normalize_marketcheck_listing(raw: dict[str, Any], *, now: datetime | None =
     fuel_type = clean_str(pick_first(build.get("fuel_type"), raw.get("fuel_type")))
     inventory_type = clean_str(raw.get("inventory_type"))
     days_on_market = to_int(pick_first(raw.get("dom"), raw.get("dom_active"), raw.get("dom_180")))
+    city_mpg = to_float(
+        pick_first(
+            build.get("city_mpg"),
+            raw.get("city_mpg"),
+            raw.get("mpg_city"),
+            raw.get("city_miles_per_gallon"),
+            raw.get("mpgCity"),
+            raw.get("epa_city_mpg"),
+        )
+    )
+    highway_mpg = to_float(
+        pick_first(
+            build.get("highway_mpg"),
+            raw.get("highway_mpg"),
+            raw.get("mpg_highway"),
+            raw.get("highway_miles_per_gallon"),
+            raw.get("mpgHighway"),
+            raw.get("epa_highway_mpg"),
+        )
+    )
+    combined_mpg = to_float(
+        pick_first(
+            build.get("combined_mpg"),
+            raw.get("combined_mpg"),
+            raw.get("mpg_combined"),
+            raw.get("mpg"),
+            raw.get("epa_combined_mpg"),
+        )
+    )
+    if combined_mpg is None and city_mpg is not None and highway_mpg is not None:
+        combined_mpg = round((city_mpg + highway_mpg) / 2.0, 1)
     certified = to_bool(raw.get("certified"))
     single_owner = to_bool(raw.get("carfax_1_owner"))
     clean_title = to_bool(raw.get("carfax_clean_title"))
@@ -391,13 +446,7 @@ def normalize_marketcheck_listing(raw: dict[str, Any], *, now: datetime | None =
         "cylinders": to_int(pick_first(build.get("cylinders"), raw.get("cylinders"))),
         "forced_induction": clean_str(pick_first(build.get("forced_induction"), raw.get("forced_induction"))),
         "drivetrain": clean_str(pick_first(build.get("drivetrain"), raw.get("drivetrain"))),
-        "mpg_combined": to_float(
-            pick_first(
-                build.get("combined_mpg"),
-                raw.get("combined_mpg"),
-                raw.get("mpg"),
-            )
-        ),
+        "mpg_combined": combined_mpg,
         "ev_range": to_int(pick_first(build.get("ev_range"), raw.get("ev_range"))),
         "towing_capacity_lbs": to_int(pick_first(build.get("towing_capacity"), raw.get("towing_capacity_lbs"))),
         "odometer": to_int(pick_first(raw.get("miles"), raw.get("odometer"))),
@@ -415,6 +464,8 @@ def normalize_marketcheck_listing(raw: dict[str, Any], *, now: datetime | None =
             "interior_color": interior_color,
             "transmission": transmission,
             "fuel_type": fuel_type,
+            "city_mpg": city_mpg,
+            "highway_mpg": highway_mpg,
             "inventory_type": inventory_type,
             "days_on_market": days_on_market,
             "certified": certified,

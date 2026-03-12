@@ -13,6 +13,8 @@ from app.models.entities import (
     FundingCase,
     GarageItem,
     Notification,
+    OveDetailRequest,
+    OveVehicleDetail,
     ReturnCase,
     Shipment,
     TitleCase,
@@ -22,6 +24,7 @@ from app.models.entities import (
     VehicleImageJob,
     VehicleInspectionImage,
     VehicleInspectionReport,
+    VehicleTaxonomyCache,
     VehicleMatch,
 )
 
@@ -40,6 +43,8 @@ __all__ = [
     "FundingCase",
     "GarageItem",
     "Notification",
+    "OveDetailRequest",
+    "OveVehicleDetail",
     "ReturnCase",
     "Shipment",
     "TitleCase",
@@ -49,5 +54,6 @@ __all__ = [
     "VehicleImageJob",
     "VehicleInspectionImage",
     "VehicleInspectionReport",
+    "VehicleTaxonomyCache",
     "VehicleMatch",
 ]
