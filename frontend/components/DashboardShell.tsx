@@ -243,6 +243,11 @@ export function DashboardShell() {
                   <a className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}`}>
                     Open
                   </a>
+                  {item.has_inspection_report ? (
+                    <a className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}/condition-report`}>
+                      View Report
+                    </a>
+                  ) : null}
                   {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") && !item.has_inspection_report ? (
                     <button
                       className="button ghost"

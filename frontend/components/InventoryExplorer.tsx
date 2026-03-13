@@ -965,6 +965,14 @@ export function InventoryExplorer() {
                       <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}` as any}>
                         Open
                       </Link>
+                      {item.has_inspection_report ? (
+                        <Link
+                          className="button ghost"
+                          href={`/vinventory/${encodeURIComponent(item.vin)}/condition-report` as any}
+                        >
+                          View Report
+                        </Link>
+                      ) : null}
                       {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") && !item.has_inspection_report ? (
                         <button
                           className="button ghost"
@@ -1125,6 +1133,14 @@ export function InventoryExplorer() {
                       >
                         {garageActionVin === selectedVehicle.vin ? "Requesting..." : "Request Condition Report"}
                       </button>
+                    ) : null}
+                    {selectedVehicle.has_inspection_report ? (
+                      <Link
+                        className="button ghost"
+                        href={`/vinventory/${encodeURIComponent(selectedVehicle.vin)}/condition-report` as any}
+                      >
+                        Open Report
+                      </Link>
                     ) : null}
                     <button
                       className="button ghost"

@@ -913,6 +913,58 @@ textarea {
   flex-wrap: wrap;
 }
 
+.condition-report-shell {
+  display: grid;
+  gap: 1rem;
+}
+
+.condition-report-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.condition-report-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.condition-report-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.condition-report-gallery {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.condition-report-gallery-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--surface-soft);
+  display: grid;
+  gap: 0.7rem;
+  padding-bottom: 0.8rem;
+}
+
+.condition-report-gallery-card img {
+  width: 100%;
+  height: 180px;
+  object-fit: cover;
+  display: block;
+}
+
+.condition-report-gallery-card strong {
+  padding: 0 0.8rem;
+}
+
 .inventory-thumb {
   width: 96px;
   height: 70px;
@@ -999,6 +1051,10 @@ textarea {
     height: 250px;
   }
 
+  .condition-report-gallery-card img {
+    height: 220px;
+  }
+
   .preview-image {
     min-height: 220px;
   }
@@ -1009,5 +1065,35 @@ textarea {
   .topbar-tools {
     width: 100%;
     justify-content: flex-start;
+  }
+}
+
+@media print {
+  .site-header,
+  .site-footer,
+  .condition-report-actions {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #111111 !important;
+  }
+
+  .page-body {
+    padding: 0;
+  }
+
+  .shell {
+    width: 100%;
+  }
+
+  .card,
+  .section-shell,
+  .page-hero,
+  .hero {
+    box-shadow: none;
+    border-color: rgba(17, 17, 17, 0.15);
+    background: #ffffff;
   }
 }

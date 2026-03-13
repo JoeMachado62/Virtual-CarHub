@@ -338,6 +338,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 {actionLoading === "condition-report" ? "Requesting..." : "Request Condition Report"}
               </button>
             ) : null}
+            {vehicle.has_inspection_report ? (
+              <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vehicle.vin)}/condition-report` as any}>
+                Open Condition Report
+              </Link>
+            ) : null}
           </section>
           {actionError ? <section className="card">{actionError}</section> : null}
           {actionMessage ? <section className="card">{actionMessage}</section> : null}

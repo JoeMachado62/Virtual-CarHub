@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
 
@@ -30,6 +30,14 @@ type PendingOveDetailRequest = {
 export default function AdminPage() {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [pendingRequests, setPendingRequests] = useState<PendingOveDetailRequest[]>([]);
+  const [vin, setVin] = useState("");
+  const [sourcePlatform, setSourcePlatform] = useState("manheim");
+  const [priority, setPriority] = useState("10");
+  const [reason, setReason] = useState("manual_pi_pull");
+  const [requestedBy, setRequestedBy] = useState("admin_workspace");
+  const [queueLoading, setQueueLoading] = useState(false);
+  const [queueMessage, setQueueMessage] = useState<string | null>(null);
+  const [queueError, setQueueError] = useState<string | null>(null);
 
   async function loadDeals() {
     const response = await apiFetch<Deal[]>("/admin/deals", {}, undefined, true);
@@ -51,6 +59,58 @@ export default function AdminPage() {
     void loadPendingRequests();
   }, []);
 
+  async function submitManualRequest(event: FormEvent) {
+    event.preventDefault();
+    const normalizedVin = vin.trim().toUpperCase();
+    if (normalizedVin.length !== 17) {
+      setQueueError("VIN must be 17 characters.");
+      setQueueMessage(null);
+      return;
+    }
+
+    setQueueLoading(true);
+    setQueueError(null);
+    setQueueMessage(null);
+    const response = await apiFetch<{
+      request_id: string;
+      deduplicated?: boolean;
+      status?: string;
+    }>(
+      `/inventory/ove/detail/${encodeURIComponent(normalizedVin)}/request`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          source_platform: sourcePlatform,
+          priority: Number(priority) || 10,
+          request_source: "pi_console",
+          requested_by: requestedBy.trim() || "admin_workspace",
+          reason: reason.trim() || "manual_pi_pull",
+          metadata: {
+            manual_request: true,
+            console: "admin_workspace"
+          }
+        })
+      },
+      undefined,
+      true
+    );
+
+    if (response.status !== "ok") {
+      setQueueError(response.error?.message || "Unable to queue manual auction detail pull.");
+      setQueueLoading(false);
+      return;
+    }
+
+    setVin(normalizedVin);
+    setQueueMessage(
+      response.data.deduplicated
+        ? `VIN ${normalizedVin} was already queued. Existing request ${response.data.request_id} remains active.`
+        : `VIN ${normalizedVin} queued successfully as request ${response.data.request_id}.`
+    );
+    setQueueLoading(false);
+    await loadPendingRequests();
+  }
+
   return (
     <main className="page-stack">
       <section className="section-shell page-hero compact">
@@ -68,6 +128,79 @@ export default function AdminPage() {
           </button>
         </div>
       </div>
+      <section className="section-shell">
+        <div>
+          <p className="section-eyebrow" style={{ marginBottom: 8 }}>PI Workflow</p>
+          <h2 style={{ margin: 0 }}>Pull a specific auction VIN now</h2>
+        </div>
+        <form className="inventory-filter-form" onSubmit={submitManualRequest}>
+          <div className="inventory-mini-grid">
+            <label>
+              VIN
+              <input
+                className="input"
+                maxLength={17}
+                placeholder="1HGCM82633A123456"
+                value={vin}
+                onChange={(event) => setVin(event.target.value.toUpperCase())}
+              />
+            </label>
+            <label>
+              Source Platform
+              <select className="select" value={sourcePlatform} onChange={(event) => setSourcePlatform(event.target.value)}>
+                <option value="manheim">Manheim</option>
+                <option value="openlane">OPENLANE</option>
+                <option value="ally-smart-auction">Ally SmartAuction</option>
+              </select>
+            </label>
+          </div>
+          <div className="inventory-mini-grid">
+            <label>
+              Priority
+              <input
+                className="input"
+                type="number"
+                min="1"
+                max="999"
+                value={priority}
+                onChange={(event) => setPriority(event.target.value)}
+              />
+            </label>
+            <label>
+              Requested By
+              <input
+                className="input"
+                value={requestedBy}
+                onChange={(event) => setRequestedBy(event.target.value)}
+              />
+            </label>
+          </div>
+          <label>
+            Reason
+            <input className="input" value={reason} onChange={(event) => setReason(event.target.value)} />
+          </label>
+          {queueError ? <p style={{ color: "#b42318", margin: 0 }}>{queueError}</p> : null}
+          {queueMessage ? <p style={{ color: "#027a48", margin: 0 }}>{queueMessage}</p> : null}
+          <div className="inventory-actions">
+            <button className="button" type="submit" disabled={queueLoading}>
+              {queueLoading ? "Queueing..." : "Queue VIN Pull"}
+            </button>
+            {vin.trim().length === 17 ? (
+              <>
+                <a className="button ghost" href={`/vinventory/${encodeURIComponent(vin.trim().toUpperCase())}`}>
+                  Open Vehicle
+                </a>
+                <a
+                  className="button ghost"
+                  href={`/vinventory/${encodeURIComponent(vin.trim().toUpperCase())}/condition-report`}
+                >
+                  Open Report
+                </a>
+              </>
+            ) : null}
+          </div>
+        </form>
+      </section>
       <section className="section-shell">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div>
@@ -98,6 +231,14 @@ export default function AdminPage() {
                 <p>Reason: {item.reason || "n/a"}</p>
                 <p>Requested at: {formatDate(item.requested_at)}</p>
                 <p>Last polled: {formatDate(item.last_polled_at)}</p>
+                <div className="inventory-actions">
+                  <a className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}`}>
+                    Open Vehicle
+                  </a>
+                  <a className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}/condition-report`}>
+                    Open Report
+                  </a>
+                </div>
                 {item.metadata ? (
                   <div className="inventory-modal-specs">
                     <strong>Request metadata</strong>
