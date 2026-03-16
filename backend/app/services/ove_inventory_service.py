@@ -92,13 +92,22 @@ def ingest_ove_inventory(db: Session, payload: OveBulkIngestRequest) -> OveBulkI
             primary_image_url=item.images[0] if item.images else None,
         )
 
-    if full_snapshot and current_batch_vins:
-        report.marked_sold = _mark_missing_ove_inventory_unavailable(
-            db,
-            present_vins=current_batch_vins,
-            source_platforms=report.source_platforms,
-            now=now,
-        )
+    # Only mark vehicles as unavailable if this is a complete snapshot
+    # For multi-batch imports, we need to wait until all batches are complete
+    batch_number = payload.sync_metadata.get("batch_number")
+    batch_total = payload.sync_metadata.get("batch_total")
+    is_final_batch = (batch_number == batch_total) if (batch_number and batch_total) else True
+
+    if full_snapshot and current_batch_vins and is_final_batch:
+        # For multi-batch imports, we'd need to collect all VINs from all batches
+        # For now, only do this for single-batch full snapshots
+        if not batch_total or batch_total == 1:
+            report.marked_sold = _mark_missing_ove_inventory_unavailable(
+                db,
+                present_vins=current_batch_vins,
+                source_platforms=report.source_platforms,
+                now=now,
+            )
 
     db.flush()
     return report

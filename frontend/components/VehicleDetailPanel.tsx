@@ -8,6 +8,7 @@ import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
 import { AuthState, loadAuthState } from "@/lib/auth";
+import { toPublicSourceLabel } from "@/lib/sourceLabels";
 
 type DisplayMode = "MARKETING" | "INSPECTION_PENDING" | "INSPECTION_REPORT";
 type InspectionStatus = "NOT_STARTED" | "PENDING" | "INGESTED" | "NORMALIZED" | "VERIFIED" | "FAILED";
@@ -250,7 +251,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
           </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <span className="badge">VIN {vehicle.vin}</span>
-            <span className="badge">Source: {vehicle.source_label || vehicle.source_type || "unknown"}</span>
+            <span className="badge">Source: {toPublicSourceLabel(vehicle.source_label, vehicle.source_type)}</span>
             <span className="badge">Condition: {vehicle.condition_grade || "N/A"}</span>
             <span className="badge">
               {vehicle.location_state || "NA"} {vehicle.location_zip || ""}

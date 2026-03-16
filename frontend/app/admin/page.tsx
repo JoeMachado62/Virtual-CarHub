@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
+import { formatAuctionPlatformLabel } from "@/lib/sourceLabels";
 
 type Deal = {
   id: string;
@@ -146,11 +147,11 @@ export default function AdminPage() {
               />
             </label>
             <label>
-              Source Platform
+              Auction Source
               <select className="select" value={sourcePlatform} onChange={(event) => setSourcePlatform(event.target.value)}>
-                <option value="manheim">Manheim</option>
+                <option value="manheim">Primary Auction Feed</option>
                 <option value="openlane">OPENLANE</option>
-                <option value="ally-smart-auction">Ally SmartAuction</option>
+                <option value="ally-smart-auction">SmartAuction</option>
               </select>
             </label>
           </div>
@@ -211,14 +212,14 @@ export default function AdminPage() {
         </div>
         {!pendingRequests.length ? (
           <div className="card">
-            <p style={{ margin: 0 }}>No pending OVE detail requests right now.</p>
+            <p style={{ margin: 0 }}>No pending auction detail requests right now.</p>
           </div>
         ) : (
           <div className="grid">
             {pendingRequests.map((item) => (
               <article className="card" key={item.request_id}>
                 <div className="inventory-feature-grid" style={{ marginBottom: 12 }}>
-                  <span className="badge">{item.source_platform}</span>
+                  <span className="badge">{formatAuctionPlatformLabel(item.source_platform)}</span>
                   <span className="badge">Priority {item.priority}</span>
                   <span className="badge">Attempts {item.attempts}</span>
                   <span className="badge">{item.status}</span>

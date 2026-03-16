@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
+import { toPublicSourceLabel } from "@/lib/sourceLabels";
 
 type VehicleDetail = {
   vin: string;
@@ -116,7 +117,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
               {vehicle.year} {vehicle.make} {vehicle.model}
             </h1>
             <p className="muted-copy" style={{ marginBottom: 0 }}>
-              VIN {vehicle.vin} | {vehicle.source_label || vehicle.source_type || "auction"} | Updated{" "}
+              VIN {vehicle.vin} | {toPublicSourceLabel(vehicle.source_label, vehicle.source_type)} | Updated{" "}
               {formatDate(vehicle.updated_at)}
             </p>
           </div>

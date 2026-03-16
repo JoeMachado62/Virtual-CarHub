@@ -101,6 +101,7 @@ WORDPRESS_EXPORT_COLUMNS = [
 
 SLUG_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 PUBLIC_AUCTION_SOURCE = "auction"
+PUBLIC_WHOLESALE_SOURCE = "wholesale"
 PUBLIC_RETAIL_SOURCE = "retail"
 VCH_MARGIN = 1500.0
 AUCTION_BUY_FEE_UNDER_50K = 1000.0
@@ -205,16 +206,32 @@ def _is_auction_source(source_type: str | None) -> bool:
     }
 
 
+def _is_wholesale_source(source_type: str | None) -> bool:
+    normalized = (source_type or "").strip().lower()
+    return normalized in {
+        InventorySourceType.MARKETCHECK.value,
+        InventorySourceType.DEALER_WHOLESALE.value,
+    }
+
+
 def _public_source_value(source_type: str | None) -> str:
-    return PUBLIC_AUCTION_SOURCE if _is_auction_source(source_type) else (source_type or "")
+    if _is_auction_source(source_type):
+        return PUBLIC_AUCTION_SOURCE
+    if _is_wholesale_source(source_type):
+        return PUBLIC_WHOLESALE_SOURCE
+    return (source_type or "")
 
 
 def _public_source_label(source_type: str | None) -> str:
     if _is_auction_source(source_type):
         return "Auction"
+    if _is_wholesale_source(source_type):
+        return "Wholesale"
     normalized = (source_type or "").strip()
     if not normalized:
         return "Inventory"
+    if normalized.lower() == InventorySourceType.DEALER_PARTNER.value:
+        return "Dealer Partner Choice"
     return normalized.replace("_", " ").title()
 
 
@@ -262,9 +279,20 @@ def _apply_source_type_filter(stmt, source_type: str | None):
                 [InventorySourceType.AUCTION.value, InventorySourceType.OVE.value]
             )
         )
+    if normalized == PUBLIC_WHOLESALE_SOURCE:
+        return stmt.where(
+            func.lower(Vehicle.source_type).in_(
+                [InventorySourceType.MARKETCHECK.value, InventorySourceType.DEALER_WHOLESALE.value]
+            )
+        )
     if normalized == InventorySourceType.OVE.value:
         return stmt.where(func.lower(Vehicle.source_type) == InventorySourceType.OVE.value)
     return stmt.where(func.lower(Vehicle.source_type) == normalized)
+
+
+def _should_apply_default_aged_inventory_min(source_type: str | None) -> bool:
+    normalized = (source_type or "").strip().lower()
+    return not normalized
 
 
 def _zip_radius_values(zip_code: str | None, radius: int | None) -> tuple[str, ...] | None:
@@ -318,6 +346,10 @@ def _normalize_slug_part(value: Any) -> str:
 
 def _resolve_direct_param(value: Any) -> Any:
     return value.default if isinstance(value, Param) else value
+
+
+def _friendly_live_sync_error(_: Exception) -> str:
+    return "Live wholesale sync is temporarily unavailable. Showing saved inventory results."
 
 
 def _build_vehicle_title(vehicle: Vehicle) -> str:
@@ -667,13 +699,6 @@ def _build_marketcheck_search_params(
             params["year"] = min_year
         else:
             params["year_range"] = f"{min_year}-{max_year}"
-    if min_dom is not None and max_dom is not None:
-        params["dom_range"] = f"{min_dom}-{max_dom}"
-    elif min_dom is not None:
-        params["dom_range"] = f"{min_dom}-9999"
-    elif max_dom is not None:
-        params["dom_range"] = f"0-{max_dom}"
-
     return {k: v for k, v in params.items() if v not in (None, "")}
 
 
@@ -1052,9 +1077,14 @@ def search_inventory(
         "error": None,
         "synced_vins": [],
     }
-    effective_min_dom = max(min_dom or 0, AGED_INVENTORY_MIN_DOM)
+    effective_min_dom = min_dom
+    if effective_min_dom is None and _should_apply_default_aged_inventory_min(source_type):
+        effective_min_dom = AGED_INVENTORY_MIN_DOM
 
-    if live_sync and settings.marketcheck_api_key:
+    # Don't use MarketCheck for auction/OVE searches - use local database only
+    is_auction_search = source_type and source_type.lower() in ['auction', 'ove', PUBLIC_AUCTION_SOURCE.lower()]
+
+    if live_sync and settings.marketcheck_api_key and not is_auction_search:
         client = _marketcheck_client()
         search_params = _build_marketcheck_search_params(
             q=q,
@@ -1098,8 +1128,8 @@ def search_inventory(
             sync.update(
                 {
                     "executed": True,
-                    "mode": "error",
-                    "error": str(exc),
+                    "mode": "fallback",
+                    "error": _friendly_live_sync_error(exc),
                 }
             )
 
@@ -1152,7 +1182,8 @@ def search_inventory(
         stmt = stmt.where(Vehicle.odometer >= min_miles)
     if max_miles is not None:
         stmt = stmt.where(Vehicle.odometer <= max_miles)
-    stmt = stmt.where(or_(auction_expr, dom_expr >= effective_min_dom))
+    if effective_min_dom is not None:
+        stmt = stmt.where(or_(auction_expr, dom_expr >= effective_min_dom))
     if max_dom is not None:
         stmt = stmt.where(or_(auction_expr, dom_expr <= max_dom))
     if has_images is True:
@@ -1402,7 +1433,7 @@ def wordpress_inventory_export(
             total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
         except Exception as exc:  # pragma: no cover
             db.rollback()
-            topup = {"executed": True, "error": str(exc)}
+            topup = {"executed": True, "error": _friendly_live_sync_error(exc)}
 
     sort_columns = {
         "updated_at": Vehicle.updated_at,
@@ -1420,7 +1451,7 @@ def wordpress_inventory_export(
     items = [_serialize_wordpress_vehicle(db, row) for row in rows]
     price_stats_enriched = False
 
-    if include_price_stats and settings.has_marketcheck and items:
+    if include_price_stats and items:
         try:
             _attach_marketcheck_price_stats(_marketcheck_client(), items)
             price_stats_enriched = True

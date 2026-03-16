@@ -1,5 +1,7 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { DannyChat } from "@/components/DannyChat";
@@ -8,13 +10,35 @@ import { QuickMatchForm } from "@/components/QuickMatchForm";
 import { Recommendation, RecommendationCards } from "@/components/RecommendationCards";
 import { apiFetch } from "@/lib/api";
 import { AuthState, clearAuthState, loadAuthState, saveAuthState } from "@/lib/auth";
+import { toPublicSourceLabel } from "@/lib/sourceLabels";
+
+type DisplayMode = "MARKETING" | "INSPECTION_PENDING" | "INSPECTION_REPORT";
+type InspectionStatus = "NOT_STARTED" | "PENDING" | "INGESTED" | "NORMALIZED" | "VERIFIED" | "FAILED";
+
+type DealSummary = {
+  id: string;
+  stage: string;
+  funding_state: string;
+  condition_report_eligible: boolean;
+  condition_report_eligibility_reason: string | null;
+  assigned_agent: string | null;
+  human_checkpoint_required: boolean;
+  selected_vin: string | null;
+  delivered_at: string | null;
+  closed_at: string | null;
+};
 
 type GarageItem = {
   id: string;
   vin: string;
   status: string;
+  source: string;
+  added_at: string | null;
+  updated_at: string | null;
+  acquisition_started_at: string | null;
   deal_stage: string;
-  inspection_status: string;
+  display_mode: DisplayMode;
+  inspection_status: InspectionStatus;
   has_inspection_report: boolean;
   vehicle: {
     year?: number | null;
@@ -22,26 +46,34 @@ type GarageItem = {
     model?: string | null;
     trim?: string | null;
     price_asking?: number | null;
+    odometer?: number | null;
     location_state?: string | null;
     location_zip?: string | null;
     source_type?: string | null;
+    thumbnail?: string | null;
   };
 };
 
-export function DashboardShell() {
+const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
+
+export function DashboardShell({ requestedVin }: { requestedVin?: string | null }) {
   const [auth, setAuth] = useState<AuthState | null>(null);
-  const [dealStage, setDealStage] = useState("LEAD");
+  const [deal, setDeal] = useState<DealSummary | null>(null);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [notifications, setNotifications] = useState<{ id: string; message: string }[]>([]);
   const [garageItems, setGarageItems] = useState<GarageItem[]>([]);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [garageMessage, setGarageMessage] = useState<string | null>(null);
   const [garageError, setGarageError] = useState<string | null>(null);
   const [garageActionVin, setGarageActionVin] = useState<string | null>(null);
   const [email, setEmail] = useState("buyer@example.com");
   const [password, setPassword] = useState("BuyerPass123!");
   const [loading, setLoading] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   const isAuthenticated = useMemo(() => Boolean(auth?.accessToken), [auth]);
+  const normalizedRequestedVin = requestedVin?.trim().toUpperCase() || null;
 
   useEffect(() => {
     const saved = loadAuthState();
@@ -52,7 +84,8 @@ export function DashboardShell() {
   }, []);
 
   async function login() {
-    setLoading(true);
+    setLoggingIn(true);
+    setLoginError(null);
     const response = await apiFetch<{
       user_id: string;
       access_token: string;
@@ -75,47 +108,82 @@ export function DashboardShell() {
       };
       setAuth(nextAuth);
       saveAuthState(nextAuth);
+    } else {
+      setLoginError(response.error?.message || "Unable to sign in.");
     }
-    setLoading(false);
+    setLoggingIn(false);
   }
 
   async function refreshData() {
     if (!auth?.accessToken) return;
 
-    const [deal, recs, notes, garage] = await Promise.all([
-      apiFetch<{ stage: string }>("/me/deal", {}, auth.accessToken),
+    setLoading(true);
+    setDashboardError(null);
+    setGarageError(null);
+
+    const [dealResponse, recs, notes, garage] = await Promise.all([
+      apiFetch<DealSummary>("/me/deal", {}, auth.accessToken),
       apiFetch<Recommendation[]>("/me/recommendations", {}, auth.accessToken),
       apiFetch<{ id: string; message: string }[]>("/me/notifications", {}, auth.accessToken),
       apiFetch<GarageItem[]>("/me/garage", {}, auth.accessToken)
     ]);
 
-    if (deal.status === "ok") setDealStage(deal.data.stage);
-    if (recs.status === "ok") setRecommendations(recs.data || []);
-    if (notes.status === "ok") setNotifications(notes.data || []);
-    if (garage.status === "ok") setGarageItems(garage.data || []);
+    if (dealResponse.status === "ok") {
+      setDeal(dealResponse.data);
+    } else {
+      setDashboardError(dealResponse.error?.message || "Unable to load deal state.");
+    }
+
+    if (recs.status === "ok") {
+      setRecommendations(recs.data || []);
+    } else {
+      setDashboardError((current) => current || recs.error?.message || "Unable to load recommendations.");
+    }
+
+    if (notes.status === "ok") {
+      setNotifications(notes.data || []);
+    } else {
+      setDashboardError((current) => current || notes.error?.message || "Unable to load notifications.");
+    }
+
+    if (garage.status === "ok") {
+      setGarageItems(garage.data || []);
+    } else {
+      setGarageItems([]);
+      setGarageError(garage.error?.message || "Unable to load garage.");
+    }
+
+    setLoading(false);
   }
 
   useEffect(() => {
-    // Refresh dashboard state when the authenticated session changes.
     void refreshData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth?.accessToken]);
 
   async function selectVehicle(vin: string) {
     if (!auth?.accessToken) return;
-    await apiFetch(`/me/recommendations/${vin}/select`, { method: "POST" }, auth.accessToken);
+    const response = await apiFetch(`/me/recommendations/${vin}/select`, { method: "POST" }, auth.accessToken);
+    if (response.status !== "ok") {
+      setDashboardError(response.error?.message || "Unable to select vehicle.");
+      return;
+    }
     await refreshData();
   }
 
   async function favoriteVehicle(vin: string) {
     if (!auth?.accessToken) return;
-    await apiFetch(`/me/recommendations/${vin}/favorite`, { method: "POST" }, auth.accessToken);
+    const response = await apiFetch(`/me/recommendations/${vin}/favorite`, { method: "POST" }, auth.accessToken);
+    if (response.status !== "ok") {
+      setDashboardError(response.error?.message || "Unable to favorite vehicle.");
+      return;
+    }
     await refreshData();
   }
 
   async function initiateReturn() {
     if (!auth?.accessToken) return;
-    await apiFetch(
+    const response = await apiFetch(
       "/me/return/initiate",
       {
         method: "POST",
@@ -123,6 +191,10 @@ export function DashboardShell() {
       },
       auth.accessToken
     );
+    if (response.status !== "ok") {
+      setDashboardError(response.error?.message || "Unable to initiate return.");
+      return;
+    }
     await refreshData();
   }
 
@@ -167,9 +239,32 @@ export function DashboardShell() {
     setGarageActionVin(null);
   }
 
+  async function removeFromGarage(vin: string) {
+    if (!auth?.accessToken) return;
+    setGarageActionVin(vin);
+    setGarageError(null);
+    setGarageMessage(null);
+    const response = await apiFetch(`/me/garage/${vin}`, { method: "DELETE" }, auth.accessToken);
+    if (response.status !== "ok") {
+      setGarageError(response.error?.message || "Unable to remove vehicle from garage.");
+      setGarageActionVin(null);
+      return;
+    }
+    setGarageItems((current) => current.filter((item) => item.vin !== vin));
+    setGarageMessage("Vehicle removed from My Garage.");
+    setGarageActionVin(null);
+  }
+
+  const spotlightVin = normalizedRequestedVin || deal?.selected_vin || garageItems[0]?.vin || null;
+  const spotlightItem = garageItems.find((item) => item.vin === spotlightVin) || garageItems[0] || null;
+  const selectedGarageItem = deal?.selected_vin ? garageItems.find((item) => item.vin === deal.selected_vin) : null;
+  const auctionGarageCount = garageItems.filter(
+    (item) => item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction"
+  ).length;
+
   if (!isAuthenticated) {
     return (
-      <div className="card" style={{ maxWidth: 480, margin: "2rem auto" }}>
+      <div className="card dashboard-login-card">
         <h2>Client Dashboard Login</h2>
         <p>Use seeded credentials for local MVP walkthrough.</p>
         <label>
@@ -185,8 +280,9 @@ export function DashboardShell() {
             onChange={(event) => setPassword(event.target.value)}
           />
         </label>
-        <button className="button" disabled={loading} onClick={login}>
-          {loading ? "Signing in..." : "Sign In"}
+        {loginError ? <p className="dashboard-error">{loginError}</p> : null}
+        <button className="button" disabled={loggingIn} onClick={login}>
+          {loggingIn ? "Signing in..." : "Sign In"}
         </button>
       </div>
     );
@@ -195,13 +291,20 @@ export function DashboardShell() {
   const accessToken = auth?.accessToken ?? "";
 
   return (
-    <div className="grid" style={{ gap: 16 }}>
-      <section className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2>Deal Lifecycle Tracker</h2>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button className="button ghost" onClick={refreshData}>
-              Refresh
+    <div className="dashboard-shell">
+      <section className="card dashboard-overview">
+        <div className="dashboard-overview-head">
+          <div className="dashboard-overview-copy">
+            <p className="section-eyebrow">Deal Workspace</p>
+            <h2>Track the buyer journey, keep saved units organized, and move the active car forward.</h2>
+            <p className="muted-copy">
+              The dashboard uses the same account session as VInventory. Saved vehicles, condition reports, and
+              acquisition state stay in sync here.
+            </p>
+          </div>
+          <div className="dashboard-toolbar">
+            <button className="button ghost" onClick={refreshData} disabled={loading}>
+              {loading ? "Refreshing..." : "Refresh"}
             </button>
             <button
               className="button ghost"
@@ -214,57 +317,219 @@ export function DashboardShell() {
             </button>
           </div>
         </div>
-        <DealTracker stage={dealStage} />
+
+        <div className="dashboard-kpis">
+          <article className="metric">
+            <strong>{garageItems.length}</strong>
+            <span>Saved in garage</span>
+          </article>
+          <article className="metric">
+            <strong>{auctionGarageCount}</strong>
+            <span>Auction units</span>
+          </article>
+          <article className="metric">
+            <strong>{deal?.stage ? deal.stage.replaceAll("_", " ") : "Loading"}</strong>
+            <span>Current deal stage</span>
+          </article>
+          <article className="metric">
+            <strong>{selectedGarageItem ? garageTitle(selectedGarageItem) : "None selected"}</strong>
+            <span>Current acquisition target</span>
+          </article>
+        </div>
+
+        {dashboardError ? <p className="dashboard-error">{dashboardError}</p> : null}
+        {deal?.human_checkpoint_required ? (
+          <p className="dashboard-warning">A human checkpoint is required before the deal can advance automatically.</p>
+        ) : null}
+        {deal && !deal.condition_report_eligible ? (
+          <p className="dashboard-muted-note">
+            Condition reports are gated at the current deal stage. {deal.condition_report_eligibility_reason}
+          </p>
+        ) : null}
+        {normalizedRequestedVin && !garageItems.some((item) => item.vin === normalizedRequestedVin) ? (
+          <p className="dashboard-warning">
+            Requested VIN {normalizedRequestedVin} is not currently in My Garage. Showing the latest saved vehicle instead.
+          </p>
+        ) : null}
       </section>
 
       <section className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <h2 style={{ margin: 0 }}>My Garage</h2>
-          <span className="badge">{garageItems.length} saved</span>
+          <h2 style={{ margin: 0 }}>Deal Lifecycle Tracker</h2>
+          {deal?.assigned_agent ? <span className="badge">Assigned agent: {deal.assigned_agent}</span> : null}
         </div>
-        {garageError ? <p style={{ color: "#b42318", margin: 0 }}>{garageError}</p> : null}
-        {garageMessage ? <p style={{ color: "#027a48", margin: 0 }}>{garageMessage}</p> : null}
-        {!garageItems.length ? (
-          <p style={{ marginBottom: 0 }}>Saved auction and inventory vehicles will appear here.</p>
-        ) : (
-          <div className="inventory-garage-grid">
-            {garageItems.map((item) => (
-              <article key={item.id} className="inventory-garage-item">
-                <div>
-                  <strong>{garageTitle(item)}</strong>
-                  <p style={{ margin: 0 }}>
-                    {formatMoney(item.vehicle.price_asking)} | {garageLocation(item)}
-                  </p>
-                  <p style={{ margin: 0 }}>VIN: {item.vin}</p>
-                  <p style={{ margin: 0 }}>Status: {item.status}</p>
-                  <p style={{ margin: 0 }}>Inspection: {item.inspection_status}</p>
-                </div>
-                <div className="inventory-actions">
-                  <a className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}`}>
-                    Open
-                  </a>
-                  {item.has_inspection_report ? (
-                    <a className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}/condition-report`}>
-                      View Report
-                    </a>
-                  ) : null}
-                  {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") && !item.has_inspection_report ? (
-                    <button
-                      className="button ghost"
-                      onClick={() => requestConditionReport(item.vin)}
-                      disabled={garageActionVin === item.vin}
-                    >
-                      {garageActionVin === item.vin ? "Requesting..." : "Condition Report"}
-                    </button>
-                  ) : null}
-                  <button className="button" onClick={() => startGarageAcquisition(item.vin)} disabled={garageActionVin === item.vin}>
-                    {garageActionVin === item.vin ? "Starting..." : "Start Acquisition"}
-                  </button>
-                </div>
-              </article>
-            ))}
+        <DealTracker stage={deal?.stage || "LEAD"} />
+      </section>
+
+      <section className="dashboard-garage-layout">
+        <section className="card inventory-garage">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+            <div>
+              <h2 style={{ margin: 0 }}>My Garage</h2>
+              <p className="dashboard-muted-note" style={{ marginBottom: 0 }}>
+                Saved auction and inventory vehicles stay attached to the active deal.
+              </p>
+            </div>
+            <span className="badge">{garageItems.length} saved</span>
           </div>
-        )}
+          {garageError ? <p className="dashboard-error">{garageError}</p> : null}
+          {garageMessage ? <p className="dashboard-success">{garageMessage}</p> : null}
+          {!garageItems.length ? (
+            <div className="dashboard-empty-state">
+              <p style={{ margin: 0 }}>No vehicles saved yet.</p>
+              <Link className="button" href="/vinventory">
+                Browse Inventory
+              </Link>
+            </div>
+          ) : (
+            <div className="inventory-garage-grid">
+              {garageItems.map((item) => {
+                const isSpotlight = item.vin === spotlightItem?.vin;
+                const isSelected = item.vin === deal?.selected_vin;
+                const itemActionLoading = garageActionVin === item.vin;
+
+                return (
+                  <article
+                    key={item.id}
+                    className={`inventory-garage-item dashboard-garage-item${isSpotlight ? " is-spotlight" : ""}`}
+                  >
+                    <div className="dashboard-garage-item-copy">
+                      <div className="dashboard-garage-item-head">
+                        <strong>{garageTitle(item)}</strong>
+                        <div className="dashboard-garage-badges">
+                          {isSelected ? <span className="badge">Selected</span> : null}
+                          {isSpotlight ? <span className="badge">Focused</span> : null}
+                          <span className="badge">{statusLabel(item.status)}</span>
+                        </div>
+                      </div>
+                      <p style={{ margin: 0 }}>
+                        {formatMoney(item.vehicle.price_asking)} | {garageLocation(item)}
+                      </p>
+                      <p style={{ margin: 0 }}>VIN: {item.vin}</p>
+                      <p style={{ margin: 0 }}>
+                        {displayModeLabel(item.display_mode)} | {inspectionStatusLabel(item.inspection_status)}
+                      </p>
+                      <p style={{ margin: 0 }}>
+                        Added {formatDate(item.added_at)} | Updated {formatDate(item.updated_at)}
+                      </p>
+                    </div>
+                    <div className="inventory-actions">
+                      <Link className="button ghost" href={`/dashboard?vin=${encodeURIComponent(item.vin)}`}>
+                        Focus
+                      </Link>
+                      <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}`}>
+                        Open
+                      </Link>
+                      {item.has_inspection_report ? (
+                        <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}/condition-report`}>
+                          View Report
+                        </Link>
+                      ) : null}
+                      {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
+                      !item.has_inspection_report ? (
+                        <button
+                          className="button ghost"
+                          onClick={() => requestConditionReport(item.vin)}
+                          disabled={itemActionLoading}
+                        >
+                          {itemActionLoading ? "Requesting..." : "Condition Report"}
+                        </button>
+                      ) : null}
+                      <button className="button" onClick={() => startGarageAcquisition(item.vin)} disabled={itemActionLoading}>
+                        {itemActionLoading ? "Starting..." : "Start Acquisition"}
+                      </button>
+                      <button className="button ghost" onClick={() => removeFromGarage(item.vin)} disabled={itemActionLoading}>
+                        Remove
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <aside className="card dashboard-spotlight">
+          <div className="dashboard-spotlight-head">
+            <div>
+              <p className="section-eyebrow">Garage Spotlight</p>
+              <h2>{spotlightItem ? garageTitle(spotlightItem) : "Waiting for a saved vehicle"}</h2>
+            </div>
+            {spotlightItem?.vin === deal?.selected_vin ? <span className="badge">Primary acquisition target</span> : null}
+          </div>
+
+          {spotlightItem ? (
+            <>
+              <div className="dashboard-spotlight-media">
+                <img
+                  src={spotlightItem.vehicle.thumbnail || FALLBACK_IMAGE}
+                  alt={garageTitle(spotlightItem)}
+                />
+              </div>
+              <div className="dashboard-spotlight-facts">
+                <div className="vinv-modal-data-row">
+                  <span>Deal stage</span>
+                  <strong>{spotlightItem.deal_stage.replaceAll("_", " ")}</strong>
+                </div>
+                <div className="vinv-modal-data-row">
+                  <span>Status</span>
+                  <strong>{statusLabel(spotlightItem.status)}</strong>
+                </div>
+                <div className="vinv-modal-data-row">
+                  <span>Inspection</span>
+                  <strong>{inspectionStatusLabel(spotlightItem.inspection_status)}</strong>
+                </div>
+                <div className="vinv-modal-data-row">
+                  <span>Source</span>
+                  <strong>{sourceLabel(spotlightItem.vehicle.source_type)}</strong>
+                </div>
+                <div className="vinv-modal-data-row">
+                  <span>Ask</span>
+                  <strong>{formatMoney(spotlightItem.vehicle.price_asking)}</strong>
+                </div>
+                <div className="vinv-modal-data-row">
+                  <span>Odometer</span>
+                  <strong>{formatMileage(spotlightItem.vehicle.odometer)}</strong>
+                </div>
+              </div>
+              <div className="dashboard-spotlight-copy">
+                <p className="dashboard-spotlight-summary">
+                  {garageLocation(spotlightItem)} | VIN {spotlightItem.vin}
+                </p>
+                <p className="dashboard-muted-note">
+                  Added {formatDate(spotlightItem.added_at)}
+                  {spotlightItem.acquisition_started_at
+                    ? ` • Acquisition started ${formatDate(spotlightItem.acquisition_started_at)}`
+                    : ""}
+                </p>
+              </div>
+              <div className="inventory-actions">
+                <Link className="button ghost" href={`/vinventory/${encodeURIComponent(spotlightItem.vin)}`}>
+                  Open Detail
+                </Link>
+                {spotlightItem.has_inspection_report ? (
+                  <Link className="button ghost" href={`/vinventory/${encodeURIComponent(spotlightItem.vin)}/condition-report`}>
+                    View Report
+                  </Link>
+                ) : null}
+                <button
+                  className="button"
+                  onClick={() => startGarageAcquisition(spotlightItem.vin)}
+                  disabled={garageActionVin === spotlightItem.vin}
+                >
+                  {garageActionVin === spotlightItem.vin ? "Starting..." : "Start Acquisition"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="dashboard-empty-state">
+              <p style={{ margin: 0 }}>Save a vehicle from VInventory to populate the garage spotlight.</p>
+              <Link className="button" href="/vinventory">
+                Go to Inventory
+              </Link>
+            </div>
+          )}
+        </aside>
       </section>
 
       <QuickMatchForm accessToken={accessToken} onCompleted={refreshData} />
@@ -279,11 +544,7 @@ export function DashboardShell() {
 
         <div className="card">
           <h3>Notifications</h3>
-          {notifications.length ? (
-            notifications.map((n) => <p key={n.id}>{n.message}</p>)
-          ) : (
-            <p>No notifications yet.</p>
-          )}
+          {notifications.length ? notifications.map((note) => <p key={note.id}>{note.message}</p>) : <p>No notifications yet.</p>}
           <button className="button" onClick={initiateReturn}>
             Initiate 7-Day Return
           </button>
@@ -300,6 +561,36 @@ function garageTitle(item: GarageItem): string {
 
 function garageLocation(item: GarageItem): string {
   return `${item.vehicle.location_state || "NA"} ${item.vehicle.location_zip || ""}`.trim();
+}
+
+function displayModeLabel(mode: DisplayMode): string {
+  return mode.replaceAll("_", " ");
+}
+
+function inspectionStatusLabel(status: InspectionStatus): string {
+  return status.replaceAll("_", " ");
+}
+
+function statusLabel(status: string): string {
+  return status.replaceAll("_", " ");
+}
+
+function sourceLabel(value: string | null | undefined): string {
+  return toPublicSourceLabel(value);
+}
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) return "N/A";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  }).format(new Date(value));
+}
+
+function formatMileage(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "N/A";
+  return `${value.toLocaleString()} mi`;
 }
 
 function formatMoney(value: number | null | undefined): string {

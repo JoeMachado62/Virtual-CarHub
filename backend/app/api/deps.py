@@ -35,6 +35,14 @@ def get_current_deal(
     return get_or_create_active_deal(db, current_user.id)
 
 
+def is_admin_user(user: User) -> bool:
+    """Check if user has admin privileges"""
+    # For now, we'll use email domain check. In production, add a proper role field.
+    admin_domains = ["virtualcarhub.com", "admin.virtualcarhub.com"]
+    email_domain = user.email.split("@")[-1].lower()
+    return email_domain in admin_domains
+
+
 def require_service_token(x_service_token: str | None = Header(default=None)) -> None:
     if x_service_token != settings.service_token:
         raise HTTPException(

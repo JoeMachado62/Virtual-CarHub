@@ -1,6 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -21,8 +22,30 @@ function isActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function resolveLogoPath(theme: string | undefined) {
+  return theme === "light" ? "/assets/images/logo/VCH Logo.png" : "/assets/images/logo/VirtualCarHub white.png";
+}
+
 export function SiteChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const [logoPath, setLogoPath] = useState("/assets/images/logo/VirtualCarHub white.png");
+  const isEmbedRoute = pathname.startsWith("/embed/");
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const syncLogo = () => setLogoPath(resolveLogoPath(root.dataset.theme));
+
+    syncLogo();
+
+    const observer = new MutationObserver(syncLogo);
+    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+
+    return () => observer.disconnect();
+  }, []);
+
+  if (isEmbedRoute) {
+    return <div className="page-body page-body-embed">{children}</div>;
+  }
 
   return (
     <>
@@ -48,7 +71,7 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
         <div className="navbar-shell">
           <div className="shell navbar">
             <Link href="/" className="brand-lockup">
-              <img src="/assets/images/logo/logo-w.svg" alt="VirtualCarHub" className="brand-mark" />
+              <img src={logoPath} alt="VirtualCarHub" className="brand-mark" />
             </Link>
 
             <nav className="site-nav" aria-label="Primary">
@@ -82,7 +105,7 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
       <footer className="site-footer">
         <div className="shell footer-grid">
           <section>
-            <img src="/assets/images/logo/logo-w.svg" alt="VirtualCarHub" className="footer-logo" />
+            <img src={logoPath} alt="VirtualCarHub" className="footer-logo" />
             <p className="footer-copy">
               VirtualCarHub is the AI-first wholesale buying experience built around transparency, speed, and buyer
               control.

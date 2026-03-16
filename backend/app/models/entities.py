@@ -40,6 +40,9 @@ class User(Base, TimestampMixin):
     last_name: Mapped[str | None] = mapped_column(String(120))
     phone: Mapped[str | None] = mapped_column(String(30))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_preapproved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # Manual admin override
+    preapproved_amount: Mapped[float | None] = mapped_column(Float)  # Max approved loan amount
+    preapproved_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # Expiration date
 
     profile: Mapped[BuyerProfile | None] = relationship(back_populates="user", uselist=False)
     deals: Mapped[list[Deal]] = relationship(back_populates="user")
@@ -78,6 +81,15 @@ class Deal(Base, TimestampMixin):
     ghl_opportunity_id: Mapped[str | None] = mapped_column(String(80), index=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Document tracking fields
+    documents_collected: Mapped[dict] = mapped_column(JSON, default=dict)  # Track document types and GHL URLs
+    preapproval_letter_url: Mapped[str | None] = mapped_column(String(500))  # Direct link to pre-approval letter
+    loan_documents_url: Mapped[str | None] = mapped_column(String(500))  # Direct link to loan docs
+    identity_verified: Mapped[bool] = mapped_column(Boolean, default=False)  # ID verification status
+    income_verified: Mapped[bool] = mapped_column(Boolean, default=False)  # Income verification status
+    external_financing_bank: Mapped[str | None] = mapped_column(String(120))  # Bank name for external financing
+    external_financing_status: Mapped[str | None] = mapped_column(String(50))  # Status of external loan
 
     user: Mapped[User] = relationship(back_populates="deals")
     matches: Mapped[list[VehicleMatch]] = relationship(back_populates="deal")

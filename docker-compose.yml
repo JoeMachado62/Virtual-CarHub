@@ -40,7 +40,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     environment:
-      NEXT_PUBLIC_API_BASE: http://localhost:8000/v1
+      NEXT_PUBLIC_API_BASE: /v1
       NEXT_PUBLIC_SERVICE_TOKEN: dev-service-token
     ports:
       - "3004:3000"

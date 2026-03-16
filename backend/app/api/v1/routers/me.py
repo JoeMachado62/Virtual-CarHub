@@ -63,9 +63,18 @@ def _deal_stage_at_or_before(stage: DealState, target: DealState) -> bool:
         return False
 
 
-def _condition_report_eligibility(deal) -> tuple[bool, str]:
+def _condition_report_eligibility(deal, user) -> tuple[bool, str]:
+    # Check if user has manual pre-approval override
+    if user.is_preapproved:
+        # Check if pre-approval hasn't expired
+        if user.preapproved_until and user.preapproved_until < datetime.now(UTC):
+            return False, "Pre-approval has expired. Please contact support to renew."
+        return True, "Eligible to request a VCH condition report (pre-approved buyer)."
+
+    # Check standard funding state eligibility
     if deal.funding_state in CONDITION_REPORT_ELIGIBLE_FUNDING_STATES:
         return True, "Eligible to request a VCH condition report."
+
     return False, "Condition/inspection report requests require a pre-approved buyer account."
 
 
@@ -520,7 +529,7 @@ def request_vehicle_condition_report(
     current_deal=Depends(get_current_deal),
 ) -> dict:
     normalized_vin = _normalize_vin(vin)
-    eligible, reason = _condition_report_eligibility(current_deal)
+    eligible, reason = _condition_report_eligibility(current_deal, current_user)
     if not eligible:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
 

@@ -523,7 +523,7 @@
                     ' new / ' + (state.sync.updated || 0) +
                     ' updated / ' + synced + ' filtered';
             } else if (!currentFilters().zip_code) {
-                el.syncBadge.textContent = 'Local Search | Add ZIP for MarketCheck';
+                el.syncBadge.textContent = 'Local Search | Add ZIP for Wholesale';
             } else {
                 el.syncBadge.textContent = 'Local Search';
             }

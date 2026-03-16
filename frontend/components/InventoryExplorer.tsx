@@ -8,7 +8,8 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
-import { AuthState, clearAuthState, loadAuthState, saveAuthState } from "@/lib/auth";
+import { AuthState, clearAuthState, loadAuthState } from "@/lib/auth";
+import { normalizeSourceFilterValue, toPublicSourceLabel } from "@/lib/sourceLabels";
 
 type DisplayMode = "MARKETING" | "INSPECTION_PENDING" | "INSPECTION_REPORT";
 type InspectionStatus = "NOT_STARTED" | "PENDING" | "INGESTED" | "NORMALIZED" | "VERIFIED" | "FAILED";
@@ -39,6 +40,8 @@ type InventoryItem = {
   location_state?: string | null;
   location_zip?: string | null;
   source_type?: string | null;
+  source_filter_value?: string | null;
+  source_label?: string | null;
   source_url?: string | null;
   thumbnail?: string | null;
   images_count?: number;
@@ -129,6 +132,28 @@ type InventorySearchPayload = {
   sync?: SyncMeta;
 };
 
+type FacetBucket = {
+  item: string;
+  count: number;
+};
+
+type InventoryFacetPayload = {
+  source: string;
+  num_found: number;
+  facets: Record<string, FacetBucket[]>;
+  taxonomy: {
+    source: string;
+    years: FacetBucket[];
+    make: FacetBucket[];
+    model: FacetBucket[];
+    trim: FacetBucket[];
+    lookup?: {
+      models_by_make?: Record<string, string[]>;
+      trims_by_make_model?: Record<string, string[]>;
+    };
+  };
+};
+
 type GarageItem = {
   id: string;
   vin: string;
@@ -160,9 +185,12 @@ type FilterState = {
   q: string;
   make: string;
   model: string;
+  trim: string;
   body_type: string;
   source_type: string;
   state: string;
+  zip_code: string;
+  radius: string;
   min_price: string;
   max_price: string;
   min_year: string;
@@ -179,9 +207,12 @@ const INITIAL_FILTERS: FilterState = {
   q: "",
   make: "",
   model: "",
+  trim: "",
   body_type: "",
   source_type: "",
   state: "",
+  zip_code: "",
+  radius: "50",
   min_price: "",
   max_price: "",
   min_year: "",
@@ -217,14 +248,26 @@ const EMPTY_SYNC: SyncMeta = {
 };
 
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
+const SEARCH_CONTEXT_KEY = "vch:inventory:search-context";
+const LIVE_SYNC_FALLBACK_MESSAGE = "Live wholesale sync is temporarily unavailable. Showing saved inventory results.";
+
+function sanitizeSyncWarning(message?: string | null): string | null {
+  if (!message) return null;
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes("api.marketcheck.com") ||
+    normalized.includes("client error") ||
+    normalized.includes("for url") ||
+    normalized.includes("api_key=")
+  ) {
+    return LIVE_SYNC_FALLBACK_MESSAGE;
+  }
+  return message;
+}
 
 export function InventoryExplorer() {
   const searchParams = useSearchParams();
   const [auth, setAuth] = useState<AuthState | null>(null);
-  const [authEmail, setAuthEmail] = useState("buyer@example.com");
-  const [authPassword, setAuthPassword] = useState("BuyerPass123!");
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
 
   const [filters, setFilters] = useState<FilterState>(INITIAL_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<FilterState>(INITIAL_FILTERS);
@@ -232,6 +275,7 @@ export function InventoryExplorer() {
   const [rows, setRows] = useState<InventoryItem[]>([]);
   const [pagination, setPagination] = useState<Pagination>(EMPTY_PAGINATION);
   const [syncMeta, setSyncMeta] = useState<SyncMeta>(EMPTY_SYNC);
+  const [taxonomy, setTaxonomy] = useState<InventoryFacetPayload["taxonomy"] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -251,13 +295,29 @@ export function InventoryExplorer() {
     const saved = loadAuthState();
     if (saved) {
       setAuth(saved);
-      if (saved.email) setAuthEmail(saved.email);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SEARCH_CONTEXT_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<Pick<FilterState, "zip_code" | "radius">>;
+      if (!parsed.zip_code && !parsed.radius) return;
+      const nextFilters = {
+        ...INITIAL_FILTERS,
+        ...parsed,
+      };
+      setFilters((prev) => ({ ...prev, ...nextFilters }));
+      setAppliedFilters((prev) => ({ ...prev, ...nextFilters }));
+    } catch {
+      return;
     }
   }, []);
 
   useEffect(() => {
     const q = searchParams.get("q") || "";
-    const sourceType = searchParams.get("source_type") || "";
+    const sourceType = normalizeSourceFilterValue(searchParams.get("source_type"));
     if (!q && !sourceType) return;
 
     const nextFilters = {
@@ -270,6 +330,11 @@ export function InventoryExplorer() {
   }, [searchParams]);
 
   useEffect(() => {
+    void loadFacets(filters);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.make, filters.model, filters.min_year, filters.max_year, filters.has_images]);
+
+  useEffect(() => {
     void loadInventory(appliedFilters, page);
   }, [appliedFilters, page]);
 
@@ -280,6 +345,7 @@ export function InventoryExplorer() {
       setGarageItems([]);
       setGarageError(null);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth?.accessToken]);
 
   useEffect(() => {
@@ -292,50 +358,97 @@ export function InventoryExplorer() {
     return () => window.removeEventListener("keydown", onEscape);
   }, []);
 
-  async function login() {
-    setAuthLoading(true);
-    setAuthError(null);
-    const response = await apiFetch<{
-      user_id: string;
-      access_token: string;
-      refresh_token: string;
-      token_type: string;
-    }>("/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email: authEmail, password: authPassword }),
-    });
-    if (response.status !== "ok") {
-      setAuthError(response.error?.message || "Unable to sign in.");
-      setAuthLoading(false);
-      return;
-    }
-
-    const nextAuth: AuthState = {
-      userId: response.data.user_id,
-      email: authEmail,
-      accessToken: response.data.access_token,
-      refreshToken: response.data.refresh_token,
-    };
-    setAuth(nextAuth);
-    saveAuthState(nextAuth);
-    setAuthLoading(false);
-  }
-
   function signOut() {
     clearAuthState();
     setAuth(null);
   }
 
+  function handleUnauthorized(response: { error: { code: string; message: string } | null }): boolean {
+    if (response.error?.code !== "HTTP_401") return false;
+    signOut();
+    setGarageNotice(null);
+    setGarageError("Your session expired. Sign in again from My Garage.");
+    return true;
+  }
+
+  function persistSearchContext(nextFilters: FilterState) {
+    try {
+      window.localStorage.setItem(
+        SEARCH_CONTEXT_KEY,
+        JSON.stringify({
+          zip_code: nextFilters.zip_code,
+          radius: nextFilters.radius || "50",
+        })
+      );
+    } catch {
+      return;
+    }
+  }
+
+  function updateFilters(updater: (current: FilterState) => FilterState) {
+    setFilters((current) => {
+      const next = updater(current);
+      persistSearchContext(next);
+      return next;
+    });
+  }
+
+  async function loadFacets(currentFilters: FilterState) {
+    const params = new URLSearchParams();
+    if (currentFilters.make.trim()) params.set("make", currentFilters.make.trim());
+    if (currentFilters.model.trim()) params.set("model", currentFilters.model.trim());
+    if (currentFilters.trim.trim()) params.set("trim", currentFilters.trim.trim());
+    if (currentFilters.min_year.trim()) params.set("min_year", currentFilters.min_year.trim());
+    if (currentFilters.max_year.trim()) params.set("max_year", currentFilters.max_year.trim());
+    if (currentFilters.body_type.trim()) params.set("body_type", currentFilters.body_type.trim());
+    if (currentFilters.state.trim()) params.set("state", currentFilters.state.trim().toUpperCase());
+    if (currentFilters.source_type.trim()) {
+      params.set("source_type", normalizeSourceFilterValue(currentFilters.source_type));
+    }
+    if (currentFilters.zip_code.trim()) params.set("zip_code", currentFilters.zip_code.trim());
+    if (currentFilters.radius.trim()) params.set("radius", currentFilters.radius.trim());
+    params.set("has_images", currentFilters.has_images ? "true" : "false");
+    params.set("use_marketcheck", "false");
+
+    const response = await apiFetch<InventoryFacetPayload>(`/inventory/facets?${params.toString()}`);
+    if (response.status !== "ok") {
+      return;
+    }
+    setTaxonomy(response.data.taxonomy);
+  }
+
   async function loadInventory(currentFilters: FilterState, currentPage: number) {
     setLoading(true);
     setError(null);
+
+    // For auction searches, ZIP code is optional since auction vehicles are nationwide
+    const isAuctionSearch = currentFilters.source_type === "auction";
+
+    if (!isAuctionSearch && !currentFilters.zip_code.trim()) {
+      setRows([]);
+      setPagination(EMPTY_PAGINATION);
+      setSyncMeta(EMPTY_SYNC);
+      setError("ZIP code is required to search inventory (except for auction vehicles).");
+      setLoading(false);
+      return;
+    }
+
     const params = new URLSearchParams();
     if (currentFilters.q.trim()) params.set("q", currentFilters.q.trim());
     if (currentFilters.make.trim()) params.set("make", currentFilters.make.trim());
     if (currentFilters.model.trim()) params.set("model", currentFilters.model.trim());
+    if (currentFilters.trim.trim()) params.set("trim", currentFilters.trim.trim());
     if (currentFilters.body_type.trim()) params.set("body_type", currentFilters.body_type.trim());
-    if (currentFilters.source_type.trim()) params.set("source_type", currentFilters.source_type.trim());
+    if (currentFilters.source_type.trim()) {
+      params.set("source_type", normalizeSourceFilterValue(currentFilters.source_type));
+    }
     if (currentFilters.state.trim()) params.set("state", currentFilters.state.trim().toUpperCase());
+
+    // Only add ZIP and radius for non-auction searches or if ZIP is provided
+    if (currentFilters.zip_code.trim()) {
+      params.set("zip_code", currentFilters.zip_code.trim());
+      if (currentFilters.radius.trim()) params.set("radius", currentFilters.radius.trim());
+    }
     if (currentFilters.min_price.trim()) params.set("min_price", currentFilters.min_price.trim());
     if (currentFilters.max_price.trim()) params.set("max_price", currentFilters.max_price.trim());
     if (currentFilters.min_year.trim()) params.set("min_year", currentFilters.min_year.trim());
@@ -371,6 +484,10 @@ export function InventoryExplorer() {
     setGarageError(null);
     setGarageNotice(null);
     const response = await apiFetch<GarageItem[]>("/me/garage", {}, accessToken);
+    if (handleUnauthorized(response)) {
+      setGarageLoading(false);
+      return;
+    }
     if (response.status !== "ok") {
       setGarageItems([]);
       setGarageError(response.error?.message || "Unable to load garage.");
@@ -381,8 +498,18 @@ export function InventoryExplorer() {
     setGarageLoading(false);
   }
 
-  function submitFilters(event: FormEvent) {
+  async function submitFilters(event: FormEvent) {
     event.preventDefault();
+
+    // For auction searches, ZIP code is optional
+    const isAuctionSearch = filters.source_type === "auction";
+
+    if (!isAuctionSearch && !filters.zip_code.trim()) {
+      setError("ZIP code is required to search inventory (except for auction vehicles).");
+      return;
+    }
+    await loadFacets(filters);
+    persistSearchContext(filters);
     setPage(1);
     setAppliedFilters({ ...filters });
   }
@@ -390,6 +517,7 @@ export function InventoryExplorer() {
   function resetFilters() {
     setFilters(INITIAL_FILTERS);
     setAppliedFilters(INITIAL_FILTERS);
+    persistSearchContext(INITIAL_FILTERS);
     setPage(1);
   }
 
@@ -447,6 +575,10 @@ export function InventoryExplorer() {
         deduplicated?: boolean;
       } | null;
     }>(`/me/garage/${encodeURIComponent(vin)}`, { method: "POST" }, session.accessToken);
+    if (handleUnauthorized(response)) {
+      setGarageActionVin(null);
+      return;
+    }
     if (response.status !== "ok") {
       setGarageError(response.error?.message || "Unable to save vehicle to garage.");
       setGarageActionVin(null);
@@ -477,6 +609,10 @@ export function InventoryExplorer() {
       { method: "DELETE" },
       session.accessToken
     );
+    if (handleUnauthorized(response)) {
+      setGarageActionVin(null);
+      return;
+    }
     if (response.status !== "ok") {
       setGarageError(response.error?.message || "Unable to remove vehicle from garage.");
       setGarageActionVin(null);
@@ -500,6 +636,10 @@ export function InventoryExplorer() {
         deduplicated?: boolean;
       } | null;
     }>(`/me/garage/${encodeURIComponent(vin)}/acquire`, { method: "POST" }, session.accessToken);
+    if (handleUnauthorized(response)) {
+      setGarageActionVin(null);
+      return;
+    }
     if (response.status !== "ok") {
       setGarageError(response.error?.message || "Unable to start acquisition.");
       setGarageActionVin(null);
@@ -535,6 +675,10 @@ export function InventoryExplorer() {
       message?: string;
     }>(`/me/vehicles/${encodeURIComponent(vin)}/condition-report-request`, { method: "POST" }, session.accessToken);
 
+    if (handleUnauthorized(response)) {
+      setGarageActionVin(null);
+      return;
+    }
     if (response.status !== "ok") {
       setGarageError(response.error?.message || "Unable to request condition report.");
       setGarageActionVin(null);
@@ -563,6 +707,7 @@ export function InventoryExplorer() {
   const selectedVehicleImages = resolveDisplayImages(selectedVehicle);
   const selectedVehiclePrimaryImage = selectedImage || resolveHeroImage(selectedVehicle) || selectedVehicleImages[0] || null;
   const garageVins = useMemo(() => new Set(garageItems.map((item) => item.vin)), [garageItems]);
+  const syncWarning = sanitizeSyncWarning(syncMeta.error);
 
   return (
     <>
@@ -570,48 +715,7 @@ export function InventoryExplorer() {
         <aside className="card inventory-sidebar">
           <div className="inventory-sidebar-head">
             <h2>Filter Vehicles</h2>
-            <span className="badge">CarGurus-style search</span>
           </div>
-
-          {!auth?.accessToken ? (
-            <section className="card" style={{ padding: 12, marginBottom: 10 }}>
-              <h3 style={{ marginTop: 0 }}>Account Login</h3>
-              <p style={{ marginTop: 0 }}>Sign in to save vehicles in your account garage.</p>
-              <label>
-                Email
-                <input className="input" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} />
-              </label>
-              <label>
-                Password
-                <input
-                  className="input"
-                  type="password"
-                  value={authPassword}
-                  onChange={(event) => setAuthPassword(event.target.value)}
-                />
-              </label>
-              {authError ? <p style={{ color: "#b42318", marginBottom: 0 }}>{authError}</p> : null}
-              <div className="inventory-actions" style={{ marginTop: 10 }}>
-                <button className="button" onClick={login} disabled={authLoading}>
-                  {authLoading ? "Signing in..." : "Sign In"}
-                </button>
-              </div>
-            </section>
-          ) : (
-            <section className="card" style={{ padding: 12, marginBottom: 10 }}>
-              <p style={{ marginTop: 0, marginBottom: 8 }}>
-                Signed in as <strong>{auth.email || "buyer"}</strong>
-              </p>
-              <div className="inventory-actions">
-                <button className="button ghost" onClick={() => loadGarage(auth.accessToken)} disabled={garageLoading}>
-                  Refresh Garage
-                </button>
-                <button className="button ghost" onClick={signOut}>
-                  Sign Out
-                </button>
-              </div>
-            </section>
-          )}
 
           <form onSubmit={submitFilters} className="inventory-filter-form">
             <label>
@@ -627,21 +731,102 @@ export function InventoryExplorer() {
             <div className="inventory-mini-grid">
               <label>
                 Make
-                <input
-                  className="input"
+                <select
+                  className="select"
                   value={filters.make}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, make: event.target.value }))}
-                />
+                  onChange={(event) =>
+                    updateFilters((prev) => ({
+                      ...prev,
+                      make: event.target.value,
+                      model: "",
+                      trim: "",
+                    }))
+                  }
+                >
+                  <option value="">Any Make</option>
+                  {(taxonomy?.make || []).map((bucket) => (
+                    <option key={bucket.item} value={bucket.item}>
+                      {bucket.item}
+                      {bucket.count ? ` (${bucket.count.toLocaleString()})` : ""}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
                 Model
-                <input
-                  className="input"
+                <select
+                  className="select"
                   value={filters.model}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, model: event.target.value }))}
-                />
+                  onChange={(event) =>
+                    updateFilters((prev) => ({
+                      ...prev,
+                      model: event.target.value,
+                      trim: "",
+                    }))
+                  }
+                  disabled={!filters.make}
+                >
+                  <option value="">{filters.make ? "Select Model" : "Choose Make First"}</option>
+                  {(taxonomy?.model || []).map((bucket) => (
+                    <option key={bucket.item} value={bucket.item}>
+                      {bucket.item}
+                      {bucket.count ? ` (${bucket.count.toLocaleString()})` : ""}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
+
+            <div className="inventory-mini-grid">
+              <label>
+                Trim
+                <select
+                  className="select"
+                  value={filters.trim}
+                  onChange={(event) => updateFilters((prev) => ({ ...prev, trim: event.target.value }))}
+                  disabled={!filters.make || !filters.model}
+                >
+                  <option value="">{filters.model ? "Any Trim" : "Choose Model First"}</option>
+                  {(taxonomy?.trim || []).map((bucket) => (
+                    <option key={bucket.item} value={bucket.item}>
+                      {bucket.item}
+                      {bucket.count ? ` (${bucket.count.toLocaleString()})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Radius
+                <select
+                  className="select"
+                  value={filters.radius}
+                  onChange={(event) => updateFilters((prev) => ({ ...prev, radius: event.target.value }))}
+                >
+                  {[25, 50, 75, 100, 150, 200, 250].map((value) => (
+                    <option key={value} value={String(value)}>
+                      {value} miles
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <label>
+              ZIP Code
+              <input
+                className="input"
+                inputMode="numeric"
+                maxLength={5}
+                placeholder="33445"
+                value={filters.zip_code}
+                onChange={(event) =>
+                  updateFilters((prev) => ({
+                    ...prev,
+                    zip_code: event.target.value.replace(/\D/g, "").slice(0, 5),
+                  }))
+                }
+              />
+            </label>
 
             <div className="inventory-mini-grid">
               <label>
@@ -736,11 +921,9 @@ export function InventoryExplorer() {
                 onChange={(event) => setFilters((prev) => ({ ...prev, source_type: event.target.value }))}
               >
                 <option value="">Any Source</option>
-                <option value="ove">OVE / Manheim</option>
                 <option value="auction">Auction</option>
-                <option value="marketcheck">MarketCheck</option>
-                <option value="dealer_partner">Dealer Partner</option>
-                <option value="dealer_wholesale">Dealer Wholesale</option>
+                <option value="wholesale">Wholesale</option>
+                <option value="dealer_partner">Dealer Partner Choice</option>
               </select>
             </label>
 
@@ -790,7 +973,7 @@ export function InventoryExplorer() {
                 checked={filters.live_sync}
                 onChange={(event) => setFilters((prev) => ({ ...prev, live_sync: event.target.checked }))}
               />
-              Trigger live MarketCheck sync on search
+              Trigger live wholesale sync on search
             </label>
 
             <div className="inventory-actions">
@@ -817,10 +1000,26 @@ export function InventoryExplorer() {
               <span className="badge">Garage: {garageItems.length}</span>
               {syncMeta.requested ? (
                 <span className="badge">
-                  Sync {syncMeta.executed ? syncMeta.mode : "pending"} | +{syncMeta.inserted} new / {syncMeta.updated} upd
+                  {syncWarning ? "Local DB fallback" : `Sync ${syncMeta.executed ? syncMeta.mode : "pending"}`} | +
+                  {syncMeta.inserted} new / {syncMeta.updated} upd
                 </span>
               ) : (
                 <span className="badge">Local DB search</span>
+              )}
+              {auth?.accessToken ? (
+                <>
+                  <span className="badge">{auth.email || "buyer"}</span>
+                  <button className="button ghost" onClick={() => loadGarage(auth.accessToken)} disabled={garageLoading}>
+                    Refresh Garage
+                  </button>
+                  <button className="button ghost" onClick={signOut}>
+                    Sign Out
+                  </button>
+                </>
+              ) : (
+                <Link className="button ghost" href="/dashboard">
+                  Sign In for Garage
+                </Link>
               )}
               <Link className="button ghost" href="/">
                 Back Home
@@ -828,7 +1027,7 @@ export function InventoryExplorer() {
             </div>
           </header>
 
-          {syncMeta.error ? <div className="card">MarketCheck sync warning: {syncMeta.error}</div> : null}
+          {syncWarning && rows.length === 0 ? <div className="card">{syncWarning}</div> : null}
           {error ? <div className="card">{error}</div> : null}
           {!error && loading ? <div className="card">Loading inventory...</div> : null}
           {!loading && !error && rows.length === 0 ? (
@@ -853,7 +1052,7 @@ export function InventoryExplorer() {
                       <strong>
                         {item.year} {item.make} {item.model}
                       </strong>
-                      <span className="badge">{item.source_type || "unknown"}</span>
+                      <span className="badge">{toPublicSourceLabel(item.source_label, item.source_filter_value || item.source_type)}</span>
                     </div>
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       <span className="badge">{displayModeLabel(item.display_mode)}</span>
@@ -871,9 +1070,9 @@ export function InventoryExplorer() {
                     <p className="inventory-description">
                       {item.features_preview?.length
                         ? item.features_preview.join(" • ")
-                        : item.source_type === "ove"
+                        : item.source_type === "ove" || item.source_type === "auction"
                           ? "Auction listing with live pricing. Condition reports unlock as the buyer workflow advances."
-                          : "Market-backed listing with synced specs and media."}
+                          : `${toPublicSourceLabel(item.source_label, item.source_filter_value || item.source_type)} listing with synced specs and media.`}
                     </p>
 
                     <div className="inventory-actions">
@@ -1069,7 +1268,9 @@ export function InventoryExplorer() {
                     <span className="badge">
                       {selectedVehicle.location_state || "NA"} {selectedVehicle.location_zip || ""}
                     </span>
-                    <span className="badge">Source {selectedVehicle.source_type || "unknown"}</span>
+                    <span className="badge">
+                      Source {toPublicSourceLabel(selectedVehicle.source_label, selectedVehicle.source_type)}
+                    </span>
                     <span className="badge">{displayModeLabel(selectedVehicle.display_mode)}</span>
                     <span className="badge">{inspectionStatusLabel(selectedVehicle.inspection_status)}</span>
                   </div>

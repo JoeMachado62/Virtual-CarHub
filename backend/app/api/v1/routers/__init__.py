@@ -1,5 +1,6 @@
 from app.api.v1.routers import (
     admin,
+    admin_preapproval,
     auth,
     chat,
     funding,
@@ -15,6 +16,7 @@ from app.api.v1.routers import (
 
 __all__ = [
     "admin",
+    "admin_preapproval",
     "auth",
     "chat",
     "funding",

@@ -100,8 +100,8 @@ export default function HomePage() {
             buying system.
           </p>
           <div className="hero-actions">
-            <Link className="button" href={"/vinventory?source_type=ove" as any}>
-              See OVE Inventory
+            <Link className="button" href={"/vinventory?source_type=auction" as any}>
+              See Auction Inventory
             </Link>
           </div>
         </div>

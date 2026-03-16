@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
+import { toPublicSourceLabel } from "@/lib/sourceLabels";
 
 type PreviewItem = {
   vin: string;
@@ -15,6 +16,7 @@ type PreviewItem = {
   price_asking: number;
   location_state?: string | null;
   source_type?: string | null;
+  source_label?: string | null;
   thumbnail?: string | null;
   images_count?: number;
 };
@@ -28,7 +30,7 @@ export function InventoryPreview() {
   useEffect(() => {
     async function loadPreview() {
       const response = await apiFetch<{ items: PreviewItem[] }>(
-        "/inventory/search?source_type=ove&has_images=false&page=1&per_page=3"
+        "/inventory/search?source_type=auction&has_images=false&page=1&per_page=3"
       );
 
       if (response.status !== "ok") {
@@ -64,7 +66,7 @@ export function InventoryPreview() {
               <strong>
                 {item.year} {item.make} {item.model}
               </strong>
-              <span className="badge">{item.source_type || "inventory"}</span>
+              <span className="badge">{toPublicSourceLabel(item.source_label, item.source_type)}</span>
             </div>
             <p>{item.trim || "Auction listing"} </p>
             <p>

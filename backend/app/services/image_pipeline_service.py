@@ -296,10 +296,18 @@ def resolve_vehicle_display_context(
         gallery_images = marketing_gallery
         if inspection_status == InspectionStatus.NOT_STARTED:
             inspection_status = InspectionStatus.PENDING
+
+        # Use auction default image if no images exist for OVE/auction vehicles
+        if not hero_image and vehicle.source_type and vehicle.source_type.lower() in ['ove', 'auction']:
+            hero_image = "/assets/images/portfolio/VCH Auction default image.webp"
     else:
         mode = ImageDisplayMode.MARKETING
         hero_image = hero_url or (marketing_gallery[0] if marketing_gallery else None)
         gallery_images = marketing_gallery
+
+        # Use auction default image if no images exist for OVE/auction vehicles
+        if not hero_image and vehicle.source_type and vehicle.source_type.lower() in ['ove', 'auction']:
+            hero_image = "/assets/images/portfolio/VCH Auction default image.webp"
 
     return {
         "mode": mode.value,

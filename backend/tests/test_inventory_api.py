@@ -4,6 +4,7 @@ from sqlalchemy import delete, select
 
 from app.api.v1 import routers as api_routers
 from app.api.v1.routers.inventory import (
+    _build_marketcheck_search_params,
     get_inventory_vehicle,
     inventory_facets,
     search_inventory,
@@ -80,6 +81,19 @@ class StubMarketCheckTaxonomyClient:
             return {"terms": []}
 
         return {"terms": []}
+
+
+class FailingMarketCheckClient:
+    def __init__(self) -> None:
+        self.live = True
+
+    def search_inventory(self, params: dict) -> dict:
+        _ = params
+        raise RuntimeError(
+            "Client error '422 unknown' for url "
+            "'https://api.marketcheck.com/v2/search/car/active?rows=72&start=0&zip=33991&radius=250"
+            "&dom_range=50-9999&api_key=super-secret-key'"
+        )
 
 
 def test_ingest_marketcheck_inventory_inserts_rows() -> None:
@@ -331,6 +345,101 @@ def test_search_auction_source_and_pricing_are_public_facing() -> None:
         assert detail["data"]["price_asking"] == 52500.0
         assert detail["data"]["source_label"] == "Auction"
         assert detail["data"]["pickup_location"] == "FL - FORT LAUDERDALE"
+
+
+def test_search_wholesale_source_is_public_facing() -> None:
+    init_db()
+    wholesale_vins = ["2C3CDXCT5NH100001", "2C3CDXCT5NH100002", "2C3CDXCT5NH100003"]
+    with SessionLocal() as db:
+        db.execute(delete(Vehicle).where(Vehicle.vin.in_(wholesale_vins)))
+        db.add_all(
+            [
+                Vehicle(
+                    vin="2C3CDXCT5NH100001",
+                    listing_id="marketcheck-wholesale-1",
+                    year=2022,
+                    make="Dodge",
+                    model="Charger",
+                    price_asking=31000,
+                    source_type="marketcheck",
+                    available=True,
+                    quality_firewall_pass=True,
+                    features_normalized={"days_on_market": 45},
+                ),
+                Vehicle(
+                    vin="2C3CDXCT5NH100002",
+                    listing_id="dealer-wholesale-1",
+                    year=2022,
+                    make="Dodge",
+                    model="Challenger",
+                    price_asking=32000,
+                    source_type="dealer_wholesale",
+                    available=True,
+                    quality_firewall_pass=True,
+                    features_normalized={"days_on_market": 55},
+                ),
+                Vehicle(
+                    vin="2C3CDXCT5NH100003",
+                    listing_id="dealer-partner-1",
+                    year=2022,
+                    make="Dodge",
+                    model="Durango",
+                    price_asking=33000,
+                    source_type="dealer_partner",
+                    available=True,
+                    quality_firewall_pass=True,
+                    features_normalized={"days_on_market": 75},
+                ),
+            ]
+        )
+        db.commit()
+
+        response = search_inventory(
+            q=None,
+            make="Dodge",
+            model=None,
+            trim=None,
+            body_type=None,
+            source_type="wholesale",
+            state=None,
+            exterior_color=None,
+            interior_color=None,
+            drivetrain=None,
+            fuel_type=None,
+            transmission=None,
+            inventory_type=None,
+            certified=None,
+            single_owner=None,
+            clean_title=None,
+            min_dom=None,
+            max_dom=None,
+            min_price=None,
+            max_price=None,
+            min_year=None,
+            max_year=None,
+            min_miles=None,
+            max_miles=None,
+            zip_code=None,
+            radius=None,
+            has_images=None,
+            sort_by="updated_at",
+            sort_dir="desc",
+            live_sync=False,
+            sync_limit=72,
+            page=1,
+            per_page=10,
+            db=db,
+        )
+
+        assert response["status"] == "ok"
+        items = response["data"]["items"]
+        assert {item["vin"] for item in items} == {"2C3CDXCT5NH100001", "2C3CDXCT5NH100002"}
+        assert all(item["source_filter_value"] == "wholesale" for item in items)
+        assert all(item["source_label"] == "Wholesale" for item in items)
+
+        detail = get_inventory_vehicle(vin="2C3CDXCT5NH100002", db=db)
+        assert detail["status"] == "ok"
+        assert detail["data"]["source_label"] == "Wholesale"
 
 
 def test_search_enforces_aged_inventory_for_retail_but_bypasses_auction_dom() -> None:
@@ -685,6 +794,90 @@ def test_wordpress_export_can_include_marketcheck_price_stats(monkeypatch) -> No
     assert first["marketcheck_average_retail"] == 33000.0
     assert isinstance(first["price_delta_marketcheck"], float)
     assert isinstance(first["price_delta_marketcheck_pct"], float)
+
+
+def test_build_marketcheck_search_params_omits_dom_range() -> None:
+    params = _build_marketcheck_search_params(
+        q=None,
+        make=None,
+        model=None,
+        trim=None,
+        body_type=None,
+        state=None,
+        min_price=None,
+        max_price=None,
+        min_year=None,
+        max_year=None,
+        has_images=None,
+        exterior_color=None,
+        interior_color=None,
+        drivetrain=None,
+        fuel_type=None,
+        transmission=None,
+        inventory_type=None,
+        certified=None,
+        single_owner=None,
+        clean_title=None,
+        min_dom=50,
+        max_dom=120,
+        zip_code="33991",
+        radius=250,
+    )
+
+    assert params["zip"] == "33991"
+    assert params["radius"] == 250
+    assert "dom_range" not in params
+
+
+def test_search_live_sync_falls_back_without_leaking_vendor_error(monkeypatch) -> None:
+    init_db()
+    with SessionLocal() as db:
+        monkeypatch.setattr(api_routers.inventory, "_marketcheck_client", lambda: FailingMarketCheckClient())
+        monkeypatch.setattr(api_routers.inventory.settings, "marketcheck_api_key", "test-key")
+
+        response = search_inventory(
+            q=None,
+            make=None,
+            model=None,
+            trim=None,
+            body_type=None,
+            inventory_type=None,
+            certified=None,
+            source_type=None,
+            state=None,
+            exterior_color=None,
+            interior_color=None,
+            drivetrain=None,
+            fuel_type=None,
+            transmission=None,
+            single_owner=None,
+            clean_title=None,
+            min_dom=None,
+            max_dom=None,
+            min_price=None,
+            max_price=None,
+            min_year=None,
+            max_year=None,
+            min_miles=None,
+            max_miles=None,
+            zip_code="33991",
+            radius=250,
+            has_images=None,
+            sort_by="updated_at",
+            sort_dir="desc",
+            live_sync=True,
+            sync_limit=72,
+            page=1,
+            per_page=18,
+            db=db,
+        )
+
+    assert response["status"] == "ok"
+    sync = response["data"]["sync"]
+    assert sync["mode"] == "fallback"
+    assert sync["error"] == "Live wholesale sync is temporarily unavailable. Showing saved inventory results."
+    assert "api_key" not in sync["error"]
+    assert "marketcheck.com" not in sync["error"]
 
 
 def test_wordpress_export_filters_by_days_on_market() -> None:
