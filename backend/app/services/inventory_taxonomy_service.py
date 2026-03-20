@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, distinct, select
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.models.entities import Vehicle, VehicleTaxonomyCache
 
@@ -131,6 +135,19 @@ class InventoryTaxonomySyncReport:
         }
 
 
+_TERMS_DELAY_SECONDS = 0.35  # Rate-limit guard for MarketCheck API
+
+
+def _safe_get_terms(get_terms, field: str, params: dict) -> list[str]:
+    """Call get_terms with rate limiting and error resilience."""
+    time.sleep(_TERMS_DELAY_SECONDS)
+    try:
+        return _extract_terms(get_terms(field, params), field)
+    except Exception as exc:
+        logger.warning("get_terms(%s, %s) failed: %s", field, params, exc)
+        return []
+
+
 def sync_marketcheck_taxonomy_cache(
     db: Session,
     *,
@@ -149,13 +166,13 @@ def sync_marketcheck_taxonomy_cache(
     rows: set[tuple[int, str, str, str]] = set()
 
     for year in range(normalized_start, normalized_end + 1):
-        makes = _extract_terms(get_terms("make", {"year": year}), "make")
+        makes = _safe_get_terms(get_terms, "make", {"year": year})
         request_count += 1
         for make in makes:
-            models = _extract_terms(get_terms("model", {"year": year, "make": make}), "model")
+            models = _safe_get_terms(get_terms, "model", {"year": year, "make": make})
             request_count += 1
             for model in models:
-                trims = _extract_terms(get_terms("trim", {"year": year, "make": make, "model": model}), "trim")
+                trims = _safe_get_terms(get_terms, "trim", {"year": year, "make": make, "model": model})
                 request_count += 1
                 if trims:
                     for trim in trims:
@@ -163,14 +180,16 @@ def sync_marketcheck_taxonomy_cache(
                 else:
                     rows.add((year, make, model, ""))
 
-    deleted = db.execute(
-        delete(VehicleTaxonomyCache).where(
-            VehicleTaxonomyCache.year >= normalized_start,
-            VehicleTaxonomyCache.year <= normalized_end,
-        )
-    ).rowcount or 0
-
+    # Only delete old cache if we successfully collected replacement data
+    deleted = 0
     if rows:
+        deleted = db.execute(
+            delete(VehicleTaxonomyCache).where(
+                VehicleTaxonomyCache.year >= normalized_start,
+                VehicleTaxonomyCache.year <= normalized_end,
+            )
+        ).rowcount or 0
+
         db.bulk_save_objects(
             [
                 VehicleTaxonomyCache(

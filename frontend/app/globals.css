@@ -654,10 +654,131 @@ textarea {
 }
 
 .dashboard-login-card {
-  max-width: 480px;
+  max-width: 520px;
   margin: 2rem auto;
   display: grid;
   gap: 0.9rem;
+}
+
+/* Auth tabs (Sign In / Create Account) */
+.dashboard-auth-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid rgba(120, 131, 235, 0.18);
+  margin-bottom: 0.5rem;
+}
+
+.dashboard-auth-tab {
+  flex: 1;
+  padding: 0.7rem 1rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0.55;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.dashboard-auth-tab:hover {
+  opacity: 0.8;
+}
+
+.dashboard-auth-tab.active {
+  opacity: 1;
+  border-bottom-color: var(--accent, #7883eb);
+}
+
+.dashboard-auth-switch {
+  text-align: center;
+  font-size: 0.88rem;
+  opacity: 0.7;
+  margin-top: 0.25rem;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: var(--accent, #7883eb);
+  cursor: pointer;
+  font-size: inherit;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.link-button:hover {
+  opacity: 0.8;
+}
+
+.required {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+/* Onboarding choice screen (post-registration) */
+.dashboard-onboarding-card {
+  max-width: 640px;
+}
+
+.dashboard-onboarding-header {
+  text-align: center;
+  margin-bottom: 0.5rem;
+}
+
+.dashboard-onboarding-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+}
+
+@media (max-width: 600px) {
+  .dashboard-onboarding-choices {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dashboard-onboarding-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.25rem;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 131, 235, 0.15);
+  background: rgba(120, 131, 235, 0.04);
+}
+
+.dashboard-onboarding-option h3 {
+  margin: 0;
+}
+
+.dashboard-onboarding-option p {
+  margin: 0;
+  font-size: 0.9rem;
+  opacity: 0.8;
+}
+
+.dashboard-onboarding-option-primary {
+  border-color: rgba(120, 131, 235, 0.35);
+  background: rgba(120, 131, 235, 0.08);
+}
+
+.dashboard-onboarding-option .button {
+  margin-top: auto;
+}
+
+.dashboard-onboarding-banner {
+  display: grid;
+  gap: 0.75rem;
+  border: 1px solid rgba(120, 131, 235, 0.25);
+  background: rgba(120, 131, 235, 0.04);
+}
+
+.dashboard-onboarding-banner .card {
+  box-shadow: none;
+  border: 1px solid rgba(120, 131, 235, 0.12);
 }
 
 .dashboard-overview {

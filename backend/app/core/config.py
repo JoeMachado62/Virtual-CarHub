@@ -50,6 +50,19 @@ class Settings(BaseSettings):
     marketcheck_cache_ttl_search_seconds: int = Field(default=900, alias="MARKETCHECK_CACHE_TTL_SEARCH_SECONDS")
     marketcheck_cache_ttl_facets_seconds: int = Field(default=3600, alias="MARKETCHECK_CACHE_TTL_FACETS_SECONDS")
     marketcheck_cache_ttl_price_seconds: int = Field(default=86400, alias="MARKETCHECK_CACHE_TTL_PRICE_SECONDS")
+    imagin_enabled: bool = Field(default=False, alias="IMAGIN_ENABLED")
+    imagin_customer_id: str = Field(default="", alias="IMAGIN_CUSTOMER_ID")
+    imagin_secret: str = Field(default="", alias="IMAGIN_SECRET")
+    imagin_cdn_base_url: str = Field(default="https://cdn.imagin.studio/getImage", alias="IMAGIN_CDN_BASE_URL")
+    imagin_country_code: str = Field(default="US", alias="IMAGIN_COUNTRY_CODE")
+    imagin_default_steering: str = Field(default="left", alias="IMAGIN_DEFAULT_STEERING")
+    imagin_gallery_angles: str = Field(
+        default="23,21,25,17,29,13,33,09,37,05,41,01,45",
+        alias="IMAGIN_GALLERY_ANGLES",
+    )
+    imagin_spin_enabled: bool = Field(default=False, alias="IMAGIN_SPIN_ENABLED")
+    imagin_spin_start_angle: int = Field(default=200, alias="IMAGIN_SPIN_START_ANGLE")
+    imagin_spin_frame_count: int = Field(default=32, alias="IMAGIN_SPIN_FRAME_COUNT")
 
     # Live integration toggles
     marketcheck_live_enabled: bool = Field(default=False, alias="MARKETCHECK_LIVE_ENABLED")
@@ -156,6 +169,18 @@ class Settings(BaseSettings):
     @property
     def has_s3_assets(self) -> bool:
         return self.object_storage_provider == "s3" and bool(self.s3_assets_bucket)
+
+    @property
+    def has_anthropic(self) -> bool:
+        return bool(self.anthropic_api_key)
+
+    @property
+    def has_imagin(self) -> bool:
+        return self.imagin_enabled and bool(self.imagin_customer_id)
+
+    @property
+    def imagin_gallery_angle_list(self) -> list[str]:
+        return [value.strip() for value in self.imagin_gallery_angles.split(",") if value.strip()]
 
 
 @lru_cache(maxsize=1)

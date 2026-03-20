@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.params import Param
+from pydantic import BaseModel
 from sqlalchemy import Integer, asc, case, desc, false, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -350,6 +351,14 @@ def _resolve_direct_param(value: Any) -> Any:
 
 def _friendly_live_sync_error(_: Exception) -> str:
     return "Live wholesale sync is temporarily unavailable. Showing saved inventory results."
+
+
+def _extract_cr_url(ove_detail) -> str | None:
+    if not ove_detail or not ove_detail.condition_report_json:
+        return None
+    metadata = ove_detail.condition_report_json.get("metadata") or {}
+    report_link = metadata.get("report_link") or {}
+    return report_link.get("href") or None
 
 
 def _build_vehicle_title(vehicle: Vehicle) -> str:
@@ -963,6 +972,8 @@ def inventory_facets(
             clean_title=None,
             min_dom=None,
             max_dom=None,
+            zip_code=zip_code,
+            radius=radius,
         )
         try:
             payload = client.get_facets(params=params, facets=FACET_FIELDS)
@@ -1025,6 +1036,34 @@ def sync_inventory_taxonomy(
     )
     db.commit()
     return ok(report.to_dict())
+
+
+class _ParseQueryBody(BaseModel):
+    query: str = ""
+
+
+@router.post("/parse-query")
+def parse_natural_language_query(body: _ParseQueryBody) -> dict:
+    """Parse a natural-language vehicle description into structured search filters."""
+    from app.services.nlp_query_service import parse_vehicle_query
+
+    query = body.query.strip()
+    if not query:
+        return ok({"filters": {}, "parsed": False, "parse_method": "none", "raw_query": ""})
+
+    result = parse_vehicle_query(query)
+    filters = {
+        k: v
+        for k, v in result.model_dump().items()
+        if v is not None and k not in ("raw_query", "parsed", "parse_method")
+    }
+
+    return ok({
+        "filters": filters,
+        "parsed": result.parsed,
+        "parse_method": result.parse_method,
+        "raw_query": result.raw_query,
+    })
 
 
 @router.get("/search")
@@ -1620,6 +1659,7 @@ def get_inventory_vehicle(vin: str, db: Session = Depends(get_db)) -> dict:
             "features_normalized": normalized,
             "seller_comments": ove_detail.seller_comments if ove_detail else None,
             "condition_report": ove_detail.condition_report_json if ove_detail else {},
+            "condition_report_url": _extract_cr_url(ove_detail),
             "listing_snapshot": ove_detail.listing_snapshot_json if ove_detail else {},
             "ove_detail": ove_payload,
             "available": vehicle.available,

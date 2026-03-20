@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
-import { AuthState, loadAuthState } from "@/lib/auth";
+import { AuthState, clearAuthState, loadValidAuthState } from "@/lib/auth";
 import { toPublicSourceLabel } from "@/lib/sourceLabels";
 
 type DisplayMode = "MARKETING" | "INSPECTION_PENDING" | "INSPECTION_REPORT";
@@ -18,9 +18,14 @@ type VehicleDisplayContext = {
   inspection_status: InspectionStatus;
   hero_image?: string | null;
   gallery_images?: string[];
+  marketing_images?: string[];
+  imagin_images?: string[];
+  spin_images?: string[];
+  source_images?: string[];
   inspection_images?: string[];
   disclosure_images?: string[];
   has_inspection_report?: boolean;
+  has_imagin_stock?: boolean;
   disclaimer?: string;
   condition_report?: Record<string, unknown>;
 };
@@ -84,10 +89,32 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [reportStatus, setReportStatus] = useState<"none" | "pending" | "available">("none");
 
   useEffect(() => {
-    setAuth(loadAuthState());
+    let cancelled = false;
+
+    async function restoreSession() {
+      const saved = await loadValidAuthState();
+      if (cancelled) return;
+      setAuth(saved);
+    }
+
+    void restoreSession();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  function handleUnauthorized(response: { error: { code: string; message: string } | null }): boolean {
+    if (response.error?.code !== "HTTP_401") return false;
+    clearAuthState();
+    setAuth(null);
+    setActionError("Your session expired. Sign in again from VInventory.");
+    setActionMessage(null);
+    return true;
+  }
 
   useEffect(() => {
     async function loadVehicle() {
@@ -104,6 +131,10 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
       setVehicle(response.data);
       const displayImages = resolveDisplayImages(response.data);
       setSelectedImage(resolveHeroImage(response.data) || displayImages[0] || null);
+      // Set initial report status based on whether report exists
+      if (response.data.has_inspection_report) {
+        setReportStatus("available");
+      }
       setLoading(false);
     }
 
@@ -156,6 +187,10 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
       } | null;
     }>(`/me/garage/${encodeURIComponent(currentVehicle.vin)}`, { method: "POST" }, auth.accessToken);
 
+    if (handleUnauthorized(response)) {
+      setActionLoading(null);
+      return;
+    }
     if (response.status !== "ok") {
       setActionError(response.error?.message || "Unable to save vehicle to garage.");
       setActionLoading(null);
@@ -187,6 +222,10 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
       { method: "POST" },
       auth.accessToken
     );
+    if (handleUnauthorized(response)) {
+      setActionLoading(null);
+      return;
+    }
     if (response.status !== "ok") {
       setActionError(response.error?.message || "Unable to start acquisition.");
       setActionLoading(null);
@@ -211,16 +250,31 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     const response = await apiFetch<{
       message?: string;
       already_available?: boolean;
+      status?: string;
+      request_id?: string;
+      deduplicated?: boolean;
     }>(
       `/me/vehicles/${encodeURIComponent(currentVehicle.vin)}/condition-report-request`,
       { method: "POST" },
       auth.accessToken
     );
 
+    if (handleUnauthorized(response)) {
+      setActionLoading(null);
+      return;
+    }
     if (response.status !== "ok") {
       setActionError(response.error?.message || "Unable to request condition report.");
       setActionLoading(null);
       return;
+    }
+
+    // Update the vehicle's inspection report status based on response
+    if (response.data.status === "available" || response.data.already_available) {
+      setVehicle({ ...currentVehicle, has_inspection_report: true });
+      setReportStatus("available");
+    } else if (response.data.deduplicated || response.data.request_id) {
+      setReportStatus("pending");
     }
 
     setActionMessage(
@@ -321,6 +375,19 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
       {vehicle.display_context?.disclaimer ? (
         <section className="card">
           <h3>Image Source Notice</h3>
+          {(vehicle.display_context?.has_imagin_stock || inspectionEvidence.length) ? (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+              {vehicle.display_context?.has_imagin_stock ? (
+                <span className="badge">Studio images {vehicle.display_context?.imagin_images?.length || 0}</span>
+              ) : null}
+              {vehicle.display_context?.spin_images?.length ? (
+                <span className="badge">360 frames {vehicle.display_context.spin_images.length}</span>
+              ) : null}
+              {inspectionEvidence.length ? (
+                <span className="badge">Inspection photos {inspectionEvidence.length}</span>
+              ) : null}
+            </div>
+          ) : null}
           <p style={{ marginBottom: 0 }}>{vehicle.display_context.disclaimer}</p>
         </section>
       ) : null}
@@ -334,14 +401,19 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
             <button className="button ghost" onClick={startAcquisition} disabled={actionLoading !== null}>
               {actionLoading === "acquire" ? "Starting..." : "Start Acquisition"}
             </button>
-            {!vehicle.has_inspection_report ? (
+            {!vehicle.has_inspection_report && reportStatus !== "pending" ? (
               <button className="button ghost" onClick={requestConditionReport} disabled={actionLoading !== null}>
-                {actionLoading === "condition-report" ? "Requesting..." : "Request Condition Report"}
+                {actionLoading === "condition-report" ? "Requesting..." : "Order CR"}
               </button>
             ) : null}
-            {vehicle.has_inspection_report ? (
+            {reportStatus === "pending" ? (
+              <button className="button ghost" disabled>
+                CR Pending
+              </button>
+            ) : null}
+            {vehicle.has_inspection_report || reportStatus === "available" ? (
               <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vehicle.vin)}/condition-report` as any}>
-                Open Condition Report
+                CR Available
               </Link>
             ) : null}
           </section>

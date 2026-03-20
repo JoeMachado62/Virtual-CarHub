@@ -14,6 +14,7 @@ from app.schemas.ove_inventory import (
     OveDetailPushRequest,
     OveDetailRequestEnqueueRequest,
 )
+from app.services.imagin_service import sync_imagin_source_assets
 from app.services.image_pipeline_service import ensure_tier2_hero_job, sync_source_assets
 from app.services.inventory_service import upsert_vehicle_with_source_priority
 
@@ -64,12 +65,16 @@ def ingest_ove_inventory(db: Session, payload: OveBulkIngestRequest) -> OveBulkI
             incoming=incoming,
             incoming_source=source_type,
         )
+        vehicle_row = existing
         if action == "inserted":
-            db.add(Vehicle(**incoming))
+            vehicle_row = Vehicle(**incoming)
+            db.add(vehicle_row)
             report.inserted += 1
         elif action == "updated":
+            vehicle_row = existing
             report.updated += 1
         else:
+            vehicle_row = existing
             report.skipped_priority += 1
 
         if item.vin not in report.synced_vins:
@@ -85,6 +90,13 @@ def ingest_ove_inventory(db: Session, payload: OveBulkIngestRequest) -> OveBulkI
             source_kind=source_type,
             source_platform=item.source_platform,
         )
+        if vehicle_row is not None:
+            sync_imagin_source_assets(
+                db,
+                vehicle=vehicle_row,
+                listing_id=item.listing_id,
+                source_platform=item.source_platform,
+            )
         ensure_tier2_hero_job(
             db,
             vin=item.vin,
@@ -241,6 +253,12 @@ def upsert_ove_vehicle_detail(
         listing_id=vehicle.listing_id,
         image_urls=image_urls,
         source_kind=InventorySourceType.OVE.value,
+        source_platform=payload.source_platform,
+    )
+    sync_imagin_source_assets(
+        db,
+        vehicle=vehicle,
+        listing_id=vehicle.listing_id,
         source_platform=payload.source_platform,
     )
     hero_job = ensure_tier2_hero_job(

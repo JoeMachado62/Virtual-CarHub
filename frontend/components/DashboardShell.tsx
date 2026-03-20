@@ -9,7 +9,7 @@ import { DealTracker } from "@/components/DealTracker";
 import { QuickMatchForm } from "@/components/QuickMatchForm";
 import { Recommendation, RecommendationCards } from "@/components/RecommendationCards";
 import { apiFetch } from "@/lib/api";
-import { AuthState, clearAuthState, loadAuthState, saveAuthState } from "@/lib/auth";
+import { AuthState, clearAuthState, loadValidAuthState, saveAuthState } from "@/lib/auth";
 import { toPublicSourceLabel } from "@/lib/sourceLabels";
 
 type DisplayMode = "MARKETING" | "INSPECTION_PENDING" | "INSPECTION_REPORT";
@@ -56,8 +56,11 @@ type GarageItem = {
 
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
 
+type AuthView = "login" | "register" | "onboarding";
+
 export function DashboardShell({ requestedVin }: { requestedVin?: string | null }) {
   const [auth, setAuth] = useState<AuthState | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [deal, setDeal] = useState<DealSummary | null>(null);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [notifications, setNotifications] = useState<{ id: string; message: string }[]>([]);
@@ -66,22 +69,68 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
   const [garageMessage, setGarageMessage] = useState<string | null>(null);
   const [garageError, setGarageError] = useState<string | null>(null);
   const [garageActionVin, setGarageActionVin] = useState<string | null>(null);
-  const [email, setEmail] = useState("buyer@example.com");
-  const [password, setPassword] = useState("BuyerPass123!");
+  const [pendingReportVins, setPendingReportVins] = useState<Set<string>>(new Set());
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+
+  // Registration fields
+  const [authView, setAuthView] = useState<AuthView>("login");
+  const [regFirstName, setRegFirstName] = useState("");
+  const [regLastName, setRegLastName] = useState("");
+  const [regEmail, setRegEmail] = useState("");
+  const [regPhone, setRegPhone] = useState("");
+  const [regPassword, setRegPassword] = useState("");
+  const [regConfirmPassword, setRegConfirmPassword] = useState("");
+  const [registering, setRegistering] = useState(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const isAuthenticated = useMemo(() => Boolean(auth?.accessToken), [auth]);
   const normalizedRequestedVin = requestedVin?.trim().toUpperCase() || null;
 
   useEffect(() => {
-    const saved = loadAuthState();
-    if (saved) {
-      setAuth(saved);
-      if (saved.email) setEmail(saved.email);
+    let cancelled = false;
+
+    async function restoreSession() {
+      const saved = await loadValidAuthState();
+      if (cancelled) return;
+      if (saved) {
+        setAuth(saved);
+        if (saved.email) setEmail(saved.email);
+      }
+      setAuthReady(true);
     }
+
+    void restoreSession();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  function resetSession(message?: string) {
+    clearAuthState();
+    setAuth(null);
+    setDeal(null);
+    setRecommendations([]);
+    setNotifications([]);
+    setGarageItems([]);
+    setPendingReportVins(new Set());
+    setGarageMessage(null);
+    setGarageActionVin(null);
+    setLoading(false);
+    if (message) {
+      setDashboardError(message);
+      setGarageError(message);
+    }
+  }
+
+  function isUnauthorized(response: { error: { code: string; message: string } | null }) {
+    return response.error?.code === "HTTP_401";
+  }
 
   async function login() {
     setLoggingIn(true);
@@ -114,6 +163,60 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     setLoggingIn(false);
   }
 
+  async function register() {
+    if (regPassword !== regConfirmPassword) {
+      setRegisterError("Passwords do not match.");
+      return;
+    }
+    if (regPassword.length < 8) {
+      setRegisterError("Password must be at least 8 characters.");
+      return;
+    }
+    if (!regFirstName.trim() || !regLastName.trim()) {
+      setRegisterError("First and last name are required.");
+      return;
+    }
+
+    setRegistering(true);
+    setRegisterError(null);
+    const response = await apiFetch<{
+      user_id: string;
+      access_token: string;
+      refresh_token: string;
+      token_type: string;
+      ghl_contact_id: string | null;
+      is_new_user: boolean;
+    }>(
+      "/auth/register",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          email: regEmail,
+          password: regPassword,
+          first_name: regFirstName,
+          last_name: regLastName,
+          phone: regPhone || undefined
+        })
+      }
+    );
+
+    if (response.status === "ok") {
+      const nextAuth: AuthState = {
+        userId: response.data.user_id,
+        email: regEmail,
+        accessToken: response.data.access_token,
+        refreshToken: response.data.refresh_token
+      };
+      saveAuthState(nextAuth);
+      // Show onboarding choice before entering dashboard
+      setShowOnboarding(true);
+      setAuth(nextAuth);
+    } else {
+      setRegisterError(response.error?.message || "Unable to create account.");
+    }
+    setRegistering(false);
+  }
+
   async function refreshData() {
     if (!auth?.accessToken) return;
 
@@ -127,6 +230,11 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       apiFetch<{ id: string; message: string }[]>("/me/notifications", {}, auth.accessToken),
       apiFetch<GarageItem[]>("/me/garage", {}, auth.accessToken)
     ]);
+
+    if ([dealResponse, recs, notes, garage].some(isUnauthorized)) {
+      resetSession("Your session expired. Sign in again.");
+      return;
+    }
 
     if (dealResponse.status === "ok") {
       setDeal(dealResponse.data);
@@ -147,7 +255,15 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     }
 
     if (garage.status === "ok") {
-      setGarageItems(garage.data || []);
+      const items = garage.data || [];
+      setGarageItems(items);
+      // Clear pending status for any VINs that now have reports
+      const vinsWithReports = new Set(items.filter(item => item.has_inspection_report).map(item => item.vin));
+      setPendingReportVins(prev => {
+        const updated = new Set(prev);
+        vinsWithReports.forEach(vin => updated.delete(vin));
+        return updated;
+      });
     } else {
       setGarageItems([]);
       setGarageError(garage.error?.message || "Unable to load garage.");
@@ -157,9 +273,10 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
   }
 
   useEffect(() => {
+    if (!authReady) return;
     void refreshData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth?.accessToken]);
+  }, [auth?.accessToken, authReady]);
 
   async function selectVehicle(vin: string) {
     if (!auth?.accessToken) return;
@@ -203,7 +320,13 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     setGarageActionVin(vin);
     setGarageError(null);
     setGarageMessage(null);
-    const response = await apiFetch<{ message?: string; already_available?: boolean }>(
+    const response = await apiFetch<{
+      message?: string;
+      already_available?: boolean;
+      status?: string;
+      request_id?: string;
+      deduplicated?: boolean;
+    }>(
       `/me/vehicles/${vin}/condition-report-request`,
       { method: "POST" },
       auth.accessToken
@@ -213,6 +336,12 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       setGarageActionVin(null);
       return;
     }
+
+    // Track pending status if report is not immediately available
+    if (!response.data.already_available && response.data.status !== "available") {
+      setPendingReportVins(prev => new Set(prev).add(vin));
+    }
+
     setGarageMessage(
       response.data.message ||
         (response.data.already_available
@@ -262,28 +391,145 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     (item) => item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction"
   ).length;
 
-  if (!isAuthenticated) {
+  if (!authReady) {
     return (
       <div className="card dashboard-login-card">
         <h2>Client Dashboard Login</h2>
-        <p>Use seeded credentials for local MVP walkthrough.</p>
-        <label>
-          Email
-          <input className="input" value={email} onChange={(event) => setEmail(event.target.value)} />
-        </label>
-        <label>
-          Password
-          <input
-            className="input"
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </label>
-        {loginError ? <p className="dashboard-error">{loginError}</p> : null}
-        <button className="button" disabled={loggingIn} onClick={login}>
-          {loggingIn ? "Signing in..." : "Sign In"}
-        </button>
+        <p>Checking saved session...</p>
+      </div>
+    );
+  }
+
+  if (isAuthenticated && showOnboarding) {
+    return (
+      <div className="card dashboard-login-card dashboard-onboarding-card">
+        <div className="dashboard-onboarding-header">
+          <span className="section-eyebrow">Welcome to My Garage</span>
+          <h2>You&apos;re all set, {regFirstName || "there"}!</h2>
+          <p>Your account has been created. Let Danny help find your ideal vehicle — or jump straight into browsing.</p>
+        </div>
+
+        <div className="dashboard-onboarding-choices">
+          <div className="dashboard-onboarding-option dashboard-onboarding-option-primary">
+            <h3>Danny&apos;s Onboarding</h3>
+            <p>Answer a few quick questions about what you&apos;re looking for — body type, budget, priorities — and Danny will start matching you with the best vehicles right away.</p>
+            <p className="badge">Takes about 60 seconds</p>
+            <button
+              className="button"
+              onClick={() => {
+                setShowOnboarding(false);
+                setAuthView("onboarding");
+              }}
+            >
+              Start Onboarding
+            </button>
+          </div>
+
+          <div className="dashboard-onboarding-option">
+            <h3>Skip &amp; Browse</h3>
+            <p>Head straight to the inventory and explore on your own. You can always complete the onboarding later from your dashboard.</p>
+            <button
+              className="button ghost"
+              onClick={() => {
+                setShowOnboarding(false);
+              }}
+            >
+              Browse Inventory
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="card dashboard-login-card">
+        <div className="dashboard-auth-tabs">
+          <button
+            className={`dashboard-auth-tab${authView === "login" ? " active" : ""}`}
+            onClick={() => { setAuthView("login"); setLoginError(null); }}
+          >
+            Sign In
+          </button>
+          <button
+            className={`dashboard-auth-tab${authView === "register" ? " active" : ""}`}
+            onClick={() => { setAuthView("register"); setRegisterError(null); }}
+          >
+            Create Account
+          </button>
+        </div>
+
+        {authView === "login" ? (
+          <>
+            <h2>Welcome Back</h2>
+            <p>Sign in to access My Garage, saved vehicles, and your deal workspace.</p>
+            <label>
+              Email
+              <input className="input" value={email} onChange={(event) => setEmail(event.target.value)} />
+            </label>
+            <label>
+              Password
+              <input
+                className="input"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </label>
+            {loginError ? <p className="dashboard-error">{loginError}</p> : null}
+            <button className="button" disabled={loggingIn} onClick={login}>
+              {loggingIn ? "Signing in..." : "Sign In"}
+            </button>
+            <p className="dashboard-auth-switch">
+              Don&apos;t have an account?{" "}
+              <button className="link-button" onClick={() => setAuthView("register")}>
+                Create one now
+              </button>
+            </p>
+          </>
+        ) : (
+          <>
+            <h2>Create Your Garage Account</h2>
+            <p>Set up your account to save vehicles, track deals, and get personalized recommendations from Danny.</p>
+            <div className="grid two">
+              <label>
+                First Name <span className="required">*</span>
+                <input className="input" value={regFirstName} onChange={(e) => setRegFirstName(e.target.value)} />
+              </label>
+              <label>
+                Last Name <span className="required">*</span>
+                <input className="input" value={regLastName} onChange={(e) => setRegLastName(e.target.value)} />
+              </label>
+            </div>
+            <label>
+              Email <span className="required">*</span>
+              <input className="input" type="email" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} />
+            </label>
+            <label>
+              Phone <span className="muted-copy">(optional)</span>
+              <input className="input" type="tel" value={regPhone} onChange={(e) => setRegPhone(e.target.value)} placeholder="(555) 555-1234" />
+            </label>
+            <label>
+              Password <span className="required">*</span>
+              <input className="input" type="password" value={regPassword} onChange={(e) => setRegPassword(e.target.value)} placeholder="At least 8 characters" />
+            </label>
+            <label>
+              Confirm Password <span className="required">*</span>
+              <input className="input" type="password" value={regConfirmPassword} onChange={(e) => setRegConfirmPassword(e.target.value)} />
+            </label>
+            {registerError ? <p className="dashboard-error">{registerError}</p> : null}
+            <button className="button" disabled={registering} onClick={register}>
+              {registering ? "Creating account..." : "Create Account"}
+            </button>
+            <p className="dashboard-auth-switch">
+              Already have an account?{" "}
+              <button className="link-button" onClick={() => setAuthView("login")}>
+                Sign in
+              </button>
+            </p>
+          </>
+        )}
       </div>
     );
   }
@@ -292,14 +538,36 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
 
   return (
     <div className="dashboard-shell">
+      {authView === "onboarding" ? (
+        <section className="card dashboard-onboarding-banner">
+          <div className="dashboard-onboarding-header">
+            <span className="section-eyebrow">Danny&apos;s Onboarding</span>
+            <h2>Let&apos;s find your ideal vehicle</h2>
+            <p>Fill out the Quick Match below, and Danny will immediately start matching you with vehicles that fit your criteria.</p>
+          </div>
+          <QuickMatchForm
+            accessToken={accessToken}
+            onCompleted={async () => {
+              setAuthView("login");
+              await refreshData();
+            }}
+          />
+          <div style={{ textAlign: "center", marginTop: "0.5rem" }}>
+            <button className="link-button" onClick={() => setAuthView("login")}>
+              Skip for now — I&apos;ll browse on my own
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       <section className="card dashboard-overview">
         <div className="dashboard-overview-head">
           <div className="dashboard-overview-copy">
             <p className="section-eyebrow">Deal Workspace</p>
-            <h2>Track the buyer journey, keep saved units organized, and move the active car forward.</h2>
+            <h2>Track your buying journey, keep saved units organized, and move the active car forward in the buying process.</h2>
             <p className="muted-copy">
-              The dashboard uses the same account session as VInventory. Saved vehicles, condition reports, and
-              acquisition state stay in sync here.
+              The dashboard uses the same account session as VInventory. Saved vehicles, Condition Reports (CR&apos;s), and
+              acquisition stage stay in sync here.
             </p>
           </div>
           <div className="dashboard-toolbar">
@@ -309,8 +577,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
             <button
               className="button ghost"
               onClick={() => {
-                clearAuthState();
-                setAuth(null);
+                resetSession();
               }}
             >
               Sign Out
@@ -422,17 +689,23 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                       </Link>
                       {item.has_inspection_report ? (
                         <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}/condition-report`}>
-                          View Report
+                          CR Available
                         </Link>
                       ) : null}
                       {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
-                      !item.has_inspection_report ? (
+                      !item.has_inspection_report && pendingReportVins.has(item.vin) ? (
+                        <button className="button ghost" disabled>
+                          CR Pending
+                        </button>
+                      ) : null}
+                      {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
+                      !item.has_inspection_report && !pendingReportVins.has(item.vin) ? (
                         <button
                           className="button ghost"
                           onClick={() => requestConditionReport(item.vin)}
                           disabled={itemActionLoading}
                         >
-                          {itemActionLoading ? "Requesting..." : "Condition Report"}
+                          {itemActionLoading ? "Requesting..." : "Order CR"}
                         </button>
                       ) : null}
                       <button className="button" onClick={() => startGarageAcquisition(item.vin)} disabled={itemActionLoading}>
@@ -509,7 +782,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                 </Link>
                 {spotlightItem.has_inspection_report ? (
                   <Link className="button ghost" href={`/vinventory/${encodeURIComponent(spotlightItem.vin)}/condition-report`}>
-                    View Report
+                    CR Available
                   </Link>
                 ) : null}
                 <button
@@ -532,7 +805,9 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
         </aside>
       </section>
 
-      <QuickMatchForm accessToken={accessToken} onCompleted={refreshData} />
+      {authView !== "onboarding" ? (
+        <QuickMatchForm accessToken={accessToken} onCompleted={refreshData} />
+      ) : null}
 
       <section>
         <h2>Top Recommendations</h2>

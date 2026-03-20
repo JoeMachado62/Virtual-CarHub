@@ -8,7 +8,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
-import { AuthState, clearAuthState, loadAuthState } from "@/lib/auth";
+import { AuthState, clearAuthState, loadValidAuthState } from "@/lib/auth";
 import { normalizeSourceFilterValue, toPublicSourceLabel } from "@/lib/sourceLabels";
 
 type DisplayMode = "MARKETING" | "INSPECTION_PENDING" | "INSPECTION_REPORT";
@@ -19,9 +19,14 @@ type VehicleDisplayContext = {
   inspection_status: InspectionStatus;
   hero_image?: string | null;
   gallery_images?: string[];
+  marketing_images?: string[];
+  imagin_images?: string[];
+  spin_images?: string[];
+  source_images?: string[];
   inspection_images?: string[];
   disclosure_images?: string[];
   has_inspection_report?: boolean;
+  has_imagin_stock?: boolean;
   disclaimer?: string;
   condition_report?: Record<string, unknown>;
 };
@@ -292,10 +297,19 @@ export function InventoryExplorer() {
   const [garageNotice, setGarageNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    const saved = loadAuthState();
-    if (saved) {
+    let cancelled = false;
+
+    async function restoreSession() {
+      const saved = await loadValidAuthState();
+      if (cancelled || !saved) return;
       setAuth(saved);
     }
+
+    void restoreSession();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -318,12 +332,54 @@ export function InventoryExplorer() {
   useEffect(() => {
     const q = searchParams.get("q") || "";
     const sourceType = normalizeSourceFilterValue(searchParams.get("source_type"));
-    if (!q && !sourceType) return;
 
-    const nextFilters = {
+    // Read all structured filter params (populated by AI Intake / DealBuilderPanel)
+    const make = searchParams.get("make") || "";
+    const model = searchParams.get("model") || "";
+    const trim = searchParams.get("trim") || "";
+    const bodyType = searchParams.get("body_type") || "";
+    const minYear = searchParams.get("min_year") || "";
+    const maxYear = searchParams.get("max_year") || "";
+    const minPrice = searchParams.get("min_price") || "";
+    const maxPrice = searchParams.get("max_price") || "";
+    const minMiles = searchParams.get("min_miles") || "";
+    const maxMiles = searchParams.get("max_miles") || "";
+    const state = searchParams.get("state") || "";
+    const zipCode = searchParams.get("zip_code") || "";
+
+    const hasAnyParam = q || sourceType || make || model || trim || bodyType
+      || minYear || maxYear || minPrice || maxPrice || minMiles || maxMiles
+      || state || zipCode;
+    if (!hasAnyParam) return;
+
+    // Preserve localStorage zip if none provided in URL
+    let resolvedZip = zipCode;
+    if (!resolvedZip) {
+      try {
+        const raw = window.localStorage.getItem(SEARCH_CONTEXT_KEY);
+        if (raw) {
+          const stored = JSON.parse(raw) as Partial<Pick<FilterState, "zip_code">>;
+          resolvedZip = stored.zip_code || "";
+        }
+      } catch { /* ignore */ }
+    }
+
+    const nextFilters: FilterState = {
       ...INITIAL_FILTERS,
       q,
       source_type: sourceType,
+      make,
+      model,
+      trim,
+      body_type: bodyType,
+      min_year: minYear,
+      max_year: maxYear,
+      min_price: minPrice,
+      max_price: maxPrice,
+      min_miles: minMiles,
+      max_miles: maxMiles,
+      state,
+      ...(resolvedZip ? { zip_code: resolvedZip } : {}),
     };
     setFilters(nextFilters);
     setAppliedFilters(nextFilters);
@@ -1295,7 +1351,27 @@ export function InventoryExplorer() {
                   ) : null}
 
                   {selectedVehicle.display_context?.disclaimer ? (
-                    <p style={{ marginBottom: 0 }}>{selectedVehicle.display_context.disclaimer}</p>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      {(selectedVehicle.display_context?.has_imagin_stock ||
+                        selectedVehicle.display_context?.inspection_images?.length) ? (
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {selectedVehicle.display_context?.has_imagin_stock ? (
+                            <span className="badge">
+                              Studio images {selectedVehicle.display_context?.imagin_images?.length || 0}
+                            </span>
+                          ) : null}
+                          {selectedVehicle.display_context?.spin_images?.length ? (
+                            <span className="badge">360 frames {selectedVehicle.display_context.spin_images.length}</span>
+                          ) : null}
+                          {selectedVehicle.display_context?.inspection_images?.length ? (
+                            <span className="badge">
+                              Inspection photos {selectedVehicle.display_context.inspection_images.length}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <p style={{ marginBottom: 0 }}>{selectedVehicle.display_context.disclaimer}</p>
+                    </div>
                   ) : null}
 
                   {selectedVehicle.source_type === "ove" || selectedVehicle.source_type === "auction" ? (

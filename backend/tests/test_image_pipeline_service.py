@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import delete, select
 
+from app.core.config import settings
 from app.core.constants import (
     AuctionPlatform,
     DealState,
@@ -25,6 +26,7 @@ from app.services.image_pipeline_service import (
     resolve_vehicle_display_context,
     sync_marketcheck_source_assets,
 )
+from app.services.imagin_service import sync_imagin_source_assets
 
 
 def _make_vehicle(vin: str) -> Vehicle:
@@ -243,3 +245,79 @@ def test_image_jobs_are_deduped_by_fingerprint() -> None:
     assert job_1.id == job_2.id
     assert tier3_1.id == tier3_2.id
     assert len(jobs) == 2
+
+
+def test_auction_context_uses_imagin_as_primary_and_appends_inspection_images(monkeypatch) -> None:
+    init_db()
+    vin = "1FTFW1E80MFA12345"
+    with SessionLocal() as db:
+        db.execute(delete(VehicleInspectionImage).where(VehicleInspectionImage.vin == vin))
+        db.execute(delete(VehicleInspectionReport).where(VehicleInspectionReport.vin == vin))
+        db.execute(delete(VehicleImageJob).where(VehicleImageJob.vin == vin))
+        db.execute(delete(VehicleImageAsset).where(VehicleImageAsset.vin == vin))
+        db.execute(delete(Vehicle).where(Vehicle.vin == vin))
+        db.commit()
+
+        monkeypatch.setattr(settings, "imagin_enabled", True)
+        monkeypatch.setattr(settings, "imagin_customer_id", "test-customer")
+        monkeypatch.setattr(settings, "imagin_spin_enabled", False)
+
+        vehicle = Vehicle(
+            vin=vin,
+            listing_id=f"{vin}-listing",
+            year=2024,
+            make="Ford",
+            model="F-150",
+            trim="XLT",
+            body_type="Truck",
+            source_type="ove",
+            price_asking=41250,
+            images=[],
+            features_normalized={
+                "exterior_color": "Blue",
+                "interior_color": "Black",
+                "fuel_type": "Gasoline",
+            },
+            available=True,
+        )
+        db.add(vehicle)
+        db.flush()
+
+        sync_imagin_source_assets(
+            db,
+            vehicle=vehicle,
+            listing_id=vehicle.listing_id,
+            source_platform=AuctionPlatform.MANHEIM,
+        )
+
+        report = VehicleInspectionReport(
+            vin=vin,
+            platform=AuctionPlatform.MANHEIM,
+            inspection_status=InspectionStatus.NORMALIZED,
+            normalized_report_json={"overall_grade": {"vch_normalized_grade": "A-"}},
+            is_current=True,
+        )
+        db.add(report)
+        db.flush()
+        db.add(
+            VehicleInspectionImage(
+                inspection_report_id=report.id,
+                vin=vin,
+                image_type="inspection",
+                filename="inspection_001.jpg",
+                source_url=f"https://inspect.example/{vin}/inspection_001.jpg",
+                display_order=1,
+            )
+        )
+        db.commit()
+
+        context = resolve_vehicle_display_context(db, vehicle=vehicle, deal_stage=DealState.ACQUIRED)
+
+    assert context["mode"] == ImageDisplayMode.INSPECTION_REPORT.value
+    assert context["has_imagin_stock"] is True
+    assert context["hero_image"].startswith("https://cdn.imagin.studio/getImage?")
+    assert "customer=test-customer" in context["hero_image"]
+    assert context["inspection_images"] == [f"https://inspect.example/{vin}/inspection_001.jpg"]
+    assert context["gallery_images"][0].startswith("https://cdn.imagin.studio/getImage?")
+    assert context["gallery_images"][-1] == f"https://inspect.example/{vin}/inspection_001.jpg"
+    assert "IMAGIN studio reference images" in context["disclaimer"]
