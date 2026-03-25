@@ -13,6 +13,7 @@ from app.models.entities import Deal, User
 from app.services.deal_service import get_or_create_active_deal
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/v1/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/v1/auth/login", auto_error=False)
 
 
 def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)) -> User:
@@ -41,6 +42,25 @@ def is_admin_user(user: User) -> bool:
     admin_domains = ["virtualcarhub.com", "admin.virtualcarhub.com"]
     email_domain = user.email.split("@")[-1].lower()
     return email_domain in admin_domains
+
+
+def get_optional_user(
+    db: Session = Depends(get_db), token: str | None = Depends(oauth2_scheme_optional)
+) -> User | None:
+    """Return the authenticated user if a valid token is provided, otherwise None."""
+    if not token:
+        return None
+    try:
+        payload = decode_token(token, expected_type=TokenType.ACCESS)
+        subject = payload.get("sub")
+        if not subject:
+            return None
+        user = db.scalar(select(User).where(User.id == subject))
+        if not user or not user.is_active:
+            return None
+        return user
+    except Exception:
+        return None
 
 
 def require_service_token(x_service_token: str | None = Header(default=None)) -> None:

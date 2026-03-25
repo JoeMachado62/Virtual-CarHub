@@ -26,6 +26,8 @@ type VehicleDisplayContext = {
   disclosure_images?: string[];
   has_inspection_report?: boolean;
   has_imagin_stock?: boolean;
+  dealer_photos_gated?: boolean;
+  gated_photo_count?: number;
   disclaimer?: string;
   condition_report?: Record<string, unknown>;
 };
@@ -76,6 +78,7 @@ type VehicleDetail = {
   available: boolean;
   last_seen_active?: string | null;
   updated_at?: string | null;
+  is_in_garage?: boolean;
 };
 
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
@@ -120,7 +123,12 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     async function loadVehicle() {
       setLoading(true);
       setError(null);
-      const response = await apiFetch<VehicleDetail>(`/inventory/${encodeURIComponent(vin)}`);
+      const token = auth?.accessToken || undefined;
+      const response = await apiFetch<VehicleDetail>(
+        `/inventory/${encodeURIComponent(vin)}`,
+        undefined,
+        token,
+      );
       if (response.status !== "ok") {
         setVehicle(null);
         setSelectedImage(null);
@@ -139,14 +147,14 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     }
 
     void loadVehicle();
-  }, [vin]);
+  }, [vin, auth]);
 
   if (loading) {
     return (
       <div className="grid" style={{ gap: 12 }}>
-        <Link className="button ghost" href={"/vinventory" as any}>
-          Back to Inventory
-        </Link>
+        <button className="button ghost" onClick={() => window.history.back()}>
+          Back
+        </button>
         <section className="card">Loading vehicle details...</section>
       </div>
     );
@@ -155,9 +163,9 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   if (error || !vehicle) {
     return (
       <div className="grid" style={{ gap: 12 }}>
-        <Link className="button ghost" href={"/vinventory" as any}>
-          Back to Inventory
-        </Link>
+        <button className="button ghost" onClick={() => window.history.back()}>
+          Back
+        </button>
         <section className="card">{error || "Vehicle not found."}</section>
       </div>
     );
@@ -205,6 +213,18 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
         : "Vehicle saved to My Garage."
     );
     setActionLoading(null);
+
+    // Re-fetch vehicle detail with auth to unlock gated photos
+    const refreshed = await apiFetch<VehicleDetail>(
+      `/inventory/${encodeURIComponent(currentVehicle.vin)}`,
+      undefined,
+      auth.accessToken,
+    );
+    if (refreshed.status === "ok") {
+      setVehicle(refreshed.data);
+      const imgs = resolveDisplayImages(refreshed.data);
+      setSelectedImage(resolveHeroImage(refreshed.data) || imgs[0] || null);
+    }
   }
 
   async function startAcquisition() {
@@ -288,9 +308,9 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
 
   return (
     <div className="grid" style={{ gap: 12 }}>
-      <Link className="button ghost" href={"/vinventory" as any}>
-        Back to Inventory
-      </Link>
+      <button className="button ghost" onClick={() => window.history.back()}>
+        Back
+      </button>
 
       <section className="card inventory-detail-top">
         <div>
@@ -372,6 +392,18 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
         </article>
       </section>
 
+      {vehicle.display_context?.dealer_photos_gated && !vehicle.is_in_garage ? (
+        <section className="card" style={{ borderLeft: "3px solid var(--accent)" }}>
+          <h3>Additional Vehicle Photos Available</h3>
+          <p style={{ marginBottom: 12 }}>
+            Additional vehicle photos are available. Add this vehicle to your Garage to unlock the full gallery.
+          </p>
+          <button className="button" onClick={addToGarage} disabled={actionLoading !== null}>
+            {actionLoading === "garage" ? "Saving..." : "Add to Garage to See Additional Vehicle Photos"}
+          </button>
+        </section>
+      ) : null}
+
       {vehicle.display_context?.disclaimer ? (
         <section className="card">
           <h3>Image Source Notice</h3>
@@ -395,9 +427,15 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
       {vehicle.source_type === "ove" || vehicle.source_type === "auction" ? (
         <>
           <section className="inventory-actions">
-            <button className="button" onClick={addToGarage} disabled={actionLoading !== null}>
-              {actionLoading === "garage" ? "Saving..." : "Add to My Garage"}
-            </button>
+            {vehicle.is_in_garage ? (
+              <button className="button ghost" disabled>
+                In My Garage
+              </button>
+            ) : (
+              <button className="button" onClick={addToGarage} disabled={actionLoading !== null}>
+                {actionLoading === "garage" ? "Saving..." : "Save to My Garage"}
+              </button>
+            )}
             <button className="button ghost" onClick={startAcquisition} disabled={actionLoading !== null}>
               {actionLoading === "acquire" ? "Starting..." : "Start Acquisition"}
             </button>
@@ -448,6 +486,26 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
           </section>
           <AuctionSnapshotCard snapshot={vehicle.listing_snapshot} />
         </>
+      ) : null}
+
+      {vehicle.source_type !== "ove" && vehicle.source_type !== "auction" ? (
+        <section className="inventory-actions">
+          {vehicle.is_in_garage ? (
+            <button className="button ghost" disabled>
+              In My Garage
+            </button>
+          ) : (
+            <button className="button" onClick={addToGarage} disabled={actionLoading !== null}>
+              {actionLoading === "garage"
+                ? "Saving..."
+                : vehicle.display_context?.dealer_photos_gated
+                  ? "Add to Garage to See Additional Vehicle Photos"
+                  : "Save to My Garage"}
+            </button>
+          )}
+          {actionError ? <p style={{ color: "var(--danger)" }}>{actionError}</p> : null}
+          {actionMessage ? <p>{actionMessage}</p> : null}
+        </section>
       ) : null}
 
       <section className="card">

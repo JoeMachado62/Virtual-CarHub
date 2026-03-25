@@ -30,3 +30,13 @@ wordpress/work/
 
 # Legacy custom child theme snapshot kept local only
 wordpress/themes/virtualcarhub-motors-child/
+
+# Claude Code local settings
+.claude/
+
+# Template reference archives (large binaries)
+.template-reference/
+*.zip
+
+# Blog static site (managed separately)
+blog/

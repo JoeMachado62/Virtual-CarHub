@@ -18,6 +18,10 @@ from app.services.imagin_service import sync_imagin_source_assets
 from app.services.image_pipeline_service import ensure_tier2_hero_job, sync_source_assets
 from app.services.inventory_service import upsert_vehicle_with_source_priority
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass(slots=True)
 class OveBulkIngestReport:
@@ -114,15 +118,54 @@ def ingest_ove_inventory(db: Session, payload: OveBulkIngestRequest) -> OveBulkI
         # For multi-batch imports, we'd need to collect all VINs from all batches
         # For now, only do this for single-batch full snapshots
         if not batch_total or batch_total == 1:
-            report.marked_sold = _mark_missing_ove_inventory_unavailable(
-                db,
-                present_vins=current_batch_vins,
-                source_platforms=report.source_platforms,
-                now=now,
+            # Safety guard: count existing available OVE vehicles for these platforms.
+            # If the incoming batch has far fewer VINs than what's in the DB,
+            # it's likely a partial/incomplete sheet — skip marking to prevent
+            # accidentally wiping the database.
+            _MIN_SNAPSHOT_RATIO = 0.5  # batch must contain >= 50% of existing count
+            existing_count = _count_existing_ove_available(
+                db, source_platforms=report.source_platforms
             )
+            if existing_count > 100 and len(current_batch_vins) < existing_count * _MIN_SNAPSHOT_RATIO:
+                logger.warning(
+                    "Skipping mark-unavailable: batch has %d VINs but DB has %d "
+                    "available OVE vehicles (ratio %.1f%% < %.0f%% threshold). "
+                    "This looks like a partial sheet update.",
+                    len(current_batch_vins),
+                    existing_count,
+                    len(current_batch_vins) / existing_count * 100,
+                    _MIN_SNAPSHOT_RATIO * 100,
+                )
+            else:
+                report.marked_sold = _mark_missing_ove_inventory_unavailable(
+                    db,
+                    present_vins=current_batch_vins,
+                    source_platforms=report.source_platforms,
+                    now=now,
+                )
 
     db.flush()
     return report
+
+
+def _count_existing_ove_available(
+    db: Session,
+    *,
+    source_platforms: list[str],
+) -> int:
+    """Return the number of currently available OVE vehicles for the given platforms."""
+    stmt = select(func.count()).select_from(Vehicle).where(
+        func.lower(Vehicle.source_type) == InventorySourceType.OVE.value,
+        Vehicle.available.is_(True),
+    )
+    normalized_platforms = {str(v).strip().lower() for v in source_platforms if str(v).strip()}
+    if normalized_platforms:
+        platform_expr = func.lower(func.coalesce(Vehicle.features_normalized["source_platform"].as_string(), ""))
+        platform_filters = [platform_expr.in_(sorted(normalized_platforms))]
+        if AuctionPlatform.MANHEIM.value in normalized_platforms:
+            platform_filters.append(platform_expr == "")
+        stmt = stmt.where(or_(*platform_filters))
+    return db.scalar(stmt) or 0
 
 
 def _mark_missing_ove_inventory_unavailable(

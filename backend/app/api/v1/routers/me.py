@@ -18,6 +18,7 @@ from app.services.image_pipeline_service import (
     ensure_tier3_processing_job,
     resolve_vehicle_card_media,
     resolve_vehicle_display_context,
+    sync_marketcheck_source_assets,
 )
 from app.services.matching_service import run_matching
 from app.services.ove_inventory_service import enqueue_ove_detail_request
@@ -136,12 +137,13 @@ def _serialize_garage_item(
     deal_stage: DealState,
 ) -> dict:
     if vehicle:
-        media = resolve_vehicle_card_media(db, vehicle=vehicle, deal_stage=deal_stage, deal_id=item.deal_id)
+        media = resolve_vehicle_card_media(db, vehicle=vehicle, deal_stage=deal_stage, deal_id=item.deal_id, is_garage_view=True)
         display_context = resolve_vehicle_display_context(
             db,
             vehicle=vehicle,
             deal_stage=deal_stage,
             deal_id=item.deal_id,
+            is_garage_view=True,
         )
         thumbnail = media.thumbnail
         display_mode = media.display_mode.value
@@ -319,8 +321,8 @@ def post_quick_match(
 
 
 @router.get("/deal")
-def get_deal(current_deal=Depends(get_current_deal)) -> dict:
-    condition_report_eligible, condition_report_reason = _condition_report_eligibility(current_deal)
+def get_deal(current_user: User = Depends(get_current_user), current_deal=Depends(get_current_deal)) -> dict:
+    condition_report_eligible, condition_report_reason = _condition_report_eligibility(current_deal, current_user)
     return ok(
         {
             "id": current_deal.id,
@@ -488,6 +490,75 @@ def add_to_garage(
         trigger_event="garage_saved",
         source_image_urls=vehicle.images or [],
     )
+
+    # For MarketCheck vehicles, fetch real dealer photos on garage add
+    import logging
+    _log = logging.getLogger("vch.garage")
+    mc_images_fetched = 0
+    is_mc = vehicle.source_type and vehicle.source_type.lower() in ("marketcheck", "dealer_wholesale")
+    _log.info("garage_add source_type=%s is_mc=%s vin=%s", vehicle.source_type, is_mc, vehicle.vin)
+    if is_mc:
+        from app.core.config import settings
+        _log.info("has_marketcheck=%s", settings.has_marketcheck)
+        if settings.has_marketcheck:
+            try:
+                from app.integrations.marketcheck_client import MarketCheckClient
+                mc_client = MarketCheckClient(
+                    api_key=settings.marketcheck_api_key,
+                    api_secret=settings.marketcheck_api_secret,
+                    price_api_key=settings.marketcheck_price_api_key,
+                    api_base_url=settings.marketcheck_api_base_url,
+                    live=settings.has_marketcheck,
+                )
+                # Try listing endpoint first (faster), fall back to search
+                photo_links: list[str] = []
+
+                def _extract_photos(listing_data: dict) -> list[str]:
+                    """Extract the fullest set of photos from a MC listing."""
+                    media = listing_data.get("media", {}) if isinstance(listing_data.get("media"), dict) else {}
+                    # photo_links = original dealer URLs (full set)
+                    # photo_links_cached = MarketCheck CDN copies (often a subset)
+                    direct = media.get("photo_links") or listing_data.get("photo_links") or []
+                    cached = media.get("photo_links_cached") or listing_data.get("photo_links_cached") or []
+                    if not isinstance(direct, list):
+                        direct = []
+                    if not isinstance(cached, list):
+                        cached = []
+                    # Use whichever set is larger — direct URLs usually have more
+                    return direct if len(direct) >= len(cached) else cached
+
+                if vehicle.listing_id:
+                    try:
+                        listing = mc_client.get_listing(vehicle.listing_id)
+                        if isinstance(listing, dict):
+                            photo_links = _extract_photos(listing)
+                            _log.info("listing endpoint returned %d photos for %s", len(photo_links), vehicle.vin)
+                    except Exception as e:
+                        _log.warning("listing endpoint failed for %s: %s", vehicle.listing_id, e)
+
+                if not photo_links:
+                    mc_payload = mc_client.search_inventory({"vin": vehicle.vin, "rows": 1, "start": 0})
+                    listings = mc_payload.get("listings", []) if isinstance(mc_payload, dict) else []
+                    listing = listings[0] if listings else None
+                    _log.info("search endpoint returned %d listings for VIN %s", len(listings), vehicle.vin)
+                    if isinstance(listing, dict):
+                        photo_links = _extract_photos(listing)
+
+                if isinstance(photo_links, list) and photo_links:
+                    _log.info("syncing %d dealer photos for %s", len(photo_links), vehicle.vin)
+                    sync_marketcheck_source_assets(
+                        db,
+                        vin=vehicle.vin,
+                        listing_id=vehicle.listing_id,
+                        image_urls=photo_links,
+                    )
+                    vehicle.images = photo_links
+                    mc_images_fetched = len(photo_links)
+                else:
+                    _log.warning("no dealer photos found for %s", vehicle.vin)
+            except Exception as e:
+                _log.exception("dealer photo fetch failed for %s: %s", vehicle.vin, e)
+
     ove_refresh, source_platform = _enqueue_auction_detail_refresh(
         db,
         vehicle=vehicle,
@@ -517,6 +588,7 @@ def add_to_garage(
         {
             "garage_item": _serialize_garage_item(db, item, vehicle, deal_stage=current_deal.stage),
             "ove_detail_refresh": ove_refresh,
+            "dealer_photos_fetched": mc_images_fetched,
         }
     )
 

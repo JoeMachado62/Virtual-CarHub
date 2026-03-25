@@ -681,11 +681,8 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                       </p>
                     </div>
                     <div className="inventory-actions">
-                      <Link className="button ghost" href={`/dashboard?vin=${encodeURIComponent(item.vin)}`}>
-                        Focus
-                      </Link>
                       <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}`}>
-                        Open
+                        View Details
                       </Link>
                       {item.has_inspection_report ? (
                         <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}/condition-report`}>
@@ -778,7 +775,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
               </div>
               <div className="inventory-actions">
                 <Link className="button ghost" href={`/vinventory/${encodeURIComponent(spotlightItem.vin)}`}>
-                  Open Detail
+                  View Details
                 </Link>
                 {spotlightItem.has_inspection_report ? (
                   <Link className="button ghost" href={`/vinventory/${encodeURIComponent(spotlightItem.vin)}/condition-report`}>

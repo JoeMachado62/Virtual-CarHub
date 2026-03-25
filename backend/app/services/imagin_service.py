@@ -24,7 +24,7 @@ class ImaginManifest:
 
 
 def build_imagin_manifest(vehicle: Vehicle) -> ImaginManifest | None:
-    if not settings.has_imagin or not _is_auction_vehicle(vehicle):
+    if not settings.has_imagin:
         return None
 
     spec = _build_spec(vehicle)

@@ -27,6 +27,8 @@ type VehicleDisplayContext = {
   disclosure_images?: string[];
   has_inspection_report?: boolean;
   has_imagin_stock?: boolean;
+  dealer_photos_gated?: boolean;
+  gated_photo_count?: number;
   disclaimer?: string;
   condition_report?: Record<string, unknown>;
 };
@@ -49,6 +51,8 @@ type InventoryItem = {
   source_label?: string | null;
   source_url?: string | null;
   thumbnail?: string | null;
+  dealer_photos_gated?: boolean;
+  gated_photo_count?: number;
   images_count?: number;
   features_preview?: string[];
   display_mode?: DisplayMode;
@@ -202,6 +206,8 @@ type FilterState = {
   max_year: string;
   min_miles: string;
   max_miles: string;
+  exterior_color: string;
+  interior_color: string;
   has_images: boolean;
   live_sync: boolean;
   sort_by: "updated_at" | "price_asking" | "year" | "odometer";
@@ -217,18 +223,31 @@ const INITIAL_FILTERS: FilterState = {
   source_type: "",
   state: "",
   zip_code: "",
-  radius: "50",
+  radius: "250",
   min_price: "",
   max_price: "",
   min_year: "",
   max_year: "",
   min_miles: "",
   max_miles: "",
+  exterior_color: "",
+  interior_color: "",
   has_images: false,
   live_sync: true,
   sort_by: "updated_at",
   sort_dir: "desc",
 };
+
+const EXTERIOR_COLOR_OPTIONS = [
+  "White", "Black", "Gray", "Silver", "Blue", "Red", "Green", "Brown",
+  "Beige/Tan", "Orange", "Yellow", "Gold", "Purple", "Burgundy/Maroon",
+  "Bronze", "Turquoise/Teal", "Other",
+];
+
+const INTERIOR_COLOR_OPTIONS = [
+  "Black", "Gray", "Beige/Tan", "Brown", "White/Ivory", "Red", "Blue",
+  "Green", "Orange", "Burgundy/Maroon", "Other",
+];
 
 const EMPTY_PAGINATION: Pagination = {
   page: 1,
@@ -254,6 +273,7 @@ const EMPTY_SYNC: SyncMeta = {
 
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
 const SEARCH_CONTEXT_KEY = "vch:inventory:search-context";
+const SEARCH_FILTERS_KEY = "vch:inventory:filters";
 const LIVE_SYNC_FALLBACK_MESSAGE = "Live wholesale sync is temporarily unavailable. Showing saved inventory results.";
 
 function sanitizeSyncWarning(message?: string | null): string | null {
@@ -276,6 +296,7 @@ export function InventoryExplorer() {
 
   const [filters, setFilters] = useState<FilterState>(INITIAL_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<FilterState>(INITIAL_FILTERS);
+  const [filtersReady, setFiltersReady] = useState(false);
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<InventoryItem[]>([]);
   const [pagination, setPagination] = useState<Pagination>(EMPTY_PAGINATION);
@@ -292,6 +313,7 @@ export function InventoryExplorer() {
 
   const [garageItems, setGarageItems] = useState<GarageItem[]>([]);
   const [garageLoading, setGarageLoading] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [garageActionVin, setGarageActionVin] = useState<string | null>(null);
   const [garageError, setGarageError] = useState<string | null>(null);
   const [garageNotice, setGarageNotice] = useState<string | null>(null);
@@ -313,76 +335,96 @@ export function InventoryExplorer() {
   }, []);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(SEARCH_CONTEXT_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<Pick<FilterState, "zip_code" | "radius">>;
-      if (!parsed.zip_code && !parsed.radius) return;
-      const nextFilters = {
+    // Check if URL has search params (from NLP, DealBuilder, etc.)
+    const hasUrlParams = Array.from(searchParams.keys()).some(
+      (k) => !["nlp_query"].includes(k) && searchParams.get(k),
+    );
+
+    if (hasUrlParams) {
+      // ── URL params present: build filters from URL ──
+      const vinParam = searchParams.get("vin") || "";
+      const q = vinParam || searchParams.get("q") || "";
+      const sourceType = normalizeSourceFilterValue(searchParams.get("source_type"));
+      const make = searchParams.get("make") || "";
+      const model = searchParams.get("model") || "";
+      const trim = searchParams.get("trim") || "";
+      const bodyType = searchParams.get("body_type") || "";
+      const minYear = searchParams.get("min_year") || "";
+      const maxYear = searchParams.get("max_year") || "";
+      const minPrice = searchParams.get("min_price") || "";
+      const maxPrice = searchParams.get("max_price") || "";
+      const minMiles = searchParams.get("min_miles") || "";
+      const maxMiles = searchParams.get("max_miles") || "";
+      const exteriorColor = searchParams.get("exterior_color") || "";
+      const interiorColor = searchParams.get("interior_color") || "";
+      const state = searchParams.get("state") || "";
+      const zipCode = searchParams.get("zip_code") || "";
+
+      // Preserve localStorage zip if none provided in URL
+      let resolvedZip = zipCode;
+      if (!resolvedZip) {
+        try {
+          const raw = window.localStorage.getItem(SEARCH_CONTEXT_KEY);
+          if (raw) {
+            const stored = JSON.parse(raw) as Partial<Pick<FilterState, "zip_code">>;
+            resolvedZip = stored.zip_code || "";
+          }
+        } catch { /* ignore */ }
+      }
+
+      const nextFilters: FilterState = {
         ...INITIAL_FILTERS,
-        ...parsed,
+        q,
+        source_type: sourceType,
+        make,
+        model,
+        trim,
+        body_type: bodyType,
+        min_year: minYear,
+        max_year: maxYear,
+        min_price: minPrice,
+        max_price: maxPrice,
+        min_miles: minMiles,
+        max_miles: maxMiles,
+        exterior_color: exteriorColor,
+        interior_color: interiorColor,
+        state,
+        ...(resolvedZip ? { zip_code: resolvedZip } : {}),
       };
-      setFilters((prev) => ({ ...prev, ...nextFilters }));
-      setAppliedFilters((prev) => ({ ...prev, ...nextFilters }));
-    } catch {
+      setFilters(nextFilters);
+      setAppliedFilters(nextFilters);
+      setFiltersReady(true);
       return;
     }
-  }, []);
 
-  useEffect(() => {
-    const q = searchParams.get("q") || "";
-    const sourceType = normalizeSourceFilterValue(searchParams.get("source_type"));
-
-    // Read all structured filter params (populated by AI Intake / DealBuilderPanel)
-    const make = searchParams.get("make") || "";
-    const model = searchParams.get("model") || "";
-    const trim = searchParams.get("trim") || "";
-    const bodyType = searchParams.get("body_type") || "";
-    const minYear = searchParams.get("min_year") || "";
-    const maxYear = searchParams.get("max_year") || "";
-    const minPrice = searchParams.get("min_price") || "";
-    const maxPrice = searchParams.get("max_price") || "";
-    const minMiles = searchParams.get("min_miles") || "";
-    const maxMiles = searchParams.get("max_miles") || "";
-    const state = searchParams.get("state") || "";
-    const zipCode = searchParams.get("zip_code") || "";
-
-    const hasAnyParam = q || sourceType || make || model || trim || bodyType
-      || minYear || maxYear || minPrice || maxPrice || minMiles || maxMiles
-      || state || zipCode;
-    if (!hasAnyParam) return;
-
-    // Preserve localStorage zip if none provided in URL
-    let resolvedZip = zipCode;
-    if (!resolvedZip) {
-      try {
-        const raw = window.localStorage.getItem(SEARCH_CONTEXT_KEY);
-        if (raw) {
-          const stored = JSON.parse(raw) as Partial<Pick<FilterState, "zip_code">>;
-          resolvedZip = stored.zip_code || "";
+    // ── No URL params: restore from sessionStorage or localStorage ──
+    try {
+      const savedFilters = window.sessionStorage.getItem(SEARCH_FILTERS_KEY);
+      if (savedFilters) {
+        const restored = JSON.parse(savedFilters) as FilterState;
+        const hasFilters = restored.make || restored.model || restored.q
+          || restored.min_year || restored.max_year || restored.min_price
+          || restored.max_price || restored.min_miles || restored.max_miles
+          || restored.zip_code;
+        if (hasFilters) {
+          setFilters(restored);
+          setAppliedFilters(restored);
+          setFiltersReady(true);
+          return;
         }
-      } catch { /* ignore */ }
-    }
+      }
 
-    const nextFilters: FilterState = {
-      ...INITIAL_FILTERS,
-      q,
-      source_type: sourceType,
-      make,
-      model,
-      trim,
-      body_type: bodyType,
-      min_year: minYear,
-      max_year: maxYear,
-      min_price: minPrice,
-      max_price: maxPrice,
-      min_miles: minMiles,
-      max_miles: maxMiles,
-      state,
-      ...(resolvedZip ? { zip_code: resolvedZip } : {}),
-    };
-    setFilters(nextFilters);
-    setAppliedFilters(nextFilters);
+      const raw = window.localStorage.getItem(SEARCH_CONTEXT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<Pick<FilterState, "zip_code" | "radius">>;
+        if (parsed.zip_code || parsed.radius) {
+          setFilters((prev) => ({ ...prev, ...parsed }));
+          setAppliedFilters((prev) => ({ ...prev, ...parsed }));
+        }
+      }
+    } catch { /* ignore */ }
+
+    setFiltersReady(true);
   }, [searchParams]);
 
   useEffect(() => {
@@ -391,8 +433,9 @@ export function InventoryExplorer() {
   }, [filters.make, filters.model, filters.min_year, filters.max_year, filters.has_images]);
 
   useEffect(() => {
+    if (!filtersReady) return;
     void loadInventory(appliedFilters, page);
-  }, [appliedFilters, page]);
+  }, [filtersReady, appliedFilters, page]);
 
   useEffect(() => {
     if (auth?.accessToken) {
@@ -433,9 +476,11 @@ export function InventoryExplorer() {
         SEARCH_CONTEXT_KEY,
         JSON.stringify({
           zip_code: nextFilters.zip_code,
-          radius: nextFilters.radius || "50",
+          radius: nextFilters.radius || "250",
         })
       );
+      // Save full filter state to sessionStorage so it survives navigation
+      window.sessionStorage.setItem(SEARCH_FILTERS_KEY, JSON.stringify(nextFilters));
     } catch {
       return;
     }
@@ -477,14 +522,16 @@ export function InventoryExplorer() {
     setLoading(true);
     setError(null);
 
-    // For auction searches, ZIP code is optional since auction vehicles are nationwide
+    // ZIP is optional for auction searches, VIN lookups, and specific make/model queries
     const isAuctionSearch = currentFilters.source_type === "auction";
+    const isVinSearch = currentFilters.q.trim().length === 17 && /^[A-HJ-NPR-Z0-9]+$/i.test(currentFilters.q.trim());
+    const hasStructuredFilters = Boolean(currentFilters.make.trim() || currentFilters.model.trim());
 
-    if (!isAuctionSearch && !currentFilters.zip_code.trim()) {
+    if (!isAuctionSearch && !isVinSearch && !hasStructuredFilters && !currentFilters.zip_code.trim()) {
       setRows([]);
       setPagination(EMPTY_PAGINATION);
       setSyncMeta(EMPTY_SYNC);
-      setError("ZIP code is required to search inventory (except for auction vehicles).");
+      setError("Enter a ZIP code, VIN, or specify a make/model to search inventory.");
       setLoading(false);
       return;
     }
@@ -511,6 +558,8 @@ export function InventoryExplorer() {
     if (currentFilters.max_year.trim()) params.set("max_year", currentFilters.max_year.trim());
     if (currentFilters.min_miles.trim()) params.set("min_miles", currentFilters.min_miles.trim());
     if (currentFilters.max_miles.trim()) params.set("max_miles", currentFilters.max_miles.trim());
+    if (currentFilters.exterior_color.trim()) params.set("exterior_color", currentFilters.exterior_color.trim());
+    if (currentFilters.interior_color.trim()) params.set("interior_color", currentFilters.interior_color.trim());
     params.set("has_images", currentFilters.has_images ? "true" : "false");
     params.set("live_sync", currentFilters.live_sync ? "true" : "false");
     params.set("sync_limit", "72");
@@ -630,6 +679,7 @@ export function InventoryExplorer() {
         queued?: boolean;
         deduplicated?: boolean;
       } | null;
+      dealer_photos_fetched?: number;
     }>(`/me/garage/${encodeURIComponent(vin)}`, { method: "POST" }, session.accessToken);
     if (handleUnauthorized(response)) {
       setGarageActionVin(null);
@@ -644,13 +694,19 @@ export function InventoryExplorer() {
       const remaining = prev.filter((item) => item.vin !== response.data.garage_item.vin);
       return [response.data.garage_item, ...remaining];
     });
-    setGarageNotice(
-      response.data.ove_detail_refresh?.queued
-        ? response.data.ove_detail_refresh.deduplicated
+
+    const photoCount = response.data.dealer_photos_fetched || 0;
+    if (photoCount > 0) {
+      setGarageNotice(`Vehicle saved. ${photoCount} dealer photos unlocked — view them in My Garage.`);
+    } else if (response.data.ove_detail_refresh?.queued) {
+      setGarageNotice(
+        response.data.ove_detail_refresh.deduplicated
           ? "Auction detail refresh was already queued for this vehicle."
           : "Auction detail refresh queued. Images and condition data will update when the scraper responds."
-        : "Vehicle saved to My Garage."
-    );
+      );
+    } else {
+      setGarageNotice("Vehicle saved to My Garage.");
+    }
     setGarageActionVin(null);
   }
 
@@ -768,7 +824,14 @@ export function InventoryExplorer() {
   return (
     <>
       <div className="inventory-layout">
-        <aside className="card inventory-sidebar">
+        <aside className={`card inventory-sidebar${filtersOpen ? " filters-open" : ""}`}>
+          <button
+            className="button ghost inventory-filter-toggle"
+            type="button"
+            onClick={() => setFiltersOpen((prev) => !prev)}
+          >
+            {filtersOpen ? "Hide Filters" : "Show Filters"}
+          </button>
           <div className="inventory-sidebar-head">
             <h2>Filter Vehicles</h2>
           </div>
@@ -852,6 +915,34 @@ export function InventoryExplorer() {
                 </select>
               </label>
               <label>
+                Body Type
+                <input
+                  className="input"
+                  placeholder="SUV, Truck, Sed"
+                  value={filters.body_type}
+                  onChange={(event) => setFilters((prev) => ({ ...prev, body_type: event.target.value }))}
+                />
+              </label>
+            </div>
+
+            <div className="inventory-mini-grid">
+              <label>
+                ZIP Code
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  maxLength={5}
+                  placeholder="33028"
+                  value={filters.zip_code}
+                  onChange={(event) =>
+                    updateFilters((prev) => ({
+                      ...prev,
+                      zip_code: event.target.value.replace(/\D/g, "").slice(0, 5),
+                    }))
+                  }
+                />
+              </label>
+              <label>
                 Radius
                 <select
                   className="select"
@@ -866,23 +957,6 @@ export function InventoryExplorer() {
                 </select>
               </label>
             </div>
-
-            <label>
-              ZIP Code
-              <input
-                className="input"
-                inputMode="numeric"
-                maxLength={5}
-                placeholder="33445"
-                value={filters.zip_code}
-                onChange={(event) =>
-                  updateFilters((prev) => ({
-                    ...prev,
-                    zip_code: event.target.value.replace(/\D/g, "").slice(0, 5),
-                  }))
-                }
-              />
-            </label>
 
             <div className="inventory-mini-grid">
               <label>
@@ -949,23 +1023,30 @@ export function InventoryExplorer() {
 
             <div className="inventory-mini-grid">
               <label>
-                Body Type
-                <input
-                  className="input"
-                  placeholder="SUV, Truck, Sedan..."
-                  value={filters.body_type}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, body_type: event.target.value }))}
-                />
+                Exterior Color
+                <select
+                  className="select"
+                  value={filters.exterior_color}
+                  onChange={(event) => setFilters((prev) => ({ ...prev, exterior_color: event.target.value }))}
+                >
+                  <option value="">Chose Color</option>
+                  {EXTERIOR_COLOR_OPTIONS.map((color) => (
+                    <option key={color} value={color}>{color}</option>
+                  ))}
+                </select>
               </label>
               <label>
-                State
-                <input
-                  className="input"
-                  maxLength={2}
-                  placeholder="FL"
-                  value={filters.state}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, state: event.target.value }))}
-                />
+                Interior Color
+                <select
+                  className="select"
+                  value={filters.interior_color}
+                  onChange={(event) => setFilters((prev) => ({ ...prev, interior_color: event.target.value }))}
+                >
+                  <option value="">Chose Color</option>
+                  {INTERIOR_COLOR_OPTIONS.map((color) => (
+                    <option key={color} value={color}>{color}</option>
+                  ))}
+                </select>
               </label>
             </div>
 
@@ -976,10 +1057,10 @@ export function InventoryExplorer() {
                 value={filters.source_type}
                 onChange={(event) => setFilters((prev) => ({ ...prev, source_type: event.target.value }))}
               >
-                <option value="">Any Source</option>
-                <option value="auction">Auction</option>
-                <option value="wholesale">Wholesale</option>
-                <option value="dealer_partner">Dealer Partner Choice</option>
+                <option value="">Any</option>
+                <option value="auction">Wholesale Direct</option>
+                <option value="wholesale">Surplus Inventory</option>
+                <option value="dealer_partner">Partner Network</option>
               </select>
             </label>
 
@@ -1101,6 +1182,11 @@ export function InventoryExplorer() {
                       ) : (
                         <img src={FALLBACK_IMAGE} alt={`${item.year} ${item.make} ${item.model}`} loading="lazy" />
                       )}
+                      {item.dealer_photos_gated && !garageVins.has(item.vin) ? (
+                        <div className="gated-photos-overlay">
+                          <span>Additional Vehicle Photos Available</span>
+                        </div>
+                      ) : null}
                     </div>
                   </Link>
                   <div className="inventory-card-body">
@@ -1152,7 +1238,13 @@ export function InventoryExplorer() {
                         onClick={() => addToGarage(item.vin)}
                         disabled={garageVins.has(item.vin) || garageActionVin === item.vin}
                       >
-                        {garageActionVin === item.vin ? "Saving..." : garageVins.has(item.vin) ? "In Garage" : "Add to My Garage"}
+                        {garageActionVin === item.vin
+                          ? "Saving..."
+                          : garageVins.has(item.vin)
+                            ? "In Garage"
+                            : item.dealer_photos_gated
+                              ? "Add to Garage to See Additional Vehicle Photos"
+                              : "Add to My Garage"}
                       </button>
                     </div>
                   </div>
@@ -1190,73 +1282,6 @@ export function InventoryExplorer() {
             </section>
           ) : null}
 
-          <section className="card inventory-garage">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-              <h3 style={{ margin: 0 }}>My Garage</h3>
-              <span className="badge">{garageItems.length} saved</span>
-            </div>
-            {garageError ? <p style={{ color: "#b42318", margin: 0 }}>{garageError}</p> : null}
-            {garageNotice ? <p style={{ color: "#027a48", margin: 0 }}>{garageNotice}</p> : null}
-            {garageLoading ? <p style={{ margin: 0 }}>Loading garage...</p> : null}
-            {!garageLoading && !garageItems.length ? (
-              <p style={{ marginBottom: 0 }}>Save vehicles here to persist by account and deal.</p>
-            ) : (
-              <div className="inventory-garage-grid">
-                {garageItems.map((item) => (
-                  <article key={item.id} className="inventory-garage-item">
-                    <div>
-                      <strong>{garageItemTitle(item)}</strong>
-                      <p style={{ margin: 0 }}>
-                        {formatMoney(item.vehicle.price_asking)} | {garageItemLocation(item)}
-                      </p>
-                      <p style={{ margin: 0 }}>VIN: {item.vin}</p>
-                      <p style={{ margin: 0 }}>Status: {item.status}</p>
-                      <p style={{ margin: 0 }}>
-                        {displayModeLabel(item.display_mode)} | {inspectionStatusLabel(item.inspection_status)}
-                      </p>
-                      {item.has_inspection_report ? <p style={{ margin: 0 }}>Condition report available</p> : null}
-                    </div>
-                    <div className="inventory-actions">
-                      <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}` as any}>
-                        Open
-                      </Link>
-                      {item.has_inspection_report ? (
-                        <Link
-                          className="button ghost"
-                          href={`/vinventory/${encodeURIComponent(item.vin)}/condition-report` as any}
-                        >
-                          View Report
-                        </Link>
-                      ) : null}
-                      {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") && !item.has_inspection_report ? (
-                        <button
-                          className="button ghost"
-                          onClick={() => requestConditionReport(item.vin)}
-                          disabled={garageActionVin === item.vin}
-                        >
-                          {garageActionVin === item.vin ? "Requesting..." : "Condition Report"}
-                        </button>
-                      ) : null}
-                      <button
-                        className="button"
-                        onClick={() => startAcquisition(item.vin)}
-                        disabled={garageActionVin === item.vin}
-                      >
-                        {garageActionVin === item.vin ? "Starting..." : "Start Acquisition"}
-                      </button>
-                      <button
-                        className="button ghost"
-                        onClick={() => removeFromGarage(item.vin)}
-                        disabled={garageActionVin === item.vin}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
         </section>
       </div>
 

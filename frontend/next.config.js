@@ -4,6 +4,17 @@ const nextConfig = {
   experimental: {
     typedRoutes: true
   },
+  async headers() {
+    return [
+      {
+        // Prevent browser from caching HTML pages so new JS bundles are always loaded
+        source: "/:path((?!_next/static|assets).*)",
+        headers: [
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     return [
       {

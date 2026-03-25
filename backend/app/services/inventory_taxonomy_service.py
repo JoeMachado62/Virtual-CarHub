@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, distinct, select
+from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -180,13 +180,16 @@ def sync_marketcheck_taxonomy_cache(
                 else:
                     rows.add((year, make, model, ""))
 
-    # Only delete old cache if we successfully collected replacement data
+    # Only delete old cache if we successfully collected replacement data.
+    # Preserve entries from other sources (e.g. ove_inventory) so that
+    # OVE-specific model variants are not wiped on each MarketCheck sync.
     deleted = 0
     if rows:
         deleted = db.execute(
             delete(VehicleTaxonomyCache).where(
                 VehicleTaxonomyCache.year >= normalized_start,
                 VehicleTaxonomyCache.year <= normalized_end,
+                VehicleTaxonomyCache.source == "marketcheck",
             )
         ).rowcount or 0
 
@@ -254,7 +257,7 @@ def _taxonomy_from_cache(
     if _normalize_term(make):
         model_stmt = select(distinct(VehicleTaxonomyCache.model)).where(
             VehicleTaxonomyCache.active.is_(True),
-            VehicleTaxonomyCache.make == _normalize_term(make),
+            func.lower(VehicleTaxonomyCache.make) == _normalize_term(make).lower(),
         )
         if min_year is not None:
             model_stmt = model_stmt.where(VehicleTaxonomyCache.year >= min_year)
@@ -266,8 +269,8 @@ def _taxonomy_from_cache(
     if _normalize_term(make) and _normalize_term(model):
         trim_stmt = select(distinct(VehicleTaxonomyCache.trim)).where(
             VehicleTaxonomyCache.active.is_(True),
-            VehicleTaxonomyCache.make == _normalize_term(make),
-            VehicleTaxonomyCache.model == _normalize_term(model),
+            func.lower(VehicleTaxonomyCache.make) == _normalize_term(make).lower(),
+            func.lower(VehicleTaxonomyCache.model) == _normalize_term(model).lower(),
             VehicleTaxonomyCache.trim != "",
         )
         if min_year is not None:

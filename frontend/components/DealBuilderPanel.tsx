@@ -5,7 +5,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
 
-const SEARCH_CONTEXT_KEY = "vch_search_context";
+const SEARCH_CONTEXT_KEY = "vch:inventory:search-context";
 
 type ParseQueryResponse = {
   filters: Record<string, string | number | boolean>;
@@ -87,8 +87,10 @@ export function DealBuilderPanel() {
           filters.zip_code || zipCode,
         );
         const isAuction = filters.source_type === "auction";
+        const isVinSearch = Boolean(filters.vin);
 
-        if (!hasZip && !isAuction) {
+        // VIN searches don't need a ZIP — they find a specific vehicle
+        if (!hasZip && !isAuction && !isVinSearch) {
           // Need ZIP — show prompt
           setPendingFilters(filters);
           setPendingRawQuery(nextQuery);

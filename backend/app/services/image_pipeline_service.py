@@ -52,6 +52,8 @@ class VehicleCardMedia:
     display_mode: ImageDisplayMode
     inspection_status: InspectionStatus
     has_inspection_report: bool
+    dealer_photos_gated: bool = False
+    gated_photo_count: int = 0
 
 
 def sync_marketcheck_source_assets(
@@ -84,7 +86,19 @@ def sync_source_assets(
     if not image_urls:
         return
 
-    normalized = [str(url).strip() for url in image_urls if str(url).strip()]
+    # Filter out GIF/SVG files — these are typically UI elements (logos, icons)
+    # scraped from auction sites, not actual vehicle photos
+    BLOCKED_EXTENSIONS = (".gif", ".svg")
+    normalized = []
+    for url in image_urls:
+        clean = str(url).strip()
+        if not clean:
+            continue
+        # Check the path portion (before query string) for blocked extensions
+        path_part = clean.split("?")[0].lower()
+        if any(path_part.endswith(ext) for ext in BLOCKED_EXTENSIONS):
+            continue
+        normalized.append(clean)
     if not normalized:
         return
 
@@ -220,19 +234,37 @@ def resolve_vehicle_card_media(
     vehicle: Vehicle,
     deal_stage: DealState | None = None,
     deal_id: str | None = None,
+    is_garage_view: bool = False,
 ) -> VehicleCardMedia:
     context = resolve_vehicle_display_context(
         db,
         vehicle=vehicle,
         deal_stage=deal_stage,
         deal_id=deal_id,
+        is_garage_view=is_garage_view,
     )
     return VehicleCardMedia(
         thumbnail=context.get("hero_image"),
         display_mode=ImageDisplayMode(context["mode"]),
         inspection_status=InspectionStatus(context["inspection_status"]),
         has_inspection_report=bool(context.get("has_inspection_report")),
+        dealer_photos_gated=bool(context.get("dealer_photos_gated")),
+        gated_photo_count=int(context.get("gated_photo_count", 0)),
     )
+
+
+_BLOCKED_IMAGE_EXTENSIONS = (".gif", ".svg")
+
+
+def _filter_non_photo_urls(urls: list[str]) -> list[str]:
+    """Remove GIF/SVG URLs that are typically UI elements, not vehicle photos."""
+    out = []
+    for url in urls:
+        path_part = url.split("?")[0].lower()
+        if any(path_part.endswith(ext) for ext in _BLOCKED_IMAGE_EXTENSIONS):
+            continue
+        out.append(url)
+    return out
 
 
 def resolve_vehicle_display_context(
@@ -241,6 +273,7 @@ def resolve_vehicle_display_context(
     vehicle: Vehicle,
     deal_stage: DealState | None = None,
     deal_id: str | None = None,
+    is_garage_view: bool = False,
 ) -> dict[str, Any]:
     hero_assets = _load_assets(db, vin=vehicle.vin, tier=ImageTier.TIER2_HERO)
     tier3_assets = _load_assets(db, vin=vehicle.vin, tier=ImageTier.TIER3_PROCESSED)
@@ -256,13 +289,31 @@ def resolve_vehicle_display_context(
     source_gallery = [_asset_url(asset) for asset in source_assets if _asset_url(asset)]
     fallback_gallery = [str(url) for url in (vehicle.images or []) if str(url).strip()]
 
-    manifest = build_imagin_manifest(vehicle) if is_auction_source and not imagin_gallery else None
+    # Filter out GIF/SVG from all galleries (UI elements scraped from auction sites)
+    source_gallery = _filter_non_photo_urls(source_gallery)
+    fallback_gallery = _filter_non_photo_urls(fallback_gallery)
+
+    is_marketcheck_source = bool(
+        vehicle.source_type and vehicle.source_type.lower() in {"marketcheck", "dealer_wholesale"}
+    )
+
+    # Generate Imagin manifest for any vehicle that doesn't already have cached Imagin assets
+    manifest = build_imagin_manifest(vehicle) if not imagin_gallery else None
     if manifest:
         imagin_gallery = manifest.gallery_urls
         spin_gallery = manifest.spin_urls
     imagin_hero = imagin_gallery[0] if imagin_gallery else (manifest.hero_url if manifest else None)
 
-    if is_auction_source and imagin_gallery:
+    # For MarketCheck vehicles, use Imagin images publicly; real dealer photos are gated
+    # behind Garage auth. When viewing from Garage, show all photos ungated.
+    dealer_photos_gated = False
+    if is_marketcheck_source and imagin_gallery and not is_garage_view:
+        marketing_gallery = imagin_gallery
+        dealer_photos_gated = True
+    elif is_marketcheck_source and is_garage_view:
+        # Garage view: show real dealer photos with Imagin as supplement
+        marketing_gallery = _merge_unique(source_gallery, fallback_gallery, imagin_gallery)
+    elif is_auction_source and imagin_gallery:
         marketing_gallery = _merge_unique(imagin_gallery, source_gallery, fallback_gallery)
     else:
         marketing_gallery = tier3_gallery or source_gallery or fallback_gallery
@@ -351,6 +402,9 @@ def resolve_vehicle_display_context(
         if manifest and not manifest.metadata.get("has_exact_interior_color"):
             disclaimer += " Interior trim and color may be approximate until exact option codes are available."
 
+    # Count real dealer photos that are hidden behind Garage auth
+    gated_photo_count = len(source_gallery) + len(fallback_gallery) if dealer_photos_gated else 0
+
     return {
         "mode": mode.value,
         "inspection_status": inspection_status.value,
@@ -359,13 +413,15 @@ def resolve_vehicle_display_context(
         "marketing_images": marketing_gallery,
         "imagin_images": imagin_gallery,
         "spin_images": spin_gallery,
-        "source_images": source_gallery,
+        "source_images": [] if dealer_photos_gated else source_gallery,
         "inspection_images": inspection_images,
         "disclosure_images": disclosure_images,
         "has_tier2_hero": bool(hero_assets),
         "has_tier3_processed": bool(tier3_assets),
         "has_inspection_report": inspection_report is not None or (ove_detail and bool(ove_detail.condition_report_json)),
         "has_imagin_stock": uses_imagin_stock,
+        "dealer_photos_gated": dealer_photos_gated,
+        "gated_photo_count": gated_photo_count,
         "condition_report": condition_report,
         "buyer_protection": buyer_protection,
         "labels": {

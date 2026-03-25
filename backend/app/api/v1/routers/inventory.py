@@ -10,13 +10,13 @@ from pydantic import BaseModel
 from sqlalchemy import Integer, asc, case, desc, false, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_service_token, require_wordpress_export_auth
+from app.api.deps import get_optional_user, require_service_token, require_wordpress_export_auth
 from app.core.config import settings
 from app.core.constants import InventorySourceType
 from app.core.responses import ok
 from app.db.session import get_db
 from app.integrations.marketcheck_client import MarketCheckClient
-from app.models.entities import OveVehicleDetail, Vehicle
+from app.models.entities import Deal, GarageItem, OveVehicleDetail, User, Vehicle
 from app.services.image_pipeline_service import resolve_vehicle_card_media, resolve_vehicle_display_context
 from app.services.inventory_taxonomy_service import (
     MIN_TAXONOMY_YEAR,
@@ -225,14 +225,14 @@ def _public_source_value(source_type: str | None) -> str:
 
 def _public_source_label(source_type: str | None) -> str:
     if _is_auction_source(source_type):
-        return "Auction"
+        return "Wholesale Direct"
     if _is_wholesale_source(source_type):
-        return "Wholesale"
+        return "Surplus Inventory"
     normalized = (source_type or "").strip()
     if not normalized:
         return "Inventory"
     if normalized.lower() == InventorySourceType.DEALER_PARTNER.value:
-        return "Dealer Partner Choice"
+        return "Partner Network"
     return normalized.replace("_", " ").title()
 
 
@@ -268,6 +268,15 @@ def _advertised_price_expr():
 
 def _aged_inventory_dom_expr():
     return Vehicle.features_normalized["days_on_market"].as_string().cast(Integer)
+
+
+def _model_filter_expr(model: str):
+    """Match model exactly or as a prefix so 'Sierra' finds 'Sierra 1500' etc."""
+    model_lower = model.lower()
+    return or_(
+        func.lower(Vehicle.model) == model_lower,
+        func.lower(Vehicle.model).like(model_lower + " %"),
+    )
 
 
 def _apply_source_type_filter(stmt, source_type: str | None):
@@ -311,7 +320,17 @@ def _apply_zip_radius_filter(stmt, zip_code: str | None, radius: int | None):
         return stmt
     if not zip_values:
         return stmt.where(false())
-    return stmt.where(Vehicle.location_zip.in_(zip_values))
+    # Include auction/OVE vehicles even when their location_zip is NULL,
+    # since auction vehicles are nationwide and can be shipped anywhere.
+    auction_expr = func.lower(Vehicle.source_type).in_(
+        [InventorySourceType.AUCTION.value, InventorySourceType.OVE.value]
+    )
+    return stmt.where(
+        or_(
+            Vehicle.location_zip.in_(zip_values),
+            auction_expr & Vehicle.location_zip.is_(None),
+        )
+    )
 
 
 def _normalized_pick(normalized: dict[str, Any], *keys: str) -> Any:
@@ -809,7 +828,7 @@ def _local_facets(
     if make:
         stmt = stmt.where(func.lower(Vehicle.make) == make.lower())
     if model:
-        stmt = stmt.where(func.lower(Vehicle.model) == model.lower())
+        stmt = stmt.where(_model_filter_expr(model))
     if trim:
         stmt = stmt.where(func.lower(Vehicle.trim) == trim.lower())
     if state:
@@ -1103,6 +1122,50 @@ def search_inventory(
     per_page: int = Query(default=24, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> dict:
+    # ── NLP parsing for free-text q field ──────────────────────────
+    # If the user typed something in the free-form search and didn't set
+    # structured filters, run it through the NLP parser to extract filters.
+    nlp_parsed = None
+    is_vin_search = False
+    if q and q.strip() and not any([make, model, trim]):
+        from app.services.nlp_query_service import parse_vehicle_query
+        nlp_parsed = parse_vehicle_query(q.strip())
+        if nlp_parsed.parsed:
+            if nlp_parsed.vin:
+                # VIN search — override q to just the VIN for exact match
+                q = nlp_parsed.vin
+                is_vin_search = True
+            else:
+                # Structured filters extracted — apply them and clear q
+                make = make or nlp_parsed.make
+                model = model or nlp_parsed.model
+                trim = trim or nlp_parsed.trim
+                body_type = body_type or nlp_parsed.body_type
+                min_year = min_year if min_year is not None else nlp_parsed.min_year
+                max_year = max_year if max_year is not None else nlp_parsed.max_year
+                min_price = min_price if min_price is not None else nlp_parsed.min_price
+                max_price = max_price if max_price is not None else nlp_parsed.max_price
+                min_miles = min_miles if min_miles is not None else nlp_parsed.min_miles
+                max_miles = max_miles if max_miles is not None else nlp_parsed.max_miles
+                drivetrain = drivetrain or nlp_parsed.drivetrain
+                fuel_type = fuel_type or nlp_parsed.fuel_type
+                transmission = transmission or nlp_parsed.transmission
+                state = state or nlp_parsed.state
+                exterior_color = exterior_color or nlp_parsed.exterior_color
+                interior_color = interior_color or nlp_parsed.interior_color
+                if nlp_parsed.certified is not None and certified is None:
+                    certified = nlp_parsed.certified
+                if nlp_parsed.single_owner is not None and single_owner is None:
+                    single_owner = nlp_parsed.single_owner
+                if nlp_parsed.clean_title is not None and clean_title is None:
+                    clean_title = nlp_parsed.clean_title
+                # Clear q so it doesn't also run the LIKE filter
+                q = None
+
+    # Also detect VIN from raw q (e.g. user typed VIN directly in search box)
+    if not is_vin_search and q and len(q.strip()) == 17 and q.strip().isalnum():
+        is_vin_search = True
+
     sync: dict[str, Any] = {
         "requested": live_sync,
         "enabled": bool(settings.has_marketcheck),
@@ -1122,8 +1185,35 @@ def search_inventory(
 
     # Don't use MarketCheck for auction/OVE searches - use local database only
     is_auction_search = source_type and source_type.lower() in ['auction', 'ove', PUBLIC_AUCTION_SOURCE.lower()]
+    is_any_source = not source_type or not source_type.strip()
 
-    if live_sync and settings.marketcheck_api_key and not is_auction_search:
+    # For "Any" source searches, count local auction results first.
+    # Only backfill from MarketCheck if we have fewer than 25 auction matches.
+    _auction_backfill_threshold = 25
+    should_sync_marketcheck = live_sync and settings.marketcheck_api_key and not is_auction_search and not is_vin_search
+    if should_sync_marketcheck and is_any_source:
+        auction_count_stmt = select(func.count()).select_from(Vehicle).where(
+            Vehicle.available.is_(True),
+            func.lower(Vehicle.source_type).in_(
+                [InventorySourceType.AUCTION.value, InventorySourceType.OVE.value]
+            ),
+        )
+        if make:
+            auction_count_stmt = auction_count_stmt.where(func.lower(Vehicle.make) == make.lower())
+        if model:
+            auction_count_stmt = auction_count_stmt.where(_model_filter_expr(model))
+        if min_year is not None:
+            auction_count_stmt = auction_count_stmt.where(Vehicle.year >= min_year)
+        if max_year is not None:
+            auction_count_stmt = auction_count_stmt.where(Vehicle.year <= max_year)
+        if max_miles is not None:
+            auction_count_stmt = auction_count_stmt.where(Vehicle.odometer <= max_miles)
+        auction_count_stmt = _apply_zip_radius_filter(auction_count_stmt, zip_code, radius)
+        local_auction_count = db.scalar(auction_count_stmt) or 0
+        if local_auction_count >= _auction_backfill_threshold:
+            should_sync_marketcheck = False
+
+    if should_sync_marketcheck:
         client = _marketcheck_client()
         search_params = _build_marketcheck_search_params(
             q=q,
@@ -1174,23 +1264,44 @@ def search_inventory(
 
     stmt = select(Vehicle).where(Vehicle.available.is_(True))
     if q:
-        text = f"%{q.lower()}%"
-        stmt = stmt.where(
-            or_(
-                func.lower(Vehicle.vin).like(text),
-                func.lower(Vehicle.make).like(text),
-                func.lower(Vehicle.model).like(text),
-                func.lower(func.coalesce(Vehicle.trim, "")).like(text),
+        clean_q = q.strip()
+        # VIN exact match (17 alphanumeric characters)
+        if len(clean_q) == 17 and clean_q.isalnum():
+            stmt = stmt.where(func.upper(Vehicle.vin) == clean_q.upper())
+        else:
+            text = f"%{clean_q.lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(Vehicle.vin).like(text),
+                    func.lower(Vehicle.make).like(text),
+                    func.lower(Vehicle.model).like(text),
+                    func.lower(func.coalesce(Vehicle.trim, "")).like(text),
+                )
             )
-        )
     if make:
         stmt = stmt.where(func.lower(Vehicle.make) == make.lower())
     if model:
-        stmt = stmt.where(func.lower(Vehicle.model) == model.lower())
+        stmt = stmt.where(_model_filter_expr(model))
     if trim:
         stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")) == trim.lower())
     if body_type:
         stmt = stmt.where(func.lower(Vehicle.body_type) == body_type.lower())
+    if exterior_color:
+        ext_col_expr = func.lower(func.coalesce(Vehicle.features_normalized["exterior_color"].as_string(), ""))
+        ext_col_lower = exterior_color.strip().lower()
+        ext_col_parts = [p.strip() for p in ext_col_lower.replace("/", "|").split("|") if p.strip()]
+        if len(ext_col_parts) > 1:
+            stmt = stmt.where(or_(*[ext_col_expr.like(f"%{p}%") for p in ext_col_parts]))
+        else:
+            stmt = stmt.where(ext_col_expr.like(f"%{ext_col_lower}%"))
+    if interior_color:
+        int_col_expr = func.lower(func.coalesce(Vehicle.features_normalized["interior_color"].as_string(), ""))
+        int_col_lower = interior_color.strip().lower()
+        int_col_parts = [p.strip() for p in int_col_lower.replace("/", "|").split("|") if p.strip()]
+        if len(int_col_parts) > 1:
+            stmt = stmt.where(or_(*[int_col_expr.like(f"%{p}%") for p in int_col_parts]))
+        else:
+            stmt = stmt.where(int_col_expr.like(f"%{int_col_lower}%"))
     if inventory_type:
         stmt = stmt.where(
             func.lower(func.coalesce(Vehicle.features_normalized["inventory_type"].as_string(), "")) == inventory_type.lower()
@@ -1227,7 +1338,9 @@ def search_inventory(
         stmt = stmt.where(or_(auction_expr, dom_expr <= max_dom))
     if has_images is True:
         stmt = stmt.where(func.coalesce(func.json_array_length(Vehicle.images), 0) > 0)
-    stmt = _apply_zip_radius_filter(stmt, zip_code, radius)
+    # VIN searches find a specific vehicle — don't limit by geography
+    if not is_vin_search:
+        stmt = _apply_zip_radius_filter(stmt, zip_code, radius)
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
 
@@ -1238,10 +1351,22 @@ def search_inventory(
         "odometer": Vehicle.odometer,
     }
     order_column = sort_columns[sort_by]
-    order_by = asc(order_column) if sort_dir == "asc" else desc(order_column)
+    user_order = asc(order_column) if sort_dir == "asc" else desc(order_column)
+
+    # When browsing all sources, show auction/OVE vehicles before MarketCheck
+    if is_any_source:
+        auction_first = case(
+            (func.lower(Vehicle.source_type).in_(
+                [InventorySourceType.AUCTION.value, InventorySourceType.OVE.value]
+            ), 0),
+            else_=1,
+        )
+        order_by = (auction_first, user_order)
+    else:
+        order_by = (user_order,)
 
     offset = (page - 1) * per_page
-    rows = db.scalars(stmt.order_by(order_by).offset(offset).limit(per_page)).all()
+    rows = db.scalars(stmt.order_by(*order_by).offset(offset).limit(per_page)).all()
 
     total_pages = max(1, (total + per_page - 1) // per_page) if total else 0
 
@@ -1273,6 +1398,8 @@ def search_inventory(
                 "source_filter_value": _public_source_value(row.source_type),
                 "source_label": _public_source_label(row.source_type),
                 "thumbnail": media.thumbnail,
+                "dealer_photos_gated": media.dealer_photos_gated,
+                "gated_photo_count": media.gated_photo_count,
                 "images_count": len(row.images or []),
                 "features_preview": (row.features_raw or [])[:5],
                 "display_mode": media.display_mode.value,
@@ -1375,7 +1502,7 @@ def wordpress_inventory_export(
     if make:
         stmt = stmt.where(func.lower(Vehicle.make) == make.lower())
     if model:
-        stmt = stmt.where(func.lower(Vehicle.model) == model.lower())
+        stmt = stmt.where(_model_filter_expr(model))
     if trim:
         stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")) == trim.lower())
     if body_type:
@@ -1534,12 +1661,34 @@ def wordpress_inventory_export(
 
 
 @router.get("/{vin}")
-def get_inventory_vehicle(vin: str, db: Session = Depends(get_db)) -> dict:
+def get_inventory_vehicle(
+    vin: str,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
+) -> dict:
     vehicle = db.get(Vehicle, vin.upper())
     if not vehicle:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
 
-    display_context = resolve_vehicle_display_context(db, vehicle=vehicle)
+    # Check if the vehicle is in the user's garage
+    is_in_garage = False
+    if current_user:
+        active_deal = db.scalar(
+            select(Deal).where(
+                Deal.user_id == current_user.id,
+                Deal.stage.notin_(["CLOSED_WON", "CLOSED_LOST"]),
+            ).order_by(Deal.created_at.desc())
+        )
+        if active_deal:
+            garage_item = db.scalar(
+                select(GarageItem).where(
+                    GarageItem.deal_id == active_deal.id,
+                    GarageItem.vin == vin.upper(),
+                )
+            )
+            is_in_garage = garage_item is not None
+
+    display_context = resolve_vehicle_display_context(db, vehicle=vehicle, is_garage_view=is_in_garage)
     resolved_images = display_context.get("gallery_images") or (vehicle.images or [])
     hero_image = display_context.get("hero_image") or (resolved_images[0] if resolved_images else None)
 
@@ -1610,7 +1759,7 @@ def get_inventory_vehicle(vin: str, db: Session = Depends(get_db)) -> dict:
             "source_category": PUBLIC_AUCTION_SOURCE if _is_auction_source(vehicle.source_type) else PUBLIC_RETAIL_SOURCE,
             "source_filter_value": _public_source_value(vehicle.source_type),
             "source_label": _public_source_label(vehicle.source_type),
-            "images": vehicle.images or [],
+            "images": [] if display_context.get("dealer_photos_gated") else (vehicle.images or []),
             "display_images": resolved_images,
             "hero_image": hero_image,
             "display_mode": display_context.get("mode"),
@@ -1666,5 +1815,6 @@ def get_inventory_vehicle(vin: str, db: Session = Depends(get_db)) -> dict:
             "last_seen_active": vehicle.last_seen_active,
             "updated_at": vehicle.updated_at,
             "display_context": display_context,
+            "is_in_garage": is_in_garage,
         }
     )

@@ -22,11 +22,11 @@ export function normalizeSourceFilterValue(value: string | null | undefined): st
 export function toPublicSourceLabel(primary: string | null | undefined, fallback?: string | null | undefined): string {
   const normalized = normalizeSourceKey(primary || fallback);
   if (!normalized) return "Inventory";
-  if (normalized === "auction" || normalized === "ove") return "Auction";
+  if (normalized === "auction" || normalized === "ove") return "Wholesale Direct";
   if (normalized === "wholesale" || normalized === "marketcheck" || normalized === "dealer_wholesale") {
-    return "Wholesale";
+    return "Surplus Inventory";
   }
-  if (normalized === "dealer_partner") return "Dealer Partner Choice";
+  if (normalized === "dealer_partner") return "Partner Network";
   return titleize(normalized);
 }
 

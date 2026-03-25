@@ -4,6 +4,9 @@ import Link from "next/link";
 import { DealBuilderPanel } from "@/components/DealBuilderPanel";
 import { InventoryPreview } from "@/components/InventoryPreview";
 
+// Force dynamic rendering so every request gets the latest JS bundles
+export const dynamic = "force-dynamic";
+
 const VALUE_POINTS = [
   {
     title: "Tell Us What You Want",

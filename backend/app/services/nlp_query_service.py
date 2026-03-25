@@ -20,6 +20,7 @@ logger = logging.getLogger("vch.nlp_query")
 # ── Pydantic response model ─────────────────────────────────────────
 
 class ParsedVehicleQuery(BaseModel):
+    vin: str | None = None
     make: str | None = None
     model: str | None = None
     trim: str | None = None
@@ -31,6 +32,7 @@ class ParsedVehicleQuery(BaseModel):
     min_miles: int | None = None
     max_miles: int | None = None
     exterior_color: str | None = None
+    interior_color: str | None = None
     drivetrain: str | None = None
     fuel_type: str | None = None
     transmission: str | None = None
@@ -40,43 +42,64 @@ class ParsedVehicleQuery(BaseModel):
     clean_title: bool | None = None
     raw_query: str = ""
     parsed: bool = False
-    parse_method: str = "none"  # "llm", "fallback", "none"
+    parse_method: str = "none"  # "llm", "fallback", "vin", "none"
+
+
+# ── VIN detection ────────────────────────────────────────────────────
+
+_VIN_RE = re.compile(r"\b([A-HJ-NPR-Z0-9]{17})\b", re.IGNORECASE)
+
+
+def _detect_vin(query: str) -> str | None:
+    """Return a 17-character VIN if found in the query, else None."""
+    match = _VIN_RE.search(query.upper())
+    return match.group(1) if match else None
 
 
 # ── System prompt for Claude ─────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\
-You are a vehicle search filter extractor. Given a natural language vehicle \
-description, extract structured search filters. Return ONLY valid JSON — no \
-markdown, no explanation — with these optional fields:
+You are a vehicle search filter extractor for VirtualCarHub, a wholesale \
+vehicle marketplace. Given a natural language vehicle description, extract \
+structured search filters. Return ONLY valid JSON — no markdown, no explanation.
 
-  make            — e.g. "BMW", "Toyota"
-  model           — e.g. "X5", "Camry"
-  trim            — e.g. "xDrive40i", "Limited"
+## Available search filters (our API field names):
+
+  vin             — 17-character Vehicle Identification Number (exact match)
+  make            — manufacturer name, e.g. "BMW", "Toyota", "Ford", "Chevrolet"
+  model           — model name, e.g. "X5", "Camry", "F-150", "Corvette"
+  trim            — trim level, e.g. "xDrive40i", "Limited", "Lariat", "Sport"
   body_type       — one of: sedan, suv, truck, coupe, convertible, van, wagon, hatchback
-  min_year        — integer
-  max_year        — integer
-  min_price       — number (dollars)
-  max_price       — number (dollars)
-  min_miles       — integer
-  max_miles       — integer
-  exterior_color  — e.g. "black", "white"
+  min_year        — integer (earliest model year)
+  max_year        — integer (latest model year)
+  min_price       — number in dollars (lowest price)
+  max_price       — number in dollars (highest price)
+  min_miles       — integer (minimum odometer)
+  max_miles       — integer (maximum odometer)
+  exterior_color  — e.g. "Black", "White", "Red", "Blue", "Silver", "Gray", "Green", "Brown", "Beige/Tan", "Orange", "Yellow", "Gold", "Purple", "Burgundy/Maroon", "Bronze", "Turquoise/Teal"
+  interior_color  — e.g. "Black", "Gray", "Beige/Tan", "Brown", "White/Ivory", "Red", "Blue", "Green", "Orange", "Burgundy/Maroon"
   drivetrain      — one of: AWD, FWD, RWD, 4WD
-  fuel_type       — one of: gasoline, diesel, electric, hybrid
+  fuel_type       — one of: gasoline, diesel, electric, hybrid, plug-in hybrid
   transmission    — one of: automatic, manual
-  state           — 2-letter US state code
-  certified       — boolean
-  single_owner    — boolean
-  clean_title     — boolean
+  state           — 2-letter US state code, e.g. "FL", "CA", "TX"
+  certified       — boolean (CPO vehicles)
+  single_owner    — boolean (one-owner vehicles)
+  clean_title     — boolean (clean title only)
 
-Rules:
+## Rules:
+- If the input is a 17-character alphanumeric string (VIN), return {"vin": "<VIN>"}.
 - Omit any field not mentioned or implied by the user.
-- For "under X miles" → set max_miles = X.
-- For "under $X" or "budget X" → set max_price = X.
-- For "around $30k" → set min_price = 27000, max_price = 33000.
-- For a single year like "2021" → set both min_year and max_year to 2021.
-- For "newer than 2020" → set min_year = 2021.
+- For "under X miles" → max_miles = X.
+- For "under $X" or "budget X" → max_price = X.
+- For "around $30k" → min_price = 27000, max_price = 33000.
+- For a single year like "2021" → min_year = 2021, max_year = 2021.
+- For "newer than 2020" → min_year = 2021.
+- For year ranges like "2015-2020" → min_year = 2015, max_year = 2020.
 - Convert shorthand: "40k" = 40000, "$30k" = 30000.
+- "Chevy" = "Chevrolet", "Mercedes" = "Mercedes-Benz", "Beemer" = "BMW".
+- "black interior" → interior_color = "Black". "white exterior" → exterior_color = "White".
+- If the user says a color without specifying interior/exterior, assume exterior_color.
+- If the user specifies both, set both fields. E.g. "red with tan interior" → exterior_color = "Red", interior_color = "Beige/Tan".
 - Return {} if the input is not a vehicle query.
 """
 
@@ -88,6 +111,16 @@ def parse_vehicle_query(query: str) -> ParsedVehicleQuery:
     clean = query.strip()
     if not clean:
         return ParsedVehicleQuery(raw_query=query)
+
+    # Fast path: detect VIN without calling LLM
+    detected_vin = _detect_vin(clean)
+    if detected_vin:
+        return ParsedVehicleQuery(
+            vin=detected_vin,
+            raw_query=query,
+            parsed=True,
+            parse_method="vin",
+        )
 
     if settings.has_anthropic:
         try:
@@ -122,12 +155,16 @@ def _llm_parse(query: str) -> ParsedVehicleQuery:
     if not isinstance(data, dict):
         raise ValueError("LLM returned non-object JSON")
 
-    return ParsedVehicleQuery(
+    result = ParsedVehicleQuery(
         **{k: v for k, v in data.items() if k in ParsedVehicleQuery.model_fields},
         raw_query=query,
         parsed=True,
         parse_method="llm",
     )
+    # Normalize VIN to uppercase
+    if result.vin:
+        result.vin = result.vin.upper()
+    return result
 
 
 # ── Regex fallback parser ────────────────────────────────────────────
@@ -247,5 +284,36 @@ def _fallback_parse(query: str) -> ParsedVehicleQuery:
         if ft in lower:
             result.fuel_type = "electric" if ft == "ev" else ft
             break
+
+    # ── Colors ──
+    _color_map = {
+        "white": "White", "black": "Black", "gray": "Gray", "grey": "Gray",
+        "silver": "Silver", "blue": "Blue", "red": "Red", "green": "Green",
+        "brown": "Brown", "beige": "Beige/Tan", "tan": "Beige/Tan",
+        "orange": "Orange", "yellow": "Yellow", "gold": "Gold",
+        "purple": "Purple", "burgundy": "Burgundy/Maroon", "maroon": "Burgundy/Maroon",
+        "bronze": "Bronze", "turquoise": "Turquoise/Teal", "teal": "Turquoise/Teal",
+        "ivory": "White/Ivory",
+    }
+    # Check for "X interior" pattern
+    int_match = re.search(r"\b(" + "|".join(_color_map.keys()) + r")\s+interior\b", lower)
+    if int_match:
+        result.interior_color = _color_map[int_match.group(1)]
+    # Check for "X exterior" pattern or standalone color (defaults to exterior)
+    ext_match = re.search(r"\b(" + "|".join(_color_map.keys()) + r")\s+exterior\b", lower)
+    if ext_match:
+        result.exterior_color = _color_map[ext_match.group(1)]
+    elif not int_match:
+        # If no explicit interior/exterior qualifier, check for standalone color words
+        # but only if they appear near vehicle-related context (not part of make/model)
+        for color_key, color_val in _color_map.items():
+            if re.search(r"\b" + color_key + r"\b", lower):
+                # Skip if the color word is part of a known make/model token
+                if result.make and color_key in result.make.lower():
+                    continue
+                if result.model and color_key in result.model.lower():
+                    continue
+                result.exterior_color = color_val
+                break
 
     return result
