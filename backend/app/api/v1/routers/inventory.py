@@ -1689,6 +1689,18 @@ def get_inventory_vehicle(
             is_in_garage = garage_item is not None
 
     display_context = resolve_vehicle_display_context(db, vehicle=vehicle, is_garage_view=is_in_garage)
+
+    # Lazy-load full EVOX assets (stills, spin, interior pano) on detail view if not already synced
+    if display_context.get("has_evox_stock") and not display_context.get("evox_exterior_stills"):
+        try:
+            from app.services.evox_service import build_evox_manifest, sync_evox_source_assets
+            full_manifest = build_evox_manifest(db, vehicle, detail_level="full")
+            if full_manifest:
+                sync_evox_source_assets(db, vehicle=vehicle, detail_level="full")
+                display_context = resolve_vehicle_display_context(db, vehicle=vehicle, is_garage_view=is_in_garage)
+        except Exception:
+            pass  # Non-critical; card-level images still display
+
     resolved_images = display_context.get("gallery_images") or (vehicle.images or [])
     hero_image = display_context.get("hero_image") or (resolved_images[0] if resolved_images else None)
 

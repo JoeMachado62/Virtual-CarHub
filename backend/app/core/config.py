@@ -64,6 +64,20 @@ class Settings(BaseSettings):
     imagin_spin_start_angle: int = Field(default=200, alias="IMAGIN_SPIN_START_ANGLE")
     imagin_spin_frame_count: int = Field(default=32, alias="IMAGIN_SPIN_FRAME_COUNT")
 
+    # EVOX Images API
+    evox_enabled: bool = Field(default=False, alias="EVOX_ENABLED")
+    evox_api_key: str = Field(default="", alias="EVOX_API_KEY")
+    evox_api_base_url: str = Field(
+        default="https://api.evoximages.com/api/v1", alias="EVOX_API_BASE_URL"
+    )
+    evox_prefer_webp: str = Field(default="true", alias="EVOX_PREFER_WEBP")
+
+    # NHTSA VIN Decoding (free, no key required)
+    vin_decode_enabled: bool = Field(default=True, alias="VIN_DECODE_ENABLED")
+    nhtsa_api_base_url: str = Field(
+        default="https://vpic.nhtsa.dot.gov/api", alias="NHTSA_API_BASE_URL"
+    )
+
     # Live integration toggles
     marketcheck_live_enabled: bool = Field(default=False, alias="MARKETCHECK_LIVE_ENABLED")
     ghl_live_enabled: bool = Field(default=False, alias="GHL_LIVE_ENABLED")
@@ -177,6 +191,14 @@ class Settings(BaseSettings):
     @property
     def has_imagin(self) -> bool:
         return self.imagin_enabled and bool(self.imagin_customer_id)
+
+    @property
+    def has_evox(self) -> bool:
+        return self.evox_enabled and bool(self.evox_api_key)
+
+    @property
+    def has_vin_decode(self) -> bool:
+        return self.vin_decode_enabled
 
     @property
     def imagin_gallery_angle_list(self) -> list[str]:

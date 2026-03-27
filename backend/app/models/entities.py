@@ -10,6 +10,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -536,3 +537,55 @@ class ChatMessage(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     context_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class EvoxVifCache(Base, TimestampMixin):
+    """Cache of the EVOX VIF (Vehicle Image Factory) list mapping vehicle
+    configurations to VIFIDs and available product types."""
+
+    __tablename__ = "evox_vif_cache"
+    __table_args__ = (
+        UniqueConstraint("vifnum", name="uq_evox_vif_cache_vifnum"),
+        Index("ix_evox_vif_cache_ymmt", "year", "make", "model", "trim"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    vifnum: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    orgnum: Mapped[int | None] = mapped_column(Integer)
+    sendnum: Mapped[int | None] = mapped_column(Integer)
+    year: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    make: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    model: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    trim: Mapped[str] = mapped_column(String(120), default="", nullable=False, index=True)
+    doors: Mapped[int | None] = mapped_column(Integer)
+    body: Mapped[str | None] = mapped_column(String(40), index=True)
+    cab: Mapped[str | None] = mapped_column(String(40))
+    wheels: Mapped[str | None] = mapped_column(String(20))
+    vin_photographed: Mapped[str | None] = mapped_column(String(17))
+    date_delivered: Mapped[str | None] = mapped_column(String(20))
+    has_btl: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_colors: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_stills: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_exterior: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_interior: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_hdspin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_ext_color: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+
+
+class EvoxColorCache(Base, TimestampMixin):
+    """Cache of available EVOX colors per VIFID, used to match vehicle paint
+    codes to EVOX color codes for color-accurate image requests."""
+
+    __tablename__ = "evox_color_cache"
+    __table_args__ = (
+        UniqueConstraint("vifnum", "color_code", name="uq_evox_color_cache_vif_code"),
+        Index("ix_evox_color_cache_vif_simple", "vifnum", "color_simpletitle"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    vifnum: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    color_code: Mapped[str] = mapped_column(String(40), nullable=False)
+    color_title: Mapped[str] = mapped_column(String(120), nullable=False)
+    color_simpletitle: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

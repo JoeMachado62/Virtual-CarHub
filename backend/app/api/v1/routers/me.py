@@ -559,35 +559,17 @@ def add_to_garage(
             except Exception as e:
                 _log.exception("dealer photo fetch failed for %s: %s", vehicle.vin, e)
 
-    ove_refresh, source_platform = _enqueue_auction_detail_refresh(
-        db,
-        vehicle=vehicle,
-        current_deal=current_deal,
-        current_user=current_user,
-        priority=120,
-        reason=f"garage_saved:{current_deal.id}",
-    )
-
-    if ove_refresh:
-        log_event(
-            db,
-            deal_id=current_deal.id,
-            event_type="buyer_auction_detail_refresh_requested",
-            actor="buyer",
-            payload={
-                "vin": vehicle.vin,
-                "trigger": "garage_saved",
-                "source_platform": source_platform.value,
-                **ove_refresh,
-            },
-        )
+    # NOTE: Do NOT enqueue an auction detail refresh here.  The OVE detail
+    # refresh also triggers condition-report scraping, which should only happen
+    # when the buyer explicitly clicks "Request CR".  Previously an
+    # _enqueue_auction_detail_refresh() call here caused CRs to appear
+    # "instantly" because the scrape had already been kicked off on garage-add.
 
     db.commit()
     db.refresh(item)
     return ok(
         {
             "garage_item": _serialize_garage_item(db, item, vehicle, deal_stage=current_deal.stage),
-            "ove_detail_refresh": ove_refresh,
             "dealer_photos_fetched": mc_images_fetched,
         }
     )

@@ -681,6 +681,11 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                       </p>
                     </div>
                     <div className="inventory-actions">
+                      {!isSpotlight ? (
+                        <Link className="button ghost" href={`/dashboard?vin=${encodeURIComponent(item.vin)}`}>
+                          Focus
+                        </Link>
+                      ) : null}
                       <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}`}>
                         View Details
                       </Link>

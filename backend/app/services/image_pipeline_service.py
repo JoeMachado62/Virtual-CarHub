@@ -25,6 +25,7 @@ from app.models.entities import (
     VehicleInspectionImage,
     VehicleInspectionReport,
 )
+from app.services.evox_service import EVOX_SOURCE_KIND, build_evox_manifest
 from app.services.imagin_service import IMAGIN_SOURCE_KIND, build_imagin_manifest
 from app.services.object_storage import resolve_storage_url
 
@@ -89,6 +90,7 @@ def sync_source_assets(
     # Filter out GIF/SVG files — these are typically UI elements (logos, icons)
     # scraped from auction sites, not actual vehicle photos
     BLOCKED_EXTENSIONS = (".gif", ".svg")
+    BLOCKED_FILENAMES = {"ready_logistics.png"}
     normalized = []
     for url in image_urls:
         clean = str(url).strip()
@@ -97,6 +99,10 @@ def sync_source_assets(
         # Check the path portion (before query string) for blocked extensions
         path_part = clean.split("?")[0].lower()
         if any(path_part.endswith(ext) for ext in BLOCKED_EXTENSIONS):
+            continue
+        # Block specific known non-vehicle images by filename
+        filename = path_part.rsplit("/", 1)[-1]
+        if filename in BLOCKED_FILENAMES:
             continue
         normalized.append(clean)
     if not normalized:
@@ -254,14 +260,18 @@ def resolve_vehicle_card_media(
 
 
 _BLOCKED_IMAGE_EXTENSIONS = (".gif", ".svg")
+_BLOCKED_IMAGE_FILENAMES = {"ready_logistics.png"}
 
 
 def _filter_non_photo_urls(urls: list[str]) -> list[str]:
-    """Remove GIF/SVG URLs that are typically UI elements, not vehicle photos."""
+    """Remove GIF/SVG URLs and known non-vehicle images."""
     out = []
     for url in urls:
         path_part = url.split("?")[0].lower()
         if any(path_part.endswith(ext) for ext in _BLOCKED_IMAGE_EXTENSIONS):
+            continue
+        filename = path_part.rsplit("/", 1)[-1]
+        if filename in _BLOCKED_IMAGE_FILENAMES:
             continue
         out.append(url)
     return out
@@ -282,8 +292,23 @@ def resolve_vehicle_display_context(
     hero_url = _asset_url(hero_assets[0]) if hero_assets else None
     tier3_gallery = [_asset_url(asset) for asset in tier3_assets if _asset_url(asset)]
     is_auction_source = bool(vehicle.source_type and vehicle.source_type.lower() in {"ove", "auction"})
+
+    # Partition source cache assets by provider: EVOX > Imagin > source
+    evox_assets = [asset for asset in source_cache_assets if asset.source_kind == EVOX_SOURCE_KIND]
     imagin_assets = [asset for asset in source_cache_assets if asset.source_kind == IMAGIN_SOURCE_KIND]
-    source_assets = [asset for asset in source_cache_assets if asset.source_kind != IMAGIN_SOURCE_KIND]
+    source_assets = [
+        asset for asset in source_cache_assets
+        if asset.source_kind not in {IMAGIN_SOURCE_KIND, EVOX_SOURCE_KIND}
+    ]
+
+    # EVOX asset categories
+    evox_card_gallery = [_asset_url(a) for a in evox_assets if _asset_url(a) and a.role in ("hero", "gallery")]
+    evox_ext_stills = [_asset_url(a) for a in evox_assets if _asset_url(a) and a.role == "exterior_still"]
+    evox_int_stills = [_asset_url(a) for a in evox_assets if _asset_url(a) and a.role == "interior_still"]
+    evox_spin = [_asset_url(a) for a in evox_assets if _asset_url(a) and a.role == "spin"]
+    evox_int_pano = [_asset_url(a) for a in evox_assets if _asset_url(a) and a.role == "interior_pano"]
+
+    # Imagin assets (fallback)
     imagin_gallery = [_asset_url(asset) for asset in imagin_assets if _asset_url(asset) and asset.role != "spin"]
     spin_gallery = [_asset_url(asset) for asset in imagin_assets if _asset_url(asset) and asset.role == "spin"]
     source_gallery = [_asset_url(asset) for asset in source_assets if _asset_url(asset)]
@@ -297,24 +322,42 @@ def resolve_vehicle_display_context(
         vehicle.source_type and vehicle.source_type.lower() in {"marketcheck", "dealer_wholesale"}
     )
 
-    # Generate Imagin manifest for any vehicle that doesn't already have cached Imagin assets
-    manifest = build_imagin_manifest(vehicle) if not imagin_gallery else None
-    if manifest:
-        imagin_gallery = manifest.gallery_urls
-        spin_gallery = manifest.spin_urls
+    # Generate EVOX manifest on-demand if no cached EVOX assets
+    evox_manifest = build_evox_manifest(db, vehicle, detail_level="card") if not evox_card_gallery else None
+    if evox_manifest:
+        evox_card_gallery = evox_manifest.card_gallery_urls
+        # Don't fetch full stills/spin on card view - lazy loaded on detail
+
+    # Generate Imagin manifest as fallback if no EVOX and no cached Imagin
+    manifest = None
+    if not evox_card_gallery:
+        manifest = build_imagin_manifest(vehicle) if not imagin_gallery else None
+        if manifest:
+            imagin_gallery = manifest.gallery_urls
+            spin_gallery = manifest.spin_urls
+
+    # Reference gallery: EVOX (color-accurate) > Imagin (approximation)
+    reference_gallery = evox_card_gallery or imagin_gallery
+    reference_hero = reference_gallery[0] if reference_gallery else None
+    uses_evox = bool(evox_card_gallery)
+    uses_imagin_for_ref = bool(imagin_gallery) and not uses_evox
+
+    # Merge EVOX spin with Imagin spin fallback
+    reference_spin = evox_spin or spin_gallery
+
     imagin_hero = imagin_gallery[0] if imagin_gallery else (manifest.hero_url if manifest else None)
 
-    # For MarketCheck vehicles, use Imagin images publicly; real dealer photos are gated
+    # For MarketCheck vehicles, use reference images publicly; real dealer photos are gated
     # behind Garage auth. When viewing from Garage, show all photos ungated.
     dealer_photos_gated = False
-    if is_marketcheck_source and imagin_gallery and not is_garage_view:
-        marketing_gallery = imagin_gallery
+    if is_marketcheck_source and reference_gallery and not is_garage_view:
+        marketing_gallery = reference_gallery
         dealer_photos_gated = True
     elif is_marketcheck_source and is_garage_view:
-        # Garage view: show real dealer photos with Imagin as supplement
-        marketing_gallery = _merge_unique(source_gallery, fallback_gallery, imagin_gallery)
-    elif is_auction_source and imagin_gallery:
-        marketing_gallery = _merge_unique(imagin_gallery, source_gallery, fallback_gallery)
+        # Garage view: show real dealer photos with reference images as supplement
+        marketing_gallery = _merge_unique(source_gallery, fallback_gallery, reference_gallery)
+    elif is_auction_source and reference_gallery:
+        marketing_gallery = _merge_unique(reference_gallery, source_gallery, fallback_gallery)
     else:
         marketing_gallery = tier3_gallery or source_gallery or fallback_gallery
 
@@ -362,18 +405,22 @@ def resolve_vehicle_display_context(
     is_inspection_stage = bool(deal_stage and deal_stage in INSPECTION_DRIVEN_STATES)
     is_inspection_pending = is_inspection_stage and not is_inspection_ready
     uses_imagin_stock = bool(imagin_gallery)
+    uses_reference_stock = uses_evox or uses_imagin_for_ref
+
+    # Preferred hero: EVOX > Imagin > processed hero > first marketing image
+    preferred_hero = reference_hero or imagin_hero or hero_url
 
     if is_inspection_ready:
         mode = ImageDisplayMode.INSPECTION_REPORT
         if is_auction_source and marketing_gallery:
-            hero_image = imagin_hero or hero_url or (inspection_images[0] if inspection_images else None)
+            hero_image = preferred_hero or (inspection_images[0] if inspection_images else None)
             gallery_images = _merge_unique(marketing_gallery, inspection_images)
         else:
             hero_image = inspection_images[0] if inspection_images else hero_url
             gallery_images = inspection_images
     elif is_inspection_pending:
         mode = ImageDisplayMode.INSPECTION_PENDING
-        hero_image = imagin_hero or hero_url or (marketing_gallery[0] if marketing_gallery else None)
+        hero_image = preferred_hero or (marketing_gallery[0] if marketing_gallery else None)
         gallery_images = marketing_gallery
         if inspection_status == InspectionStatus.NOT_STARTED:
             inspection_status = InspectionStatus.PENDING
@@ -382,17 +429,29 @@ def resolve_vehicle_display_context(
             hero_image = "/assets/images/portfolio/VCH Auction default image.webp"
     else:
         mode = ImageDisplayMode.MARKETING
-        hero_image = imagin_hero or hero_url or (marketing_gallery[0] if marketing_gallery else None)
+        hero_image = preferred_hero or (marketing_gallery[0] if marketing_gallery else None)
         gallery_images = marketing_gallery
 
         if not hero_image and is_auction_source:
             hero_image = "/assets/images/portfolio/VCH Auction default image.webp"
 
+    # Build disclaimer based on image source
     disclaimer = (
         "Reference photos may not reflect exact current condition. "
         "Use the inspection report for verified condition details."
     )
-    if uses_imagin_stock:
+    if uses_evox:
+        evox_meta = evox_assets[0].metadata_json if evox_assets else (
+            {"match_level": evox_manifest.match_level, "color_match_exact": (
+                evox_manifest.color_match.is_exact_match if evox_manifest and evox_manifest.color_match else False
+            )} if evox_manifest else {}
+        )
+        disclaimer = "EVOX factory reference images based on the vehicle's build specification."
+        if evox_meta.get("match_level") == "model":
+            disclaimer += " Trim-level details may vary from the actual vehicle."
+        if not evox_meta.get("color_match_exact"):
+            disclaimer += " Exterior color is approximate — exact paint code not available from source."
+    elif uses_imagin_stock:
         disclaimer = (
             "IMAGIN studio reference images are generated from the auction listing spec. "
             "Inspection photos are appended after the condition report is ingested."
@@ -402,8 +461,25 @@ def resolve_vehicle_display_context(
         if manifest and not manifest.metadata.get("has_exact_interior_color"):
             disclaimer += " Interior trim and color may be approximate until exact option codes are available."
 
+    # Determine EVOX color match exactness
+    evox_color_exact = False
+    if evox_assets:
+        evox_color_exact = any(
+            a.metadata_json and a.metadata_json.get("color_match_exact") for a in evox_assets
+        )
+    elif evox_manifest and evox_manifest.color_match:
+        evox_color_exact = evox_manifest.color_match.is_exact_match
+
     # Count real dealer photos that are hidden behind Garage auth
     gated_photo_count = len(source_gallery) + len(fallback_gallery) if dealer_photos_gated else 0
+
+    # Reference photos label
+    if uses_evox:
+        ref_label = "EVOX Factory Reference Images"
+    elif uses_imagin_stock:
+        ref_label = "IMAGIN Studio Reference Images"
+    else:
+        ref_label = "Reference Photos"
 
     return {
         "mode": mode.value,
@@ -412,10 +488,18 @@ def resolve_vehicle_display_context(
         "gallery_images": gallery_images,
         "marketing_images": marketing_gallery,
         "imagin_images": imagin_gallery,
-        "spin_images": spin_gallery,
+        "spin_images": reference_spin,
         "source_images": [] if dealer_photos_gated else source_gallery,
         "inspection_images": inspection_images,
         "disclosure_images": disclosure_images,
+        # EVOX detail-level assets (populated when full sync has run)
+        "evox_exterior_stills": evox_ext_stills,
+        "evox_interior_stills": evox_int_stills,
+        "evox_spin_images": evox_spin,
+        "evox_interior_pano": evox_int_pano,
+        "has_evox_stock": uses_evox,
+        "evox_color_exact": evox_color_exact,
+        # Existing flags
         "has_tier2_hero": bool(hero_assets),
         "has_tier3_processed": bool(tier3_assets),
         "has_inspection_report": inspection_report is not None or (ove_detail and bool(ove_detail.condition_report_json)),
@@ -426,7 +510,7 @@ def resolve_vehicle_display_context(
         "buyer_protection": buyer_protection,
         "labels": {
             "inspection_primary": "Independent Inspection by Auction Platform",
-            "reference_photos": "IMAGIN Studio Reference Images" if uses_imagin_stock else "Reference Photos",
+            "reference_photos": ref_label,
         },
         "disclaimer": disclaimer,
     }

@@ -24,6 +24,14 @@ type VehicleDisplayContext = {
   source_images?: string[];
   inspection_images?: string[];
   disclosure_images?: string[];
+  // EVOX detail-level assets
+  evox_exterior_stills?: string[];
+  evox_interior_stills?: string[];
+  evox_spin_images?: string[];
+  evox_interior_pano?: string[];
+  has_evox_stock?: boolean;
+  evox_color_exact?: boolean;
+  // Existing flags
   has_inspection_report?: boolean;
   has_imagin_stock?: boolean;
   dealer_photos_gated?: boolean;
@@ -540,7 +548,22 @@ function formatDate(value: string | null | undefined): string {
 
 function resolveDisplayImages(vehicle: VehicleDetail | null | undefined): string[] {
   if (!vehicle) return [];
-  const primary = vehicle.display_images || vehicle.display_context?.gallery_images || [];
+  const ctx = vehicle.display_context;
+
+  // When full EVOX stills are available, merge them into the gallery for the detail view
+  if (ctx?.evox_exterior_stills?.length || ctx?.evox_interior_stills?.length) {
+    const evoxStills = [
+      ...(ctx.evox_exterior_stills || []),
+      ...(ctx.evox_interior_stills || []),
+    ];
+    const base = ctx.gallery_images || vehicle.display_images || [];
+    // Deduplicate: EVOX stills first, then remaining gallery images
+    const seen = new Set(evoxStills);
+    const merged = [...evoxStills, ...base.filter((url) => !seen.has(url))];
+    return merged.filter(Boolean);
+  }
+
+  const primary = vehicle.display_images || ctx?.gallery_images || [];
   if (primary.length) return primary.filter(Boolean);
   return (vehicle.images || []).filter(Boolean);
 }

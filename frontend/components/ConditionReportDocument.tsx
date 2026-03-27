@@ -700,9 +700,10 @@ function resolveReportImages(vehicle: VehicleDetail | null): string[] {
       // images_json items are objects { url, role, ... } or plain strings
       const raw = typeof entry === "string" ? entry : (entry as { url?: string }).url;
       if (!raw || typeof raw !== "string") continue;
-      // Skip non-photo assets (SVGs, logos, gifs)
+      // Skip non-photo assets (SVGs, logos, gifs, known non-vehicle images)
       const lower = raw.toLowerCase();
       if (lower.includes(".svg") || lower.includes(".gif")) continue;
+      if (lower.includes("ready_logistics.png")) continue;
       const clean = stripSizeParam(raw);
       // Deduplicate by base URL (after stripping size)
       if (seen.has(clean)) continue;
