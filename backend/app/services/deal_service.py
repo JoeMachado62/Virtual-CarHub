@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from dataclasses import dataclass
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -33,6 +34,119 @@ NON_SHOPPING_STATES: set[DealState] = {
     DealState.CLOSED_WON,
     DealState.CLOSED_LOST,
     DealState.DISQUALIFIED,
+}
+
+
+@dataclass(frozen=True)
+class DealStageTriggerRule:
+    target_state: DealState
+    actor: str
+    reason: str
+    allowed_current_states: frozenset[DealState]
+
+
+DEAL_STAGE_TRIGGER_MAP: dict[str, DealStageTriggerRule] = {
+    "full_profile_completed": DealStageTriggerRule(
+        target_state=DealState.PROFILED,
+        actor="buyer",
+        reason="full_profile_completed",
+        allowed_current_states=frozenset(
+            {
+                DealState.LEAD,
+                DealState.PRE_QUALIFYING,
+                DealState.QUALIFIED,
+                DealState.ENGAGED,
+                DealState.PROFILED,
+            }
+        ),
+    ),
+    "matching_run_triggered": DealStageTriggerRule(
+        target_state=DealState.MATCHING,
+        actor="system",
+        reason="matching_run_triggered",
+        allowed_current_states=frozenset(
+            {
+                DealState.LEAD,
+                DealState.PRE_QUALIFYING,
+                DealState.QUALIFIED,
+                DealState.ENGAGED,
+                DealState.PROFILED,
+                DealState.MATCHING,
+            }
+        ),
+    ),
+    "quick_matching_run_triggered": DealStageTriggerRule(
+        target_state=DealState.MATCHING,
+        actor="system",
+        reason="quick_matching_run_triggered",
+        allowed_current_states=frozenset(
+            {
+                DealState.LEAD,
+                DealState.PRE_QUALIFYING,
+                DealState.QUALIFIED,
+                DealState.ENGAGED,
+                DealState.PROFILED,
+                DealState.MATCHING,
+            }
+        ),
+    ),
+    "recommendation_selected": DealStageTriggerRule(
+        target_state=DealState.VEHICLE_SELECTED,
+        actor="buyer",
+        reason="recommendation_selected",
+        allowed_current_states=frozenset({DealState.MATCHING}),
+    ),
+    "garage_vehicle_selected": DealStageTriggerRule(
+        target_state=DealState.VEHICLE_SELECTED,
+        actor="buyer",
+        reason="garage_vehicle_selected",
+        allowed_current_states=frozenset(
+            {
+                DealState.LEAD,
+                DealState.PRE_QUALIFYING,
+                DealState.QUALIFIED,
+                DealState.ENGAGED,
+                DealState.PROFILED,
+                DealState.MATCHING,
+            }
+        ),
+    ),
+    "funding_started": DealStageTriggerRule(
+        target_state=DealState.FUNDING,
+        actor="agent",
+        reason="funding_started",
+        allowed_current_states=frozenset({DealState.VEHICLE_SELECTED}),
+    ),
+    "funding_confirmed": DealStageTriggerRule(
+        target_state=DealState.ACQUISITION_PENDING,
+        actor="agent",
+        reason="funding_confirmed",
+        allowed_current_states=frozenset({DealState.FUNDING}),
+    ),
+    "acquisition_confirmed": DealStageTriggerRule(
+        target_state=DealState.ACQUIRED,
+        actor="agent",
+        reason="acquisition_confirmed",
+        allowed_current_states=frozenset({DealState.ACQUISITION_PENDING}),
+    ),
+    "carrier_booked": DealStageTriggerRule(
+        target_state=DealState.IN_TRANSIT,
+        actor="agent",
+        reason="carrier_booked",
+        allowed_current_states=frozenset({DealState.ACQUIRED}),
+    ),
+    "delivery_confirmed": DealStageTriggerRule(
+        target_state=DealState.DELIVERED,
+        actor="agent",
+        reason="delivery_confirmed",
+        allowed_current_states=frozenset({DealState.IN_TRANSIT}),
+    ),
+    "deal_completed": DealStageTriggerRule(
+        target_state=DealState.CLOSED_WON,
+        actor="system",
+        reason="deal_completed",
+        allowed_current_states=frozenset({DealState.DELIVERED}),
+    ),
 }
 
 
@@ -162,6 +276,30 @@ def advance_deal_to(
             payload=payload if stage == target_state else None,
         )
     return deal
+
+
+def advance_deal_for_trigger(
+    db: Session,
+    *,
+    deal: Deal,
+    trigger: str,
+    payload: dict | None = None,
+) -> Deal:
+    rule = DEAL_STAGE_TRIGGER_MAP.get(trigger)
+    if not rule:
+        raise ValueError(f"Unknown deal stage trigger: {trigger}")
+
+    if deal.stage not in rule.allowed_current_states:
+        return deal
+
+    return advance_deal_to(
+        db,
+        deal=deal,
+        target_state=rule.target_state,
+        actor=rule.actor,
+        reason=rule.reason,
+        payload=payload,
+    )
 
 
 def _upsert_deal_outcome(db: Session, *, deal: Deal) -> None:

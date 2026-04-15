@@ -2,6 +2,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { DannyChat } from "@/components/DannyChat";
@@ -11,6 +12,7 @@ import { Recommendation, RecommendationCards } from "@/components/Recommendation
 import { apiFetch } from "@/lib/api";
 import { AuthState, clearAuthState, loadValidAuthState, saveAuthState } from "@/lib/auth";
 import { toPublicSourceLabel } from "@/lib/sourceLabels";
+import { maskVin } from "@/lib/vin";
 
 type DisplayMode = "MARKETING" | "INSPECTION_PENDING" | "INSPECTION_REPORT";
 type InspectionStatus = "NOT_STARTED" | "PENDING" | "INGESTED" | "NORMALIZED" | "VERIFIED" | "FAILED";
@@ -31,6 +33,7 @@ type DealSummary = {
 type GarageItem = {
   id: string;
   vin: string;
+  public_slug?: string | null;
   status: string;
   source: string;
   added_at: string | null;
@@ -56,12 +59,20 @@ type GarageItem = {
 
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
 
-type AuthView = "login" | "register" | "onboarding";
+type AuthView = "login" | "register" | "onboarding" | "forgot-password";
+type CrRequestModalState = {
+  vin: string;
+  title: string;
+  imageUrl: string;
+  alreadyAvailable: boolean;
+};
 
 export function DashboardShell({ requestedVin }: { requestedVin?: string | null }) {
+  const searchParams = useSearchParams();
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [deal, setDeal] = useState<DealSummary | null>(null);
+  const [isPreapproved, setIsPreapproved] = useState(false);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [notifications, setNotifications] = useState<{ id: string; message: string }[]>([]);
   const [garageItems, setGarageItems] = useState<GarageItem[]>([]);
@@ -70,6 +81,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
   const [garageError, setGarageError] = useState<string | null>(null);
   const [garageActionVin, setGarageActionVin] = useState<string | null>(null);
   const [pendingReportVins, setPendingReportVins] = useState<Set<string>>(new Set());
+  const [crRequestModal, setCrRequestModal] = useState<CrRequestModalState | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -88,8 +100,15 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
 
+  // Forgot password fields
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotSubmitting, setForgotSubmitting] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState<string | null>(null);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+
   const isAuthenticated = useMemo(() => Boolean(auth?.accessToken), [auth]);
   const normalizedRequestedVin = requestedVin?.trim().toUpperCase() || null;
+  const emailLoginToken = searchParams.get("email_login_token");
 
   useEffect(() => {
     let cancelled = false;
@@ -110,6 +129,66 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!authReady || !emailLoginToken) return;
+    if (auth?.accessToken) {
+      if (typeof window !== "undefined") {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete("email_login_token");
+        window.history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}`);
+      }
+      return;
+    }
+
+    let cancelled = false;
+
+    async function consumeEmailLogin() {
+      setLoggingIn(true);
+      setLoginError(null);
+
+      const response = await apiFetch<{
+        user_id: string;
+        email?: string;
+        access_token: string;
+        refresh_token: string;
+        token_type: string;
+      }>("/auth/email-login", {
+        method: "POST",
+        body: JSON.stringify({ token: emailLoginToken }),
+      });
+
+      if (cancelled) return;
+
+      if (response.status !== "ok") {
+        setDashboardError(response.error?.message || "Unable to open your garage from the email link.");
+        setLoggingIn(false);
+        return;
+      }
+
+      const nextAuth: AuthState = {
+        userId: response.data.user_id,
+        email: response.data.email || "",
+        accessToken: response.data.access_token,
+        refreshToken: response.data.refresh_token,
+      };
+      saveAuthState(nextAuth);
+      setAuth(nextAuth);
+      if (response.data.email) setEmail(response.data.email);
+      if (typeof window !== "undefined") {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.delete("email_login_token");
+        window.history.replaceState({}, "", `${nextUrl.pathname}${nextUrl.search}`);
+      }
+      setLoggingIn(false);
+    }
+
+    void consumeEmailLogin();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [auth?.accessToken, authReady, emailLoginToken]);
 
   function resetSession(message?: string) {
     clearAuthState();
@@ -217,6 +296,29 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     setRegistering(false);
   }
 
+  async function forgotPassword() {
+    if (!forgotEmail.trim()) {
+      setForgotError("Please enter your email address.");
+      return;
+    }
+    setForgotSubmitting(true);
+    setForgotError(null);
+    setForgotMessage(null);
+    const response = await apiFetch<{ message: string }>(
+      "/auth/forgot-password",
+      {
+        method: "POST",
+        body: JSON.stringify({ email: forgotEmail })
+      }
+    );
+    if (response.status === "ok") {
+      setForgotMessage(response.data.message);
+    } else {
+      setForgotError(response.error?.message || "Something went wrong. Please try again.");
+    }
+    setForgotSubmitting(false);
+  }
+
   async function refreshData() {
     if (!auth?.accessToken) return;
 
@@ -224,11 +326,12 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     setDashboardError(null);
     setGarageError(null);
 
-    const [dealResponse, recs, notes, garage] = await Promise.all([
+    const [dealResponse, recs, notes, garage, accountStatus] = await Promise.all([
       apiFetch<DealSummary>("/me/deal", {}, auth.accessToken),
       apiFetch<Recommendation[]>("/me/recommendations", {}, auth.accessToken),
       apiFetch<{ id: string; message: string }[]>("/me/notifications", {}, auth.accessToken),
-      apiFetch<GarageItem[]>("/me/garage", {}, auth.accessToken)
+      apiFetch<GarageItem[]>("/me/garage", {}, auth.accessToken),
+      apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken)
     ]);
 
     if ([dealResponse, recs, notes, garage].some(isUnauthorized)) {
@@ -254,6 +357,12 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       setDashboardError((current) => current || notes.error?.message || "Unable to load notifications.");
     }
 
+    if (accountStatus.status === "ok" && accountStatus.data) {
+      setIsPreapproved(Boolean(accountStatus.data.is_preapproved));
+    } else {
+      setIsPreapproved(false);
+    }
+
     if (garage.status === "ok") {
       const items = garage.data || [];
       setGarageItems(items);
@@ -272,11 +381,76 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     setLoading(false);
   }
 
+  async function refreshGarageStatus(options?: { silent?: boolean }) {
+    if (!auth?.accessToken) return;
+
+    if (!options?.silent) {
+      setGarageError(null);
+    }
+
+    const [garage, notes] = await Promise.all([
+      apiFetch<GarageItem[]>("/me/garage", {}, auth.accessToken),
+      apiFetch<{ id: string; message: string }[]>("/me/notifications", {}, auth.accessToken),
+    ]);
+
+    if ([garage, notes].some(isUnauthorized)) {
+      resetSession("Your session expired. Sign in again.");
+      return;
+    }
+
+    if (notes.status === "ok") {
+      setNotifications(notes.data || []);
+    }
+
+    if (garage.status !== "ok") {
+      setGarageError(garage.error?.message || "Unable to load garage.");
+      return;
+    }
+
+    const items = garage.data || [];
+    setGarageItems(items);
+
+    const vinsWithReports = new Set(items.filter((item) => item.has_inspection_report).map((item) => item.vin));
+    const completedVins = [...pendingReportVins].filter((vin) => vinsWithReports.has(vin));
+    if (completedVins.length) {
+      setPendingReportVins((prev) => {
+        const next = new Set(prev);
+        completedVins.forEach((vin) => next.delete(vin));
+        return next;
+      });
+    }
+
+    if (completedVins.length) {
+      const completedTitles = completedVins
+        .map((vin) => items.find((item) => item.vin === vin))
+        .filter((item): item is GarageItem => Boolean(item))
+        .map((item) => garageTitle(item));
+      setGarageMessage(
+        completedTitles.length === 1
+          ? `${completedTitles[0]} condition report is ready.`
+          : `${completedTitles.length} condition reports are now ready.`,
+      );
+    }
+  }
+
   useEffect(() => {
     if (!authReady) return;
     void refreshData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth?.accessToken, authReady]);
+
+  useEffect(() => {
+    if (!auth?.accessToken || pendingReportVins.size === 0) return;
+
+    const intervalId = window.setInterval(() => {
+      void refreshGarageStatus({ silent: true });
+    }, 15000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth?.accessToken, pendingReportVins.size]);
 
   async function selectVehicle(vin: string) {
     if (!auth?.accessToken) return;
@@ -337,18 +511,21 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       return;
     }
 
-    // Track pending status if report is not immediately available
+    const garageItem = garageItems.find((item) => item.vin === vin);
     if (!response.data.already_available && response.data.status !== "available") {
-      setPendingReportVins(prev => new Set(prev).add(vin));
+      setPendingReportVins((prev) => {
+        const next = new Set(prev);
+        next.add(vin);
+        return next;
+      });
     }
-
-    setGarageMessage(
-      response.data.message ||
-        (response.data.already_available
-          ? "Condition report is already available."
-          : "Condition report requested. The auction queue has been updated.")
-    );
-    await refreshData();
+    setCrRequestModal({
+      vin,
+      title: garageItem ? garageTitle(garageItem) : vin,
+      imageUrl: garageItem?.vehicle.thumbnail || FALLBACK_IMAGE,
+      alreadyAvailable: Boolean(response.data.already_available || response.data.status === "available"),
+    });
+    await refreshGarageStatus({ silent: true });
     setGarageActionVin(null);
   }
 
@@ -460,7 +637,31 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
           </button>
         </div>
 
-        {authView === "login" ? (
+        {authView === "forgot-password" ? (
+          <>
+            <h2>Reset Your Password</h2>
+            <p>Enter the email address you used to create your account and we&apos;ll send you a link to reset your password.</p>
+            <label>
+              Email
+              <input
+                className="input"
+                type="email"
+                value={forgotEmail}
+                onChange={(e) => setForgotEmail(e.target.value)}
+              />
+            </label>
+            {forgotError ? <p className="dashboard-error">{forgotError}</p> : null}
+            {forgotMessage ? <p className="dashboard-success">{forgotMessage}</p> : null}
+            <button className="button" disabled={forgotSubmitting} onClick={forgotPassword}>
+              {forgotSubmitting ? "Sending..." : "Send Reset Link"}
+            </button>
+            <p className="dashboard-auth-switch">
+              <button className="link-button" onClick={() => { setAuthView("login"); setForgotError(null); setForgotMessage(null); }}>
+                Back to Sign In
+              </button>
+            </p>
+          </>
+        ) : authView === "login" ? (
           <>
             <h2>Welcome Back</h2>
             <p>Sign in to access My Garage, saved vehicles, and your deal workspace.</p>
@@ -481,6 +682,11 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
             <button className="button" disabled={loggingIn} onClick={login}>
               {loggingIn ? "Signing in..." : "Sign In"}
             </button>
+            <p className="dashboard-auth-switch">
+              <button className="link-button" onClick={() => { setAuthView("forgot-password"); setForgotEmail(email); }}>
+                Forgot your password?
+              </button>
+            </p>
             <p className="dashboard-auth-switch">
               Don&apos;t have an account?{" "}
               <button className="link-button" onClick={() => setAuthView("register")}>
@@ -615,7 +821,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
         ) : null}
         {normalizedRequestedVin && !garageItems.some((item) => item.vin === normalizedRequestedVin) ? (
           <p className="dashboard-warning">
-            Requested VIN {normalizedRequestedVin} is not currently in My Garage. Showing the latest saved vehicle instead.
+            Requested VIN {maskVin(normalizedRequestedVin, isPreapproved)} is not currently in My Garage. Showing the latest saved vehicle instead.
           </p>
         ) : null}
       </section>
@@ -662,48 +868,48 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                   >
                     <div className="dashboard-garage-item-copy">
                       <div className="dashboard-garage-item-head">
-                        <strong>{garageTitle(item)}</strong>
+                        <strong className="dashboard-garage-title">{garageTitle(item)}</strong>
                         <div className="dashboard-garage-badges">
                           {isSelected ? <span className="badge">Selected</span> : null}
                           {isSpotlight ? <span className="badge">Focused</span> : null}
                           <span className="badge">{statusLabel(item.status)}</span>
                         </div>
                       </div>
-                      <p style={{ margin: 0 }}>
+                      <p className="dashboard-garage-price">
                         {formatMoney(item.vehicle.price_asking)} | {garageLocation(item)}
                       </p>
-                      <p style={{ margin: 0 }}>VIN: {item.vin}</p>
-                      <p style={{ margin: 0 }}>
+                      <p className="dashboard-garage-meta">VIN: {maskVin(item.vin, isPreapproved)}</p>
+                      <p className="dashboard-garage-meta">
                         {displayModeLabel(item.display_mode)} | {inspectionStatusLabel(item.inspection_status)}
                       </p>
-                      <p style={{ margin: 0 }}>
+                      <p className="dashboard-garage-meta">
                         Added {formatDate(item.added_at)} | Updated {formatDate(item.updated_at)}
                       </p>
                     </div>
-                    <div className="inventory-actions">
+                    <div className="inventory-actions dashboard-garage-actions">
                       {!isSpotlight ? (
-                        <Link className="button ghost" href={`/dashboard?vin=${encodeURIComponent(item.vin)}`}>
+                        <Link className="button ghost-accent" href={`/dashboard?vin=${encodeURIComponent(item.vin)}`}>
                           Focus
                         </Link>
                       ) : null}
-                      <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}`}>
+                      <Link className="button secondary" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}`}>
                         View Details
                       </Link>
                       {item.has_inspection_report ? (
-                        <Link className="button ghost" href={`/vinventory/${encodeURIComponent(item.vin)}/condition-report`}>
+                        <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}/condition-report`}>
                           CR Available
                         </Link>
                       ) : null}
                       {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
                       !item.has_inspection_report && pendingReportVins.has(item.vin) ? (
-                        <button className="button ghost" disabled>
+                        <button className="button ghost-mint" disabled>
                           CR Pending
                         </button>
                       ) : null}
                       {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
                       !item.has_inspection_report && !pendingReportVins.has(item.vin) ? (
                         <button
-                          className="button ghost"
+                          className="button ghost-mint"
                           onClick={() => requestConditionReport(item.vin)}
                           disabled={itemActionLoading}
                         >
@@ -713,7 +919,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                       <button className="button" onClick={() => startGarageAcquisition(item.vin)} disabled={itemActionLoading}>
                         {itemActionLoading ? "Starting..." : "Start Acquisition"}
                       </button>
-                      <button className="button ghost" onClick={() => removeFromGarage(item.vin)} disabled={itemActionLoading}>
+                      <button className="button ghost-danger" onClick={() => removeFromGarage(item.vin)} disabled={itemActionLoading}>
                         Remove
                       </button>
                     </div>
@@ -769,7 +975,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
               </div>
               <div className="dashboard-spotlight-copy">
                 <p className="dashboard-spotlight-summary">
-                  {garageLocation(spotlightItem)} | VIN {spotlightItem.vin}
+                  {garageLocation(spotlightItem)} | VIN {maskVin(spotlightItem.vin, isPreapproved)}
                 </p>
                 <p className="dashboard-muted-note">
                   Added {formatDate(spotlightItem.added_at)}
@@ -778,12 +984,12 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                     : ""}
                 </p>
               </div>
-              <div className="inventory-actions">
-                <Link className="button ghost" href={`/vinventory/${encodeURIComponent(spotlightItem.vin)}`}>
+              <div className="inventory-actions dashboard-garage-actions">
+                <Link className="button secondary" href={`/vinventory/${encodeURIComponent(spotlightItem.public_slug || spotlightItem.vin)}`}>
                   View Details
                 </Link>
                 {spotlightItem.has_inspection_report ? (
-                  <Link className="button ghost" href={`/vinventory/${encodeURIComponent(spotlightItem.vin)}/condition-report`}>
+                  <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(spotlightItem.public_slug || spotlightItem.vin)}/condition-report`}>
                     CR Available
                   </Link>
                 ) : null}
@@ -827,6 +1033,53 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
           </button>
         </div>
       </section>
+
+      {crRequestModal ? (
+        <div className="dashboard-cr-modal-overlay" onClick={() => setCrRequestModal(null)}>
+          <div
+            className="card dashboard-cr-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dashboard-cr-modal-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="dashboard-cr-modal-media">
+              <img src={crRequestModal.imageUrl} alt={crRequestModal.title} />
+              <div className="dashboard-cr-modal-badge">
+                {crRequestModal.alreadyAvailable ? "CR Ready" : "CR In Progress"}
+              </div>
+            </div>
+            <div className="dashboard-cr-modal-copy">
+              <p className="section-eyebrow" style={{ marginBottom: 8 }}>
+                Condition Report
+              </p>
+              <h3 id="dashboard-cr-modal-title">
+                {crRequestModal.alreadyAvailable ? "Your report is already available." : "We’re generating your report now."}
+              </h3>
+              <p>
+                {crRequestModal.alreadyAvailable
+                  ? `${crRequestModal.title} already has a condition report ready in your garage.`
+                  : `${crRequestModal.title} has been queued for condition-report generation. We’ll notify you when it’s complete, and this page will automatically update from Order CR to CR Available.`}
+              </p>
+              <div className="dashboard-cr-modal-actions">
+                {crRequestModal.alreadyAvailable ? (
+                  <Link
+                    className="button ghost-mint"
+                    href={`/vinventory/${encodeURIComponent(
+                      garageItems.find((item) => item.vin === crRequestModal.vin)?.public_slug || crRequestModal.vin,
+                    )}/condition-report`}
+                  >
+                    Open Report
+                  </Link>
+                ) : null}
+                <button className="button" type="button" onClick={() => setCrRequestModal(null)}>
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

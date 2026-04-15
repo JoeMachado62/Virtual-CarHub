@@ -12,13 +12,14 @@ from app.api.v1.routers import auth as auth_router
 from app.api.v1.routers import me as me_router
 from app.api.v1.routers import returns as returns_router
 from app.core.constants import DealState, FundingState, InventorySourceType
+from app.core.security import create_email_login_token
 from app.db.seed import seed
 from app.db.session import SessionLocal
 from app.models.entities import OveDetailRequest, User, Vehicle
-from app.schemas.auth import LoginRequest
+from app.schemas.auth import EmailLoginRequest, LoginRequest
 from app.schemas.profile import QuickMatchRequest
 from app.schemas.returns import ConfirmReceiptRequest, InitiateReturnRequest, RefundRequest
-from app.services.deal_service import get_or_create_active_deal
+from app.services.deal_service import advance_deal_for_trigger, get_or_create_active_deal
 
 
 def _buyer(db) -> User:
@@ -64,6 +65,23 @@ def test_quick_match_and_recommendations() -> None:
         assert len(recommendations["data"]) > 0
 
 
+def test_email_login_token_exchanges_for_session_tokens() -> None:
+    with SessionLocal() as db:
+        user = _buyer(db)
+        token = create_email_login_token(user.id)
+
+        response = auth_router.email_login(
+            EmailLoginRequest(token=token),
+            db=db,
+        )
+
+        assert response["status"] == "ok"
+        assert response["data"]["user_id"] == user.id
+        assert response["data"]["email"] == user.email
+        assert response["data"]["access_token"]
+        assert response["data"]["refresh_token"]
+
+
 def test_quick_match_does_not_rewind_later_stage() -> None:
     with SessionLocal() as db:
         user = _buyer(db)
@@ -89,6 +107,38 @@ def test_quick_match_does_not_rewind_later_stage() -> None:
         assert quick_match["status"] == "ok"
         assert quick_match["data"]["match_count"] > 0
         assert deal.stage == DealState.VEHICLE_SELECTED
+
+
+def test_deal_stage_trigger_map_advances_and_preserves_stage_guards() -> None:
+    with SessionLocal() as db:
+        user = _buyer(db)
+        deal = get_or_create_active_deal(db, user.id)
+        deal.stage = DealState.LEAD
+        db.commit()
+
+        advance_deal_for_trigger(db, deal=deal, trigger="full_profile_completed")
+        assert deal.stage == DealState.PROFILED
+
+        advance_deal_for_trigger(db, deal=deal, trigger="matching_run_triggered")
+        assert deal.stage == DealState.MATCHING
+
+        advance_deal_for_trigger(db, deal=deal, trigger="recommendation_selected", payload={"vin": "1M8GDM9AXKP042781"})
+        assert deal.stage == DealState.VEHICLE_SELECTED
+
+        advance_deal_for_trigger(db, deal=deal, trigger="matching_run_triggered")
+        assert deal.stage == DealState.VEHICLE_SELECTED
+
+        advance_deal_for_trigger(db, deal=deal, trigger="funding_started")
+        assert deal.stage == DealState.FUNDING
+
+        advance_deal_for_trigger(db, deal=deal, trigger="funding_confirmed")
+        assert deal.stage == DealState.ACQUISITION_PENDING
+
+        advance_deal_for_trigger(db, deal=deal, trigger="acquisition_confirmed")
+        assert deal.stage == DealState.ACQUIRED
+
+        advance_deal_for_trigger(db, deal=deal, trigger="carrier_booked")
+        assert deal.stage == DealState.IN_TRANSIT
 
 
 def test_buyer_can_request_ove_condition_report_when_preapproved() -> None:
@@ -136,7 +186,12 @@ def test_buyer_can_request_ove_condition_report_when_preapproved() -> None:
         assert deal_payload["data"]["condition_report_eligible"] is True
 
 
-def test_garage_save_and_acquisition_enqueue_ove_detail_refresh() -> None:
+def test_garage_save_does_not_enqueue_and_acquisition_enqueues_ove_detail_refresh() -> None:
+    # Regression guard for commit 634842b ("fix CR timing"): garage-save must
+    # NOT kick off an auction detail refresh, because the scraper's detail
+    # scrape triggers condition-report capture and CRs should only appear when
+    # the buyer explicitly clicks "Request CR".  The acquisition path still
+    # enqueues, since starting an acquisition is a buyer-intent signal.
     with SessionLocal() as db:
         user = _buyer(db)
         deal = get_or_create_active_deal(db, user.id)
@@ -176,10 +231,9 @@ def test_garage_save_and_acquisition_enqueue_ove_detail_refresh() -> None:
         db.commit()
 
         assert saved["status"] == "ok"
-        assert saved["data"]["ove_detail_refresh"]["queued"] is True
+        assert "ove_detail_refresh" not in saved["data"]
         queued_saved = db.scalar(select(OveDetailRequest).where(OveDetailRequest.vin == vin_saved))
-        assert queued_saved is not None
-        assert queued_saved.reason == f"garage_saved:{deal.id}"
+        assert queued_saved is None, "garage-save must not enqueue an OVE detail refresh (CR-timing regression guard)"
 
         acquired = me_router.start_garage_acquisition(
             vin=vin_acquire,

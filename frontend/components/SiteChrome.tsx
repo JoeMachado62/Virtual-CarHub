@@ -29,7 +29,13 @@ function resolveLogoPath(theme: string | undefined) {
 export function SiteChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [logoPath, setLogoPath] = useState("/assets/images/logo/VirtualCarHub white.png");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isEmbedRoute = pathname.startsWith("/embed/");
+
+  // Close mobile menu on route change
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -74,6 +80,28 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
               <img src={logoPath} alt="VirtualCarHub" className="brand-mark" />
             </Link>
 
+            <div className="nav-actions nav-actions-inline">
+              <Link href="/dashboard" className="button secondary">
+                My Garage
+              </Link>
+              <Link href="/contact#talk-to-danny" className="button">
+                Talk to Danny
+              </Link>
+            </div>
+
+            <button
+              className="hamburger-btn"
+              aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={mobileMenuOpen}
+              onClick={() => setMobileMenuOpen((v) => !v)}
+            >
+              <span className={`hamburger-icon ${mobileMenuOpen ? "open" : ""}`}>
+                <span />
+                <span />
+                <span />
+              </span>
+            </button>
+
             <nav className="site-nav" aria-label="Primary">
               {NAV_ITEMS.map((item) => (
                 <Link
@@ -86,7 +114,7 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
               ))}
             </nav>
 
-            <div className="nav-actions">
+            <div className="nav-actions nav-actions-desktop">
               <Link href="/dashboard" className="button secondary">
                 My Garage
               </Link>
@@ -96,6 +124,33 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </div>
+
+        {mobileMenuOpen && (
+          <div className="mobile-nav-overlay" onClick={() => setMobileMenuOpen(false)} />
+        )}
+        <nav
+          className={`mobile-nav-drawer ${mobileMenuOpen ? "open" : ""}`}
+          aria-label="Mobile navigation"
+        >
+          {NAV_ITEMS.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`mobile-nav-link ${isActive(pathname, item.href) ? "active" : ""}`}
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              {item.label}
+            </Link>
+          ))}
+          <div className="mobile-nav-actions">
+            <Link href="/dashboard" className="button secondary" onClick={() => setMobileMenuOpen(false)}>
+              My Garage
+            </Link>
+            <Link href="/contact#talk-to-danny" className="button" onClick={() => setMobileMenuOpen(false)}>
+              Talk to Danny
+            </Link>
+          </div>
+        </nav>
       </header>
 
       <div className="page-body">

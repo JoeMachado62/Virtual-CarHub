@@ -10,7 +10,7 @@ from app.core.responses import ok
 from app.db.session import get_db
 from app.models.entities import Deal, Shipment
 from app.services.audit_service import log_event
-from app.services.deal_service import transition_deal_state
+from app.services.deal_service import advance_deal_for_trigger
 
 router = APIRouter(dependencies=[Depends(require_service_token)])
 
@@ -46,14 +46,7 @@ def book_carrier(deal_id: str, payload: dict, db: Session = Depends(get_db)) -> 
     shipment.tracking_url = payload.get("tracking_url", "https://tracking.virtualcarhub.local/placeholder")
     shipment.eta = datetime.now(UTC) + timedelta(days=int(payload.get("eta_days", 5)))
 
-    if deal.stage == DealState.ACQUIRED:
-        transition_deal_state(
-            db,
-            deal=deal,
-            new_state=DealState.IN_TRANSIT,
-            actor="agent",
-            reason="carrier_booked",
-        )
+    advance_deal_for_trigger(db, deal=deal, trigger="carrier_booked")
 
     log_event(db, deal_id=deal.id, event_type="logistics_carrier_booked", actor="agent", payload=payload)
     db.commit()

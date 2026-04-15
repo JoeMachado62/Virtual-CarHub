@@ -5,6 +5,7 @@ from app.db.session import SessionLocal
 from app.integrations.marketcheck_client import MarketCheckClient
 from app.models.entities import BuyerProfile, Deal
 from app.services.inventory_service import ingest_marketcheck_inventory, seed_inventory
+from app.services.marketcheck_history_enrichment_service import run_history_enrichment_batch
 from app.services.matching_service import run_matching
 from app.tasks.celery_app import celery_app
 
@@ -50,3 +51,10 @@ def ghl_reconcile() -> dict:
         "status": "queued",
         "note": "Stub reconciliation job. Replace with GHL API pull in production.",
     }
+
+
+@celery_app.task(name="inventory.history_enrichment_batch")
+def history_enrichment_batch(limit: int = 8, force: bool = False) -> dict:
+    with SessionLocal() as db:
+        result = run_history_enrichment_batch(db, limit=limit, force=force)
+    return result

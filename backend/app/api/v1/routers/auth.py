@@ -10,6 +10,7 @@ from app.core.security import (
     TokenType,
     create_access_token,
     create_refresh_token,
+    create_reset_token,
     decode_token,
     hash_password,
     verify_password,
@@ -17,7 +18,14 @@ from app.core.security import (
 from app.db.session import get_db
 from app.integrations import GHLClient
 from app.models.entities import User
-from app.schemas.auth import LoginRequest, RefreshRequest, RegisterRequest
+from app.schemas.auth import (
+    ForgotPasswordRequest,
+    LoginRequest,
+    EmailLoginRequest,
+    RefreshRequest,
+    RegisterRequest,
+    ResetPasswordRequest,
+)
 
 logger = logging.getLogger("vch.auth")
 
@@ -82,6 +90,10 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
 
     # Fire-and-forget GHL contact creation (non-blocking for the user)
     ghl_contact_id = _create_ghl_contact(user)
+    if ghl_contact_id and user.ghl_contact_id != ghl_contact_id:
+        user.ghl_contact_id = ghl_contact_id
+        db.commit()
+        db.refresh(user)
 
     return ok(
         {
@@ -126,3 +138,96 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> dict:
             "token_type": "bearer",
         }
     )
+
+
+@router.post("/email-login")
+def email_login(payload: EmailLoginRequest, db: Session = Depends(get_db)) -> dict:
+    token_data = decode_token(payload.token, expected_type=TokenType.EMAIL_LOGIN)
+    user_id = token_data.get("sub")
+    user = db.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+    return ok(
+        {
+            "user_id": user.id,
+            "email": user.email,
+            "access_token": create_access_token(user.id),
+            "refresh_token": create_refresh_token(user.id),
+            "token_type": "bearer",
+        }
+    )
+
+
+def _send_reset_email(to_email: str, reset_url: str, first_name: str | None) -> None:
+    """Send a password-reset email via SendGrid. Fails silently with a log warning."""
+    if not settings.has_sendgrid:
+        logger.warning("sendgrid_not_configured — password reset email not sent to %s", to_email)
+        return
+
+    greeting = f"Hi {first_name}" if first_name else "Hi"
+    html_body = f"""\
+<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;">
+  <h2 style="color:#1a1a2e;">Reset Your Password</h2>
+  <p>{greeting},</p>
+  <p>We received a request to reset the password for your Virtual CarHub account.</p>
+  <p>Click the button below to set a new password. This link expires in {settings.password_reset_expire_minutes} minutes.</p>
+  <p style="text-align:center;margin:28px 0;">
+    <a href="{reset_url}" style="background:#2563eb;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:600;">
+      Reset Password
+    </a>
+  </p>
+  <p style="font-size:13px;color:#666;">If you didn&rsquo;t request this, you can safely ignore this email.</p>
+  <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
+  <p style="font-size:12px;color:#999;">Virtual CarHub &mdash; Your personal vehicle marketplace</p>
+</div>"""
+
+    text_body = (
+        f"{greeting},\n\n"
+        "We received a request to reset your Virtual CarHub password.\n\n"
+        f"Reset your password here (expires in {settings.password_reset_expire_minutes} minutes):\n"
+        f"{reset_url}\n\n"
+        "If you didn't request this, you can safely ignore this email.\n\n"
+        "— Virtual CarHub"
+    )
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Content, Email, Mail, To
+
+        sg = SendGridAPIClient(settings.sendgrid_api_key)
+        from_email = Email(settings.sendgrid_from_email, settings.sendgrid_from_name)
+        to = To(to_email)
+        mail = Mail(from_email=from_email, to_emails=to, subject="Reset your Virtual CarHub password")
+        mail.add_content(Content("text/plain", text_body))
+        mail.add_content(Content("text/html", html_body))
+        response = sg.send(mail)
+        logger.info("password_reset_email_sent to=%s status=%s", to_email, response.status_code)
+    except Exception as exc:
+        logger.warning("password_reset_email_failed to=%s error=%s", to_email, str(exc))
+
+
+@router.post("/forgot-password")
+def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)) -> dict:
+    # Always return success to avoid email enumeration
+    user = db.scalar(select(User).where(User.email == payload.email))
+    if user:
+        token = create_reset_token(user.id)
+        reset_url = f"{settings.public_web_base_url}/reset-password?token={token}"
+        _send_reset_email(user.email, reset_url, user.first_name)
+
+    return ok({"message": "If an account with that email exists, a password reset link has been sent."})
+
+
+@router.post("/reset-password")
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)) -> dict:
+    token_data = decode_token(payload.token, expected_type=TokenType.RESET)
+    user_id = token_data.get("sub")
+    user = db.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset link")
+
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+
+    return ok({"message": "Your password has been reset successfully. You can now sign in with your new password."})

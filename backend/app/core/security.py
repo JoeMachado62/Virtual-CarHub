@@ -13,6 +13,8 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 class TokenType:
     ACCESS = "access"
     REFRESH = "refresh"
+    RESET = "reset"
+    EMAIL_LOGIN = "email_login"
 
 
 def hash_password(password: str) -> str:
@@ -47,6 +49,22 @@ def create_refresh_token(subject: str) -> str:
         subject=subject,
         token_type=TokenType.REFRESH,
         expires_delta=timedelta(days=settings.jwt_refresh_expire_days),
+    )
+
+
+def create_reset_token(subject: str) -> str:
+    return create_token(
+        subject=subject,
+        token_type=TokenType.RESET,
+        expires_delta=timedelta(minutes=settings.password_reset_expire_minutes),
+    )
+
+
+def create_email_login_token(subject: str) -> str:
+    return create_token(
+        subject=subject,
+        token_type=TokenType.EMAIL_LOGIN,
+        expires_delta=timedelta(minutes=settings.email_login_expire_minutes),
     )
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -125,6 +126,154 @@ def _parse_decode_response(vin: str, data: dict) -> VinDecodeResult:
         entertainment_system=_clean(r.get("EntertainmentSystem")),
         raw_response=data,
     )
+
+
+def categorize_decode(result: VinDecodeResult) -> dict[str, Any]:
+    """Transform VinDecodeResult into consumer-facing categories for the listing UI."""
+    raw = result.raw_response.get("Results", [{}])[0] if result.raw_response.get("Results") else {}
+
+    # ── Specs ──
+    specs: list[dict[str, str]] = []
+    engine_parts = []
+    if result.engine_displacement_l:
+        engine_parts.append(f"{result.engine_displacement_l}L")
+    if result.engine_cylinders:
+        cfg = _clean(raw.get("EngineConfiguration")) or ""
+        if "V" in cfg.upper():
+            engine_parts.append(f"V{result.engine_cylinders}")
+        elif "Inline" in cfg:
+            engine_parts.append(f"I{result.engine_cylinders}")
+        else:
+            engine_parts.append(f"{result.engine_cylinders}-Cylinder")
+    if result.fuel_type:
+        engine_parts.append(result.fuel_type)
+    engine_desc = " ".join(engine_parts)
+    if engine_desc:
+        specs.append({"icon": "engine", "text": f"{engine_desc} Engine"})
+    hp = _clean(raw.get("EngineHP"))
+    if hp:
+        specs.append({"icon": "power", "text": f"{hp} HP"})
+    trans_parts = []
+    if result.transmission_speeds:
+        trans_parts.append(f"{result.transmission_speeds}-Speed")
+    if result.transmission:
+        trans_parts.append(result.transmission)
+    trans_desc = " ".join(trans_parts)
+    if trans_desc:
+        specs.append({"icon": "transmission", "text": f"{trans_desc} Transmission"})
+    if result.drive_type:
+        specs.append({"icon": "drivetrain", "text": result.drive_type})
+    fi = _clean(raw.get("FuelInjectionType"))
+    if fi:
+        specs.append({"icon": "fuel", "text": fi})
+
+    # ── Safety ──
+    safety: list[dict[str, str]] = []
+    _SAFETY_BOOLS = [
+        ("backup_camera", "Backup Camera"),
+        ("blind_spot_monitoring", "Blind Spot Monitor"),
+        ("forward_collision_warning", "Forward Collision Warning"),
+        ("lane_departure_warning", "Lane Departure Warning"),
+        ("lane_keep_assist", "Lane Keep Assist"),
+        ("adaptive_cruise", "Adaptive Cruise Control"),
+        ("auto_emergency_braking", "Auto Emergency Braking"),
+        ("parking_assist", "Park Assist"),
+        ("abs", "Anti-Lock Brakes"),
+        ("esc", "Electronic Stability Control"),
+        ("traction_control", "Traction Control"),
+    ]
+    for attr, label in _SAFETY_BOOLS:
+        if getattr(result, attr, None):
+            safety.append({"icon": "safety", "text": label})
+    tpms = _clean(raw.get("TPMS"))
+    if tpms:
+        safety.append({"icon": "tpms", "text": f"TPMS: {tpms}"})
+    for field, label in [
+        ("AirBagLocFront", "Front Airbags"),
+        ("AirBagLocSide", "Side Airbags"),
+        ("AirBagLocCurtain", "Curtain Airbags"),
+        ("AirBagLocKnee", "Knee Airbags"),
+    ]:
+        val = _clean(raw.get(field))
+        if val:
+            safety.append({"icon": "airbag", "text": f"{label}: {val}"})
+
+    # ── Build ──
+    build: list[dict[str, str]] = []
+    plant_parts = [result.plant_city, result.plant_state]
+    plant_loc = ", ".join(filter(None, plant_parts))
+    if plant_loc:
+        build.append({"icon": "factory", "text": f"Built in {plant_loc}"})
+    elif result.plant_country:
+        build.append({"icon": "factory", "text": f"Built in {result.plant_country}"})
+    if result.body_class:
+        build.append({"icon": "body", "text": result.body_class})
+    if result.doors:
+        build.append({"icon": "doors", "text": f"{result.doors} Doors"})
+    if result.gvwr:
+        build.append({"icon": "weight", "text": f"GVWR: {result.gvwr}"})
+    series = _clean(raw.get("Series2")) or _clean(raw.get("Series"))
+    if series:
+        build.append({"icon": "series", "text": series})
+
+    highlights: list[dict[str, str]] = []
+    exterior: list[dict[str, str]] = []
+    interior: list[dict[str, str]] = []
+    technology: list[dict[str, str]] = []
+
+    def _append_unique(target: list[dict[str, str]], icon: str, text: str | None) -> None:
+        cleaned = _clean(text)
+        if not cleaned:
+            return
+        lowered = cleaned.lower()
+        if any(item["text"].lower() == lowered for item in target):
+            return
+        target.append({"icon": icon, "text": cleaned})
+
+    if hp:
+        _append_unique(highlights, "power", f"{hp} HP")
+
+    seat_rows = _parse_int(raw.get("SeatRows"))
+    if seat_rows and seat_rows > 1:
+        _append_unique(interior, "seating", f"{seat_rows}-Row Seating")
+        _append_unique(highlights, "seating", f"{seat_rows}-Row Seating")
+
+    if _parse_bool(raw.get("KeylessIgnition")):
+        _append_unique(technology, "start", "Keyless Ignition")
+        _append_unique(highlights, "start", "Keyless Ignition")
+
+    headlamp_source = _clean(raw.get("LowerBeamHeadlampLightSource"))
+    if headlamp_source:
+        _append_unique(exterior, "lighting", f"{headlamp_source} Headlights")
+
+    if _parse_bool(raw.get("DaytimeRunningLight")):
+        _append_unique(exterior, "lighting", "Daytime Running Lights")
+
+    if _parse_bool(raw.get("SemiautomaticHeadlampBeamSwitching")):
+        _append_unique(technology, "lighting", "Automatic High-Beam Assist")
+
+    trim_note = _clean(raw.get("Trim"))
+    if trim_note:
+        multimedia_match = re.search(r"(\d+(?:\.\d+)?)\"?\s+multimedia", trim_note, re.IGNORECASE)
+        if multimedia_match:
+            _append_unique(technology, "display", f"{multimedia_match.group(1)}\" Multimedia Display")
+
+    return {
+        "specs": specs,
+        "safety": safety,
+        "build": build,
+        "highlights": highlights,
+        "exterior": exterior,
+        "interior": interior,
+        "technology": technology,
+        "engine_description": engine_desc or None,
+        "transmission_description": trans_desc or None,
+        "drive_type": result.drive_type,
+        "body_class": result.body_class,
+        "fuel_type": result.fuel_type,
+        "doors": result.doors,
+        "horsepower": hp,
+    }
 
 
 class NHTSAClient(ExternalServiceClient):

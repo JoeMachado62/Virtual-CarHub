@@ -10,6 +10,14 @@ import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
 import { AuthState, clearAuthState, loadValidAuthState } from "@/lib/auth";
 import { normalizeSourceFilterValue, toPublicSourceLabel } from "@/lib/sourceLabels";
+import { maskVin } from "@/lib/vin";
+
+// Prefer the HMAC-derived public_slug for any public URL so the raw VIN
+// never appears in the address bar. Legacy VIN fallback keeps things
+// working for any row that hasn't been backfilled yet.
+function publicIdentifier(item: { public_slug?: string | null; vin: string }): string {
+  return item.public_slug || item.vin;
+}
 
 type DisplayMode = "MARKETING" | "INSPECTION_PENDING" | "INSPECTION_REPORT";
 type InspectionStatus = "NOT_STARTED" | "PENDING" | "INGESTED" | "NORMALIZED" | "VERIFIED" | "FAILED";
@@ -35,6 +43,7 @@ type VehicleDisplayContext = {
 
 type InventoryItem = {
   vin: string;
+  public_slug?: string | null;
   listing_id?: string | null;
   year: number;
   make: string;
@@ -42,6 +51,12 @@ type InventoryItem = {
   trim?: string | null;
   body_type?: string | null;
   drivetrain?: string | null;
+  engine_type?: string | null;
+  exterior_color?: string | null;
+  interior_color?: string | null;
+  transmission?: string | null;
+  fuel_type?: string | null;
+  odometer_units?: string | null;
   price_asking: number;
   odometer?: number | null;
   location_state?: string | null;
@@ -51,6 +66,7 @@ type InventoryItem = {
   source_label?: string | null;
   source_url?: string | null;
   thumbnail?: string | null;
+  evox_pending?: boolean;
   dealer_photos_gated?: boolean;
   gated_photo_count?: number;
   images_count?: number;
@@ -58,10 +74,12 @@ type InventoryItem = {
   display_mode?: DisplayMode;
   inspection_status?: InspectionStatus;
   has_inspection_report?: boolean;
+  badges?: { type: string; label: string; color: string; ratio?: string }[];
 };
 
 type VehicleDetail = {
   vin: string;
+  public_slug?: string | null;
   listing_id?: string | null;
   year: number;
   make: string;
@@ -92,6 +110,11 @@ type VehicleDetail = {
   has_inspection_report?: boolean;
   display_context?: VehicleDisplayContext;
   source_label?: string | null;
+  exterior_color?: string | null;
+  interior_color?: string | null;
+  transmission?: string | null;
+  fuel_type?: string | null;
+  odometer_units?: string | null;
   auction_house?: string | null;
   pickup_location?: string | null;
   inventory_status?: string | null;
@@ -106,12 +129,29 @@ type VehicleDetail = {
     last_synced_at?: string | null;
   } | null;
   mmr?: number | null;
+  badges?: { type: string; label: string; color: string; ratio?: string }[];
   features_raw: string[];
   features_normalized: Record<string, number>;
   available: boolean;
   last_seen_active?: string | null;
   updated_at?: string | null;
 };
+
+function QuickViewIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M1.5 12s3.8-6.5 10.5-6.5S22.5 12 22.5 12 18.7 18.5 12 18.5 1.5 12 1.5 12Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
 
 type Pagination = {
   page: number;
@@ -166,6 +206,7 @@ type InventoryFacetPayload = {
 type GarageItem = {
   id: string;
   vin: string;
+  public_slug?: string | null;
   status: string;
   source: string;
   added_at: string;
@@ -290,7 +331,13 @@ function sanitizeSyncWarning(message?: string | null): string | null {
   return message;
 }
 
-export function InventoryExplorer() {
+type InventoryExplorerProps = {
+  initialMake?: string;
+  initialModel?: string;
+  initialTrim?: string;
+};
+
+export function InventoryExplorer({ initialMake, initialModel, initialTrim }: InventoryExplorerProps = {}) {
   const searchParams = useSearchParams();
   const [auth, setAuth] = useState<AuthState | null>(null);
 
@@ -313,6 +360,7 @@ export function InventoryExplorer() {
 
   const [garageItems, setGarageItems] = useState<GarageItem[]>([]);
   const [garageLoading, setGarageLoading] = useState(false);
+  const [isPreapproved, setIsPreapproved] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [garageActionVin, setGarageActionVin] = useState<string | null>(null);
   const [garageError, setGarageError] = useState<string | null>(null);
@@ -335,6 +383,20 @@ export function InventoryExplorer() {
   }, []);
 
   useEffect(() => {
+    // SEO route props take priority when no explicit URL search params are set
+    if (initialMake && !searchParams.has("make")) {
+      const nextFilters: FilterState = {
+        ...INITIAL_FILTERS,
+        make: initialMake,
+        ...(initialModel ? { model: initialModel } : {}),
+        ...(initialTrim ? { trim: initialTrim } : {}),
+      };
+      setFilters(nextFilters);
+      setAppliedFilters(nextFilters);
+      setFiltersReady(true);
+      return;
+    }
+
     // Check if URL has search params (from NLP, DealBuilder, etc.)
     const hasUrlParams = Array.from(searchParams.keys()).some(
       (k) => !["nlp_query"].includes(k) && searchParams.get(k),
@@ -425,6 +487,7 @@ export function InventoryExplorer() {
     } catch { /* ignore */ }
 
     setFiltersReady(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   useEffect(() => {
@@ -437,12 +500,45 @@ export function InventoryExplorer() {
     void loadInventory(appliedFilters, page);
   }, [filtersReady, appliedFilters, page]);
 
+  // EVOX lazy-fetch: upgrade Imagin card images to EVOX color-accurate images
+  useEffect(() => {
+    const pendingVins = rows.filter((r) => r.evox_pending).map((r) => r.vin);
+    if (pendingVins.length === 0) return;
+
+    let cancelled = false;
+    async function fetchEvoxBatch() {
+      try {
+        const resp = await apiFetch<{ results: Record<string, { hero_url: string; gallery_urls: string[] }> }>(
+          "/inventory/evox-batch",
+          { method: "POST", body: JSON.stringify({ vins: pendingVins.slice(0, 10) }) },
+        );
+        if (cancelled || resp.status !== "ok" || !resp.data?.results) return;
+        const results = resp.data.results;
+        setRows((prev) =>
+          prev.map((item) => {
+            const evox = results[item.vin];
+            if (!evox) return item;
+            return { ...item, thumbnail: evox.hero_url, evox_pending: false };
+          }),
+        );
+      } catch {
+        // Non-critical — Imagin images remain displayed
+      }
+    }
+
+    void fetchEvoxBatch();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows.map((r) => r.vin).join(",")]);
+
   useEffect(() => {
     if (auth?.accessToken) {
       void loadGarage(auth.accessToken);
+      void loadAccountStatus(auth.accessToken);
     } else {
       setGarageItems([]);
       setGarageError(null);
+      setIsPreapproved(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth?.accessToken]);
@@ -582,6 +678,19 @@ export function InventoryExplorer() {
     setPagination(response.data.pagination || EMPTY_PAGINATION);
     setSyncMeta(response.data.sync || EMPTY_SYNC);
     setLoading(false);
+  }
+
+  async function loadAccountStatus(accessToken: string) {
+    const response = await apiFetch<{ is_preapproved: boolean }>(
+      "/me/account-status",
+      {},
+      accessToken,
+    );
+    if (response.status === "ok" && response.data) {
+      setIsPreapproved(Boolean(response.data.is_preapproved));
+    } else {
+      setIsPreapproved(false);
+    }
   }
 
   async function loadGarage(accessToken: string) {
@@ -1175,7 +1284,7 @@ export function InventoryExplorer() {
             <div className="inventory-grid">
               {rows.map((item) => (
                 <article className="card inventory-card" key={item.vin}>
-                  <Link className="inventory-media-button" href={`/vinventory/${encodeURIComponent(item.vin)}` as any}>
+                  <Link className="inventory-media-button" href={`/vinventory/${encodeURIComponent(publicIdentifier(item))}` as any}>
                     <div className="inventory-media">
                       {item.thumbnail ? (
                         <img src={item.thumbnail} alt={`${item.year} ${item.make} ${item.model}`} loading="lazy" />
@@ -1196,19 +1305,26 @@ export function InventoryExplorer() {
                       </strong>
                       <span className="badge">{toPublicSourceLabel(item.source_label, item.source_filter_value || item.source_type)}</span>
                     </div>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <span className="badge">{displayModeLabel(item.display_mode)}</span>
-                      <span className="badge">{inspectionStatusLabel(item.inspection_status)}</span>
-                    </div>
-
                     <p className="inventory-price">${item.price_asking.toLocaleString()}</p>
+                    {item.badges && item.badges.length > 0 && (
+                      <div className="inventory-badges" style={{ display: "flex", flexWrap: "wrap", gap: 4, margin: "4px 0" }}>
+                        {item.badges.map((b) => (
+                          <span key={b.type} className={`badge badge--${b.color}`} title={b.ratio ? `Price/MMR: ${b.ratio}` : undefined}>
+                            {b.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <p style={{ margin: 0 }}>
-                      {item.trim || "Base"} | {item.body_type || "Unknown"} | {item.drivetrain || "N/A"}
+                      {item.trim || "Base"} | {item.drivetrain || "N/A"} | {item.exterior_color || "N/A"}
+                    </p>
+                    <p style={{ margin: 0, fontSize: 12, color: "#999" }}>
+                      {[item.engine_type, item.transmission, item.fuel_type].filter(Boolean).join(" | ") || "Specs pending"}
                     </p>
                     <p style={{ margin: 0 }}>
-                      {formatMiles(item.odometer)} miles | {item.location_state || "NA"} {item.location_zip || ""}
+                      {formatMiles(item.odometer)} {item.odometer_units || "mi"} | {item.location_state || "NA"} {item.location_zip || ""}
                     </p>
-                    <p style={{ margin: 0 }}>VIN: {item.vin}</p>
+                    <p style={{ margin: 0 }}>VIN: {maskVin(item.vin, isPreapproved && garageVins.has(item.vin))}</p>
                     <p className="inventory-description">
                       {item.features_preview?.length
                         ? item.features_preview.join(" • ")
@@ -1217,34 +1333,13 @@ export function InventoryExplorer() {
                           : `${toPublicSourceLabel(item.source_label, item.source_filter_value || item.source_type)} listing with synced specs and media.`}
                     </p>
 
-                    <div className="inventory-actions">
-                      <Link className="button" href={`/vinventory/${encodeURIComponent(item.vin)}` as any}>
+                    <div className="inventory-actions inventory-card-actions">
+                      <Link className="button" href={`/vinventory/${encodeURIComponent(publicIdentifier(item))}` as any}>
                         View Details
                       </Link>
-                      <button className="button ghost" onClick={() => openVehicleModal(item.vin)}>
-                        Quick View
-                      </button>
-                      {item.source_type === "ove" || item.source_type === "auction" ? (
-                        <button
-                          className="button ghost"
-                          onClick={() => requestConditionReport(item.vin)}
-                          disabled={garageActionVin === item.vin}
-                        >
-                          {garageActionVin === item.vin ? "Requesting..." : "Condition Report"}
-                        </button>
-                      ) : null}
-                      <button
-                        className="button ghost"
-                        onClick={() => addToGarage(item.vin)}
-                        disabled={garageVins.has(item.vin) || garageActionVin === item.vin}
-                      >
-                        {garageActionVin === item.vin
-                          ? "Saving..."
-                          : garageVins.has(item.vin)
-                            ? "In Garage"
-                            : item.dealer_photos_gated
-                              ? "Add to Garage to See Additional Vehicle Photos"
-                              : "Add to My Garage"}
+                      <button className="button ghost inventory-quick-view-btn" onClick={() => openVehicleModal(item.vin)}>
+                        <QuickViewIcon />
+                        <span>Quick View</span>
                       </button>
                     </div>
                   </div>
@@ -1343,26 +1438,33 @@ export function InventoryExplorer() {
                     {selectedVehicle.drivetrain || "N/A"}
                   </p>
                   <p className="inventory-price">${selectedVehicle.price_asking.toLocaleString()}</p>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <span className="badge">VIN {selectedVehicle.vin}</span>
-                    <span className="badge">Mileage {formatMiles(selectedVehicle.odometer)}</span>
+                  {selectedVehicle.badges && selectedVehicle.badges.length > 0 && (
+                    <div className="inventory-badges" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                      {selectedVehicle.badges.map((b) => (
+                        <span key={b.type} className={`badge badge--${b.color}`} title={b.ratio ? `Price/MMR: ${b.ratio}` : undefined}>
+                          {b.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                    <span className="badge">VIN {maskVin(selectedVehicle.vin, isPreapproved && garageVins.has(selectedVehicle.vin))}</span>
+                    <span className="badge">{toPublicSourceLabel(selectedVehicle.source_label, selectedVehicle.source_type)}</span>
+                    <span className="badge">Condition: {selectedVehicle.condition_grade || "N/A"}</span>
                     <span className="badge">
                       {selectedVehicle.location_state || "NA"} {selectedVehicle.location_zip || ""}
                     </span>
-                    <span className="badge">
-                      Source {toPublicSourceLabel(selectedVehicle.source_label, selectedVehicle.source_type)}
-                    </span>
-                    <span className="badge">{displayModeLabel(selectedVehicle.display_mode)}</span>
-                    <span className="badge">{inspectionStatusLabel(selectedVehicle.inspection_status)}</span>
                   </div>
 
-                  <div className="inventory-modal-specs">
-                    <p>Engine: {selectedVehicle.engine_type || "N/A"}</p>
-                    <p>Cylinders: {selectedVehicle.cylinders ?? "N/A"}</p>
-                    <p>Condition: {selectedVehicle.condition_grade || "N/A"}</p>
-                    <p>MPG: {selectedVehicle.mpg_combined ?? "N/A"}</p>
-                    <p>Wholesale Estimate: {formatMoney(selectedVehicle.price_wholesale_est)}</p>
-                    <p>Last Updated: {formatDate(selectedVehicle.updated_at)}</p>
+                  <div className="vinv-detail-grid">
+                    <ModalDetailRow label="Body Style" value={selectedVehicle.body_type} />
+                    <ModalDetailRow label="Drivetrain" value={selectedVehicle.drivetrain} />
+                    <ModalDetailRow label="Engine" value={selectedVehicle.engine_type} />
+                    <ModalDetailRow label="Transmission" value={selectedVehicle.transmission} />
+                    <ModalDetailRow label="Fuel Type" value={selectedVehicle.fuel_type} />
+                    <ModalDetailRow label="Exterior Color" value={selectedVehicle.exterior_color} />
+                    <ModalDetailRow label="Interior Color" value={selectedVehicle.interior_color} />
+                    <ModalDetailRow label="Odometer" value={selectedVehicle.odometer != null ? `${formatMiles(selectedVehicle.odometer)} ${selectedVehicle.odometer_units || "mi"}` : null} />
                   </div>
 
                   {selectedVehicle.features_raw.length ? (
@@ -1405,7 +1507,6 @@ export function InventoryExplorer() {
                         report={selectedVehicle.condition_report}
                         grade={selectedVehicle.condition_report_grade || selectedVehicle.condition_grade}
                         sellerComments={selectedVehicle.seller_comments}
-                        auctionHouse={selectedVehicle.auction_house}
                         pickupLocation={selectedVehicle.pickup_location}
                         inventoryStatus={selectedVehicle.inventory_status || selectedVehicle.inventory_label}
                         mmr={selectedVehicle.mmr}
@@ -1439,7 +1540,7 @@ export function InventoryExplorer() {
                     {selectedVehicle.has_inspection_report ? (
                       <Link
                         className="button ghost"
-                        href={`/vinventory/${encodeURIComponent(selectedVehicle.vin)}/condition-report` as any}
+                        href={`/vinventory/${encodeURIComponent(publicIdentifier(selectedVehicle))}/condition-report` as any}
                       >
                         Open Report
                       </Link>
@@ -1451,7 +1552,7 @@ export function InventoryExplorer() {
                     >
                       {garageActionVin === selectedVehicle.vin ? "Starting..." : "Start Acquisition"}
                     </button>
-                    <Link className="button ghost" href={`/vinventory/${encodeURIComponent(selectedVehicle.vin)}` as any}>
+                    <Link className="button ghost" href={`/vinventory/${encodeURIComponent(publicIdentifier(selectedVehicle))}` as any}>
                       Full Detail Page
                     </Link>
                     {selectedVehicle.source_url ? (
@@ -1482,17 +1583,6 @@ function resolveHeroImage(vehicle: VehicleDetail | null | undefined): string | n
   return vehicle.hero_image || vehicle.display_context?.hero_image || null;
 }
 
-function displayModeLabel(mode: DisplayMode | undefined): string {
-  if (mode === "INSPECTION_REPORT") return "Verified Inspection";
-  if (mode === "INSPECTION_PENDING") return "Inspection Pending";
-  return "Marketing Photos";
-}
-
-function inspectionStatusLabel(status: InspectionStatus | undefined): string {
-  if (!status) return "Status Unknown";
-  return `Inspection ${status.replaceAll("_", " ")}`;
-}
-
 function garageItemTitle(item: GarageItem): string {
   const year = item.vehicle.year ?? "";
   const make = item.vehicle.make ?? "";
@@ -1503,6 +1593,15 @@ function garageItemTitle(item: GarageItem): string {
 
 function garageItemLocation(item: GarageItem): string {
   return `${item.vehicle.location_state || "NA"} ${item.vehicle.location_zip || ""}`.trim();
+}
+
+function ModalDetailRow({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div className="vinv-detail-row">
+      <span className="vinv-detail-label">{label}</span>
+      <span className="vinv-detail-value">{value || "N/A"}</span>
+    </div>
+  );
 }
 
 function formatMiles(value: number | null | undefined): string {

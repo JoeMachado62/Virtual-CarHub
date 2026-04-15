@@ -65,6 +65,20 @@ class MarketCheckClient(ExternalServiceClient):
         payload = self._with_api_key(payload)
         return self._request("GET", "/specs/car/terms", params=payload)
 
+    def get_history(self, vin: str) -> dict:
+        """GET /v2/history/car/{vin} — vehicle history with past listing IDs."""
+        if not self.live:
+            return {"vin": vin, "history": [], "source": "stub"}
+        params = self._with_api_key()
+        return self._request("GET", f"/history/car/{vin}", params=params)
+
+    def get_available_options_packages(self, vin: str) -> dict:
+        """GET /v2/decode/car/neovin/{vin}/options-packages — available factory option packages."""
+        if not self.live:
+            return {"vin": vin, "available_options_packages": [], "source": "stub"}
+        params = self._with_api_key()
+        return self._request("GET", f"/decode/car/neovin/{vin}/options-packages", params=params)
+
     def get_price(self, vin: str) -> dict:
         if not self.live:
             return {"vin": vin, "average_retail": 30000, "source": "stub"}

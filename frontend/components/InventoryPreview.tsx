@@ -9,6 +9,7 @@ import { toPublicSourceLabel } from "@/lib/sourceLabels";
 
 type PreviewItem = {
   vin: string;
+  public_slug?: string | null;
   year: number;
   make: string;
   model: string;
@@ -72,7 +73,7 @@ export function InventoryPreview() {
             <p>
               ${item.price_asking.toLocaleString()} • {item.location_state || "Nationwide"}
             </p>
-            <Link href={`/vinventory/${encodeURIComponent(item.vin)}` as any} className="button ghost">
+            <Link href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}` as any} className="button ghost">
               View Vehicle
             </Link>
           </div>

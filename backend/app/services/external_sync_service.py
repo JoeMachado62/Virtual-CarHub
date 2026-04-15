@@ -10,12 +10,14 @@ from app.core.constants import DealState
 from app.integrations import GHLClient, MarketCheckClient
 from app.models.entities import Deal, User
 from app.observability.metrics import record_external_sync_error
+from app.services.ghl_lifecycle_service import GHLLifecycleService
 
 logger = logging.getLogger("vch.external_sync")
 
 
 class ExternalSyncService:
     def __init__(self) -> None:
+        self.lifecycle = GHLLifecycleService()
         self.ghl = GHLClient(
             api_key=settings.ghl_api_key,
             api_base_url=settings.ghl_api_base_url,
@@ -40,6 +42,7 @@ class ExternalSyncService:
 
         try:
             self._ensure_ghl_contact_and_opportunity(db=db, deal=deal, user=user)
+            self.lifecycle.sync_contact_snapshot(db, user=user, deal=deal)
         except Exception as exc:
             record_external_sync_error(provider="ghl", operation="ensure_entities")
             logger.warning("ghl_entity_sync_failed", extra={"deal_id": deal.id, "error": str(exc)})
@@ -87,6 +90,9 @@ class ExternalSyncService:
             logger.warning("ghl_stage_sync_failed", extra={"deal_id": deal.id, "error": str(exc)})
 
     def _ensure_ghl_contact_and_opportunity(self, db: Session, deal: Deal, user: User) -> None:
+        if user.ghl_contact_id and not deal.ghl_contact_id:
+            deal.ghl_contact_id = user.ghl_contact_id
+
         if not deal.ghl_contact_id:
             payload = {
                 "firstName": user.first_name or "Buyer",
@@ -101,11 +107,13 @@ class ExternalSyncService:
                 response = self.ghl.create_contact(payload)
                 contact = response.get("contact", response)
                 deal.ghl_contact_id = contact.get("id")
+                user.ghl_contact_id = deal.ghl_contact_id
             except Exception:
                 search = self.ghl.search_contacts(location_id=settings.ghl_location_id, query=user.email)
                 contacts = search.get("contacts", [])
                 if contacts:
                     deal.ghl_contact_id = contacts[0].get("id")
+                    user.ghl_contact_id = deal.ghl_contact_id
 
         if not deal.ghl_opportunity_id and deal.ghl_contact_id and settings.ghl_deals_pipeline_id:
             payload = {
@@ -194,29 +202,10 @@ class ExternalSyncService:
             record_external_sync_error(provider="ghl", operation="custom_objects_sync")
 
     def _pipeline_stage_for_state(self, state: DealState) -> str | None:
-        stage_map = {
-            DealState.LEAD: settings.ghl_stage_new_deal_submitted,
-            DealState.PRE_QUALIFYING: settings.ghl_stage_new_deal_submitted,
-            DealState.QUALIFIED: settings.ghl_stage_conditional_approval,
-            DealState.ENGAGED: settings.ghl_stage_conditional_approval,
-            DealState.PROFILED: settings.ghl_stage_conditional_approval,
-            DealState.MATCHING: settings.ghl_stage_conditional_approval,
-            DealState.VEHICLE_SELECTED: settings.ghl_stage_final_approval,
-            DealState.FUNDING: settings.ghl_stage_documents_ready,
-            DealState.ACQUISITION_PENDING: settings.ghl_stage_original_docs_qc_review,
-            DealState.ACQUIRED: settings.ghl_stage_original_docs_qc_review,
-            DealState.IN_TRANSIT: settings.ghl_stage_deal_funded,
-            DealState.DELIVERED: settings.ghl_stage_deal_funded,
-            DealState.CLOSED_WON: settings.ghl_stage_deal_funded,
-            DealState.CLOSED_LOST: settings.ghl_stage_declined,
-            DealState.RETURN_PENDING: settings.ghl_stage_declined,
-            DealState.EXCEPTION: settings.ghl_stage_new_deal_submitted,
-            DealState.DISQUALIFIED: settings.ghl_stage_declined,
-        }
-        value = stage_map.get(state)
-        if value:
-            return value
-        return None
+        return self.lifecycle.pipeline_stage_for_state(state)
+
+    def sync_contact_snapshot(self, db: Session, *, user: User, deal: Deal | None = None) -> dict | None:
+        return self.lifecycle.sync_contact_snapshot(db, user=user, deal=deal)
 
     def _build_stage_note(self, deal: Deal, previous_state: DealState | None, reason: str | None) -> str:
         prev = previous_state.value if previous_state else "unknown"

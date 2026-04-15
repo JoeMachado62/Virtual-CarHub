@@ -1,5 +1,7 @@
 "use client";
 
+import { maskVin } from "@/lib/vin";
+
 export type Recommendation = {
   vin: string;
   match_score: number;
@@ -47,7 +49,7 @@ export function RecommendationCards({
             Price ${item.vehicle.price?.toLocaleString()} | OTD ${item.estimated_otd?.toLocaleString()} | Danny
             Savings ${item.danny_savings?.toLocaleString()}
           </p>
-          <p>VIN: {item.vin}</p>
+          <p>VIN: {maskVin(item.vin)}</p>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="button" onClick={() => onSelect(item.vin)}>
               Select Vehicle

@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy import event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.constants import DealState, FundingState, ProfileTier, ReturnState
@@ -40,6 +41,7 @@ class User(Base, TimestampMixin):
     first_name: Mapped[str | None] = mapped_column(String(120))
     last_name: Mapped[str | None] = mapped_column(String(120))
     phone: Mapped[str | None] = mapped_column(String(30))
+    ghl_contact_id: Mapped[str | None] = mapped_column(String(80), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_preapproved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # Manual admin override
     preapproved_amount: Mapped[float | None] = mapped_column(Float)  # Max approved loan amount
@@ -100,6 +102,7 @@ class Vehicle(Base, TimestampMixin):
     __tablename__ = "vehicles"
 
     vin: Mapped[str] = mapped_column(String(17), primary_key=True)
+    public_slug: Mapped[str | None] = mapped_column(String(16), unique=True, index=True)
     listing_id: Mapped[str | None] = mapped_column(String(120), unique=True, index=True)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     make: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
@@ -129,6 +132,27 @@ class Vehicle(Base, TimestampMixin):
     last_seen_active: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     quality_firewall_pass: Mapped[bool | None] = mapped_column(Boolean)
+
+
+class VehicleHistoryEnrichment(Base, TimestampMixin):
+    __tablename__ = "vehicle_history_enrichments"
+
+    vin: Mapped[str] = mapped_column(
+        ForeignKey("vehicles.vin", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    provider: Mapped[str] = mapped_column(String(40), default="marketcheck_history", nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
+    source_listing_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    source_url: Mapped[str | None] = mapped_column(String(1200))
+    seller_comments: Mapped[str | None] = mapped_column(Text)
+    listing_metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    history_entry_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    listing_payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_error: Mapped[str | None] = mapped_column(Text)
 
 
 class VehicleTaxonomyCache(Base, TimestampMixin):
@@ -295,6 +319,41 @@ class OveDetailRequest(Base, TimestampMixin):
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     detail_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    leased_to: Mapped[str | None] = mapped_column(String(120), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_category: Mapped[str | None] = mapped_column(String(80))
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    terminal_reason: Mapped[str | None] = mapped_column(String(120))
+    terminal_message: Mapped[str | None] = mapped_column(Text)
+
+
+class OveScraperHeartbeat(Base, TimestampMixin):
+    """Latest liveness signal from a scraper worker. One row per worker_id,
+    upserted on every heartbeat. Lets the VPS distinguish 'scraper is alive
+    and idle' from 'scraper is dead' without relying on ingest cadence.
+    """
+
+    __tablename__ = "ove_scraper_heartbeats"
+
+    worker_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    profile: Mapped[str | None] = mapped_column(String(120))
+    scraper_version: Mapped[str | None] = mapped_column(String(80))
+    node_id: Mapped[str | None] = mapped_column(String(120))
+    last_heartbeat_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        index=True,
+        nullable=False,
+    )
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_claim_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pending_claims: Mapped[int | None] = mapped_column(Integer)
+    status_note: Mapped[str | None] = mapped_column(String(255))
+    details_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class VehicleMatch(Base, TimestampMixin):
@@ -589,3 +648,22 @@ class EvoxColorCache(Base, TimestampMixin):
     color_title: Mapped[str] = mapped_column(String(120), nullable=False)
     color_simpletitle: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+# Automatically populate Vehicle.public_slug from the VIN on insert/update
+# so downstream code never has to remember to set it. Imported lazily to
+# avoid a circular import between models and services.
+@event.listens_for(Vehicle, "before_insert")
+def _populate_vehicle_public_slug_on_insert(mapper, connection, target: "Vehicle") -> None:  # noqa: ARG001
+    if target.vin and not target.public_slug:
+        from app.services.vin_slug_service import compute_public_slug
+
+        target.public_slug = compute_public_slug(target.vin)
+
+
+@event.listens_for(Vehicle, "before_update")
+def _populate_vehicle_public_slug_on_update(mapper, connection, target: "Vehicle") -> None:  # noqa: ARG001
+    if target.vin and not target.public_slug:
+        from app.services.vin_slug_service import compute_public_slug
+
+        target.public_slug = compute_public_slug(target.vin)

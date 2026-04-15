@@ -10,6 +10,7 @@ from app.db.session import get_db
 from app.models.entities import User, Deal
 from app.core.constants import FundingState
 from app.api.deps import get_current_user, is_admin_user
+from app.services.external_sync_service import get_external_sync_service
 
 
 router = APIRouter()
@@ -91,8 +92,8 @@ def update_user_preapproval(
         user.preapproved_until = update.preapproved_until
 
     # Update the latest deal if external financing info is provided
+    latest_deal = db.query(Deal).filter(Deal.user_id == user_id).order_by(Deal.created_at.desc()).first()
     if update.external_financing_bank or update.external_financing_status:
-        latest_deal = db.query(Deal).filter(Deal.user_id == user_id).order_by(Deal.created_at.desc()).first()
         if latest_deal:
             if update.external_financing_bank:
                 latest_deal.external_financing_bank = update.external_financing_bank
@@ -102,6 +103,11 @@ def update_user_preapproval(
             # If user is pre-approved via external financing, update funding state
             if update.is_preapproved and latest_deal.funding_state == FundingState.CREDIT_APP_PENDING:
                 latest_deal.funding_state = FundingState.PRE_APPROVED
+
+    try:
+        get_external_sync_service().sync_contact_snapshot(db, user=user, deal=latest_deal)
+    except Exception:
+        pass
 
     db.commit()
     db.refresh(user)

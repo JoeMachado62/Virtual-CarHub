@@ -102,7 +102,9 @@ class AuctionPlatform(StrEnum):
 
 class OveDetailRequestStatus(StrEnum):
     PENDING = "PENDING"
+    CLAIMED = "CLAIMED"
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELED = "CANCELED"
+    TERMINAL = "TERMINAL"

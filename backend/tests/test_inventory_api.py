@@ -92,7 +92,7 @@ class FailingMarketCheckClient:
         raise RuntimeError(
             "Client error '422 unknown' for url "
             "'https://api.marketcheck.com/v2/search/car/active?rows=72&start=0&zip=33991&radius=250"
-            "&dom_range=50-9999&api_key=super-secret-key'"
+            "&dom_range=60-9999&api_key=super-secret-key'"
         )
 
 
@@ -310,8 +310,8 @@ def test_search_auction_source_and_pricing_are_public_facing() -> None:
             clean_title=None,
             min_dom=None,
             max_dom=None,
-            min_price=52500,
-            max_price=52500,
+            min_price=53249,
+            max_price=53249,
             min_year=None,
             max_year=None,
             min_miles=None,
@@ -333,17 +333,19 @@ def test_search_auction_source_and_pricing_are_public_facing() -> None:
         assert len(items) == 1
         item = items[0]
         assert item["source_filter_value"] == "auction"
-        assert item["source_label"] == "Auction"
+        assert item["source_label"] == "Wholesale Direct"
         assert item["source_category"] == "auction"
-        assert item["price_asking"] == 52500.0
+        assert item["price_asking"] == 53249.0
         assert item["source_price"] == 50000.0
         assert item["buy_fee"] == 1000.0
         assert item["margin"] == 1500.0
+        assert item["pricing"]["detail_shop_fee"] == 150.0
+        assert item["pricing"]["marketing_fee"] == 599.0
 
-        detail = get_inventory_vehicle(vin=vin, db=db)
+        detail = get_inventory_vehicle(vin=vin, db=db, current_user=None)
         assert detail["status"] == "ok"
-        assert detail["data"]["price_asking"] == 52500.0
-        assert detail["data"]["source_label"] == "Auction"
+        assert detail["data"]["price_asking"] == 53249.0
+        assert detail["data"]["source_label"] == "Wholesale Direct"
         assert detail["data"]["pickup_location"] == "FL - FORT LAUDERDALE"
 
 
@@ -796,7 +798,7 @@ def test_wordpress_export_can_include_marketcheck_price_stats(monkeypatch) -> No
     assert isinstance(first["price_delta_marketcheck_pct"], float)
 
 
-def test_build_marketcheck_search_params_omits_dom_range() -> None:
+def test_build_marketcheck_search_params_includes_dom_range() -> None:
     params = _build_marketcheck_search_params(
         q=None,
         make=None,
@@ -818,7 +820,7 @@ def test_build_marketcheck_search_params_omits_dom_range() -> None:
         certified=None,
         single_owner=None,
         clean_title=None,
-        min_dom=50,
+        min_dom=60,
         max_dom=120,
         zip_code="33991",
         radius=250,
@@ -826,7 +828,7 @@ def test_build_marketcheck_search_params_omits_dom_range() -> None:
 
     assert params["zip"] == "33991"
     assert params["radius"] == 250
-    assert "dom_range" not in params
+    assert params["dom_range"] == "60-120"
 
 
 def test_search_live_sync_falls_back_without_leaking_vendor_error(monkeypatch) -> None:

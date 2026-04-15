@@ -5,9 +5,12 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
+import { loadValidAuthState } from "@/lib/auth";
+import { maskVin } from "@/lib/vin";
 
 type VehicleDetail = {
   vin: string;
+  public_slug?: string | null;
   year: number;
   make: string;
   model: string;
@@ -22,6 +25,11 @@ type VehicleDetail = {
   source_type?: string | null;
   source_label?: string | null;
   source_url?: string | null;
+  exterior_color?: string | null;
+  interior_color?: string | null;
+  transmission?: string | null;
+  fuel_type?: string | null;
+  odometer_units?: string | null;
   auction_house?: string | null;
   pickup_location?: string | null;
   inventory_status?: string | null;
@@ -74,6 +82,16 @@ type TireDepth = {
   wheel_type?: string;
 };
 
+type EquipmentOption = {
+  primary_description?: string;
+  extended_description?: string;
+  classification?: string;
+  installed_reason?: string;
+  oem_option_code?: string;
+  msrp?: number;
+  generics?: Array<{ name?: string }>;
+};
+
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
 const AUCTION_DEFAULT = "/assets/images/portfolio/VCH Auction default image.webp";
 
@@ -82,6 +100,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [canRevealVin, setCanRevealVin] = useState(false);
 
   useEffect(() => {
     async function loadVehicle() {
@@ -100,6 +119,30 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
     void loadVehicle();
   }, [vin]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function checkReveal() {
+      const auth = await loadValidAuthState();
+      if (!auth?.accessToken) {
+        if (!cancelled) setCanRevealVin(false);
+        return;
+      }
+      const [statusRes, garageRes] = await Promise.all([
+        apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken),
+        apiFetch<Array<{ vin: string }>>("/me/garage", {}, auth.accessToken),
+      ]);
+      if (cancelled) return;
+      const preapproved = statusRes.status === "ok" && Boolean(statusRes.data?.is_preapproved);
+      const inGarage =
+        garageRes.status === "ok" &&
+        Array.isArray(garageRes.data) &&
+        garageRes.data.some((item) => item.vin === vin);
+      setCanRevealVin(preapproved && inGarage);
+    }
+    void checkReveal();
+    return () => { cancelled = true; };
+  }, [vin]);
+
   // Extract structured data from wherever it lives
   const report = useMemo(() => {
     if (!vehicle) return {};
@@ -107,8 +150,8 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   }, [vehicle]);
 
   const crUrl = vehicle?.condition_report_url || null;
-  const crMetadata = (report.metadata || {}) as Record<string, unknown>;
-  const crReportLink = (crMetadata.report_link || {}) as Record<string, unknown>;
+  const crMetadata = useMemo(() => ((report.metadata || {}) as Record<string, unknown>), [report]);
+  const crReportLink = useMemo(() => ((crMetadata.report_link || {}) as Record<string, unknown>), [crMetadata]);
   const crGrade = vehicle?.condition_report_grade || vehicle?.condition_grade || (crReportLink.title as string) || null;
   const galleryImages = resolveReportImages(vehicle);
   const inspectionImages = vehicle?.display_context?.inspection_images || [];
@@ -116,25 +159,85 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   const allImages = [...galleryImages, ...inspectionImages, ...disclosureImages];
   const primaryImage = resolveHeroImage(vehicle) || allImages[0] || AUCTION_DEFAULT;
 
-  // Parse announcements
+  // Parse announcements. Preference order:
+  //   1. report.announcements (array) — the structured field
+  //   2. report.metadata.announcementsEnrichment.announcements — OVE's enrichment block
+  //   3. announcementsEnrichment.announcements inside raw_text (when raw_text is a
+  //      JSON blob, which the current scraper emits as `"<Color>: {...json}"`)
+  //   4. Regex over raw_text — ONLY if raw_text looks like plain text, not JSON.
+  //      The old code ran the regex unconditionally and swallowed thousands of
+  //      characters of JSON into a single "announcement" bullet.
+  // Any final item longer than MAX_ITEM_CHARS is dropped as a sanity guard.
   const announcements = useMemo(() => {
-    const raw = report.announcements;
-    if (Array.isArray(raw) && raw.length > 0) return raw.map(String);
-    // Try to extract from raw_text
+    const MAX_ITEM_CHARS = 400;
+    const sanitize = (items: unknown[]): string[] =>
+      items
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter((item) => item.length > 0 && item.length <= MAX_ITEM_CHARS);
+
+    const fromField = Array.isArray(report.announcements) ? sanitize(report.announcements as unknown[]) : [];
+    if (fromField.length > 0) return fromField;
+
+    const metaEnrichment = (crMetadata.announcementsEnrichment as Record<string, unknown> | undefined)
+      ?.announcements;
+    if (Array.isArray(metaEnrichment)) {
+      const items = sanitize(metaEnrichment);
+      if (items.length > 0) return items;
+    }
+
     const rawText = typeof report.raw_text === "string" ? report.raw_text : "";
+    if (!rawText) return [];
+
+    // If raw_text is a JSON blob (possibly prefixed by "<Color>: "), parse it
+    // and pull the structured field out instead of regexing over it.
+    const jsonStart = rawText.indexOf("{");
+    if (jsonStart >= 0 && jsonStart <= 32) {
+      try {
+        const parsed = JSON.parse(rawText.slice(jsonStart));
+        const enrichment = parsed?.announcementsEnrichment?.announcements;
+        if (Array.isArray(enrichment)) {
+          const items = sanitize(enrichment);
+          if (items.length > 0) return items;
+        }
+        const direct = parsed?.announcements;
+        if (Array.isArray(direct)) {
+          const items = sanitize(direct);
+          if (items.length > 0) return items;
+        }
+      } catch {
+        // fall through — raw_text isn't valid JSON after the prefix
+      }
+      // raw_text is JSON-shaped but we couldn't find structured announcements.
+      // Do NOT run the plain-text regex against it — that produces the blob bug.
+      return [];
+    }
+
+    // Genuine plain-text CR fallback (older scraper format).
     const annoMatch = rawText.match(/Announcements\s*(.*?)(?:Remarks|Seller Comments|$)/si);
     if (annoMatch && annoMatch[1]) {
       const text = annoMatch[1].replace(/No Announcements Present/gi, "").trim();
-      if (text && text !== "No") return [text];
+      if (text && text !== "No" && text.length <= MAX_ITEM_CHARS) return [text];
     }
     return [];
-  }, [report]);
+  }, [report, crMetadata]);
 
   // ── Structured fields from richer report shape ──
   const vehicleHistory = report.vehicle_history as { engine_starts?: boolean; drivable?: boolean; owners?: number; accidents?: number } | undefined;
   const damageItems = Array.isArray(report.damage_items) ? (report.damage_items as DamageItem[]) : [];
   const damageSummary = report.damage_summary as { total_items?: number; by_color?: Record<string, number>; by_section?: Record<string, number>; structural_issue?: boolean } | undefined;
   const tireDepths = report.tire_depths as Record<string, TireDepth> | undefined;
+  const equipmentFeatures = useMemo(
+    () => (Array.isArray(report.equipment_features) ? report.equipment_features.map(String) : []),
+    [report],
+  );
+  const installedEquipment = useMemo(
+    () => (Array.isArray(report.installed_equipment) ? (report.installed_equipment as EquipmentOption[]) : []),
+    [report],
+  );
+  const highValueOptions = useMemo(
+    () => (Array.isArray(report.high_value_options) ? (report.high_value_options as EquipmentOption[]) : []),
+    [report],
+  );
   const problemHighlights = Array.isArray(report.problem_highlights) ? report.problem_highlights.map(String) : [];
   const remarks = Array.isArray(report.remarks) ? report.remarks.map(String) : [];
   const sellerCommentsItems = Array.isArray(report.seller_comments_items) ? report.seller_comments_items.map(String) : [];
@@ -144,6 +247,16 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   const titleState = typeof report.title_state === "string" ? report.title_state : null;
   const titleBranding = typeof report.title_branding === "string" ? report.title_branding : null;
   const overallGrade = typeof report.overall_grade === "string" ? report.overall_grade : null;
+  const tireDisplayItems = useMemo(() => resolveTireDisplayItems(tireDepths), [tireDepths]);
+  const announcementBuckets = useMemo(() => bucketAnnouncements(announcements), [announcements]);
+  const equipmentSection = useMemo(
+    () => resolveEquipmentSection({
+      equipmentFeatures,
+      highValueOptions,
+      installedEquipment,
+    }),
+    [equipmentFeatures, highValueOptions, installedEquipment],
+  );
 
   // Parse key info — prefer structured vehicle_history, fall back to raw text parsing
   const vehicleInfo = useMemo(() => {
@@ -174,11 +287,14 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
     const sellerMatch = rawText.match(/Contact:\s*(.*?)(?:\d+\.\d+|Contact|$)/i);
     if (sellerMatch) seller = sellerMatch[1].replace(/View seller.*$/i, "").trim();
 
+    // Use top-level API fields first (already resolved with fallbacks),
+    // then features_normalized, then condition report fields
+    const v = vehicle as Record<string, unknown>;
     return {
-      exterior_color: String(norm.exterior_color || report.exterior_color || ""),
-      interior_color: String(norm.interior_color || report.interior_color || ""),
-      engine: String(norm.engine_type || vehicle.engine_type || ""),
-      drivetrain: String(vehicle.drivetrain || norm.drivetrain || ""),
+      exterior_color: String(v.exterior_color || norm.exterior_color || report.exterior_color || ""),
+      interior_color: String(v.interior_color || norm.interior_color || report.interior_color || ""),
+      engine: String(v.engine_type || norm.engine_type || ""),
+      drivetrain: String(v.drivetrain || norm.drivetrain || ""),
       owners,
       accidents,
       titleStatus: resolvedTitle,
@@ -215,7 +331,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
               <h2 className="cr-doc-brand">VCH Condition Report</h2>
             </div>
             <div className="cr-doc-header-actions">
-              <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vehicle.vin)}` as any}>
+              <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vehicle.public_slug || vehicle.vin)}` as any}>
                 Back to Vehicle
               </Link>
               {crUrl && (
@@ -239,7 +355,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
             <tbody>
               <tr>
                 <td className="cr-td-label">VIN:</td>
-                <td>{vehicle.vin}</td>
+                <td>{maskVin(vehicle.vin, canRevealVin)}</td>
                 <td className="cr-td-label">Body Style:</td>
                 <td>{vehicle.body_type || "N/A"}</td>
                 <td className="cr-td-label">Odometer:</td>
@@ -348,17 +464,72 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         )}
 
         {/* ── ANNOUNCEMENTS ── */}
-        {announcements.length > 0 ? (
+        {announcements.length > 0 && (
           <section className="cr-section">
             <h3 className="cr-section-bar">ANNOUNCEMENTS</h3>
-            <ul className="cr-announce-list">
-              {announcements.map((a, i) => <li key={i}>{a}</li>)}
-            </ul>
-          </section>
-        ) : (
-          <section className="cr-section">
-            <h3 className="cr-section-bar">ANNOUNCEMENTS</h3>
-            <p className="cr-empty">No announcements present. Green Light.</p>
+            <div className="cr-announcements-wrap">
+              {announcementBuckets.auctionLight && (
+                <div className={`cr-auction-light cr-auction-light-${announcementBuckets.auctionLight.color}`}>
+                  {announcementBuckets.auctionLight.value || announcementBuckets.auctionLight.raw}
+                </div>
+              )}
+
+              {announcementBuckets.issues.length > 0 && (
+                <div className="cr-announcement-block">
+                  <h4 className="cr-subsection-title">Attention Items</h4>
+                  <div className="cr-announcement-grid cr-announcement-grid-alert">
+                    {announcementBuckets.issues.map((item) => (
+                      <div key={item.raw} className="cr-announcement-card cr-announcement-card-alert">
+                        <span className="cr-announcement-label">{item.label}</span>
+                        <strong className="cr-announcement-value">{item.value || item.raw}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {announcementBuckets.unknown.length > 0 && (
+                <div className="cr-announcement-block">
+                  <h4 className="cr-subsection-title">Unknown / Needs Verification</h4>
+                  <div className="cr-announcement-grid cr-announcement-grid-unknown">
+                    {announcementBuckets.unknown.map((item) => (
+                      <div key={item.raw} className="cr-announcement-card cr-announcement-card-unknown">
+                        <span className="cr-announcement-label">{item.label}</span>
+                        <strong className="cr-announcement-value">{item.value || item.raw}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {announcementBuckets.informational.length > 0 && (
+                <div className="cr-announcement-block">
+                  <h4 className="cr-subsection-title">Informational</h4>
+                  <div className="cr-announcement-grid">
+                    {announcementBuckets.informational.map((item) => (
+                      <div key={item.raw} className="cr-announcement-card">
+                        <span className="cr-announcement-label">{item.label}</span>
+                        <strong className="cr-announcement-value">{item.value || item.raw}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {announcementBuckets.clean.length > 0 && (
+                <div className="cr-announcement-block">
+                  <h4 className="cr-subsection-title">Clean Disclosure Responses</h4>
+                  <div className="cr-announcement-grid cr-announcement-grid-clean">
+                    {announcementBuckets.clean.map((item) => (
+                      <div key={item.raw} className="cr-announcement-card cr-announcement-card-clean">
+                        <span className="cr-announcement-label">{item.label}</span>
+                        <strong className="cr-announcement-value">{item.value || item.raw}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </section>
         )}
 
@@ -392,6 +563,25 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
               {renderConditionField("Title Status", titleStatus)}
               {renderConditionField("Title State", titleState)}
               {renderConditionField("Title Branding", titleBranding)}
+            </div>
+          </section>
+        )}
+
+        {/* ── EQUIPMENT / FEATURES ── */}
+        {equipmentSection.items.length > 0 && (
+          <section className="cr-section">
+            <h3 className="cr-section-bar">{equipmentSection.title}</h3>
+            <div className="cr-equipment-wrap">
+              {equipmentSection.subtitle && <p className="cr-comments">{equipmentSection.subtitle}</p>}
+              <div className="cr-equipment-grid">
+                {equipmentSection.items.map((item) => (
+                  <div key={item.key} className="cr-equipment-card">
+                    <strong className="cr-equipment-title">{item.title}</strong>
+                    {item.meta && <span className="cr-equipment-meta">{item.meta}</span>}
+                    {item.detail && <span className="cr-equipment-detail">{item.detail}</span>}
+                  </div>
+                ))}
+              </div>
             </div>
           </section>
         )}
@@ -433,13 +623,13 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         )}
 
         {/* ── TIRE DEPTHS ── */}
-        {tireDepths && Object.keys(tireDepths).length > 0 && (
+        {tireDisplayItems.length > 0 && (
           <section className="cr-section">
             <h3 className="cr-section-bar">TIRE CONDITION</h3>
             <div className="cr-tire-grid">
-              {Object.entries(tireDepths).map(([pos, tire]) => (
-                <div key={pos} className="cr-tire-card">
-                  <span className="cr-tire-pos">{tire.position_label || humanizeKey(pos)}</span>
+              {tireDisplayItems.map(({ key, tire }) => (
+                <div key={key} className="cr-tire-card">
+                  <span className="cr-tire-pos">{tire.position_label || humanizeKey(key)}</span>
                   <span className="cr-tire-depth">{tire.tread_depth || "N/A"}</span>
                   <span className="cr-tire-detail">{[tire.brand, tire.size].filter(Boolean).join(" · ") || ""}</span>
                   {tire.wheel_type && <span className="cr-tire-detail">{tire.wheel_type}</span>}
@@ -526,7 +716,8 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
 
       <style jsx>{`
         /* ── Layout ── */
-        .cr-doc { max-width: 1200px; margin: 0 auto; }
+        .cr-doc { max-width: 1200px; margin: 0 auto; overflow-wrap: anywhere; word-break: break-word; }
+        .cr-doc table { table-layout: fixed; width: 100%; }
 
         .cr-doc-header { background: var(--card-bg, #1a1a2e); padding: 16px 20px; border-radius: 8px; margin-bottom: 12px; }
         .cr-doc-header-inner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
@@ -577,6 +768,21 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         /* ── Announcements ── */
         .cr-announce-list { padding: 12px 12px 12px 30px; margin: 0; }
         .cr-empty { padding: 12px 14px; color: #7c7; margin: 0; }
+        .cr-announcements-wrap { padding: 14px; display: grid; gap: 14px; }
+        .cr-announcement-block { display: grid; gap: 8px; }
+        .cr-subsection-title { margin: 0; font-size: 12px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; }
+        .cr-auction-light { display: inline-flex; align-items: center; width: fit-content; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+        .cr-auction-light-green { background: #1f4d2f; color: #8de0a5; border: 1px solid #2f7a4c; }
+        .cr-auction-light-yellow { background: #544106; color: #f0ca62; border: 1px solid #b28d1f; }
+        .cr-auction-light-red { background: #5a1f1f; color: #f28b82; border: 1px solid #b74f4f; }
+        .cr-announcement-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .cr-announcement-grid-clean { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .cr-announcement-card { border: 1px solid #3d3d52; border-radius: 6px; padding: 10px 12px; display: grid; gap: 4px; background: rgba(255,255,255,0.02); }
+        .cr-announcement-card-alert { border-color: #7a3535; background: rgba(183, 79, 79, 0.08); }
+        .cr-announcement-card-unknown { border-color: #7a6a35; background: rgba(201, 164, 74, 0.08); }
+        .cr-announcement-card-clean { border-color: #31573a; background: rgba(77, 134, 94, 0.06); }
+        .cr-announcement-label { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.4px; }
+        .cr-announcement-value { font-size: 13px; color: #e7e7e7; }
 
         /* ── Comments ── */
         .cr-comments { padding: 12px 14px; margin: 0; }
@@ -600,6 +806,14 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         .cr-severity-yellow { background: #4d3d0a; color: #e7a33e; }
         .cr-severity-red { background: #4d1a1a; color: #e74c3c; }
         .cr-severity-gray { background: #333; color: #aaa; }
+
+        /* ── Equipment ── */
+        .cr-equipment-wrap { padding: 14px; display: grid; gap: 12px; }
+        .cr-equipment-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+        .cr-equipment-card { border: 1px solid #3d3d52; border-radius: 6px; padding: 10px 12px; display: grid; gap: 4px; background: rgba(255,255,255,0.02); }
+        .cr-equipment-title { font-size: 13px; color: #f1f1f1; }
+        .cr-equipment-meta { font-size: 11px; color: #c9a44a; text-transform: uppercase; letter-spacing: 0.4px; }
+        .cr-equipment-detail { font-size: 12px; color: #aaa; }
 
         /* ── Tire grid ── */
         .cr-tire-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 14px; }
@@ -641,6 +855,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           .cr-kpi-row { flex-direction: column; }
           .cr-image-grid { grid-template-columns: repeat(2, 1fr); }
           .cr-tire-grid { grid-template-columns: repeat(2, 1fr); }
+          .cr-announcement-grid, .cr-announcement-grid-clean, .cr-equipment-grid { grid-template-columns: 1fr; }
           .cr-damage-table { font-size: 12px; }
         }
       `}</style>
@@ -724,6 +939,151 @@ function resolveReportImages(vehicle: VehicleDetail | null): string[] {
 
 function humanizeKey(value: string): string {
   return value.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+type ParsedAnnouncement = {
+  raw: string;
+  label: string;
+  value: string | null;
+  category: "issue" | "unknown" | "clean" | "informational" | "auction_light";
+  color?: "green" | "yellow" | "red";
+};
+
+function parseAnnouncement(raw: string): ParsedAnnouncement {
+  const text = raw.trim();
+  const lightMatch = text.match(/^(Green|Yellow|Red)\s+Light$/i);
+  if (lightMatch) {
+    return {
+      raw: text,
+      label: "Auction Light",
+      value: `${lightMatch[1][0].toUpperCase()}${lightMatch[1].slice(1).toLowerCase()} Light`,
+      category: "auction_light",
+      color: lightMatch[1].toLowerCase() as "green" | "yellow" | "red",
+    };
+  }
+
+  const colonIndex = text.indexOf(":");
+  if (colonIndex < 0) {
+    return { raw: text, label: text, value: null, category: "informational" };
+  }
+
+  const label = text.slice(0, colonIndex).trim();
+  const value = text.slice(colonIndex + 1).trim();
+  const valueLower = value.toLowerCase();
+  const labelLower = label.toLowerCase();
+
+  const safeYesLabels = new Set(["driveable"]);
+  const cleanValues = new Set(["no", "none", "no issues", "title present"]);
+
+  let category: ParsedAnnouncement["category"] = "informational";
+  if (valueLower.includes("unknown")) {
+    category = "unknown";
+  } else if (cleanValues.has(valueLower)) {
+    category = "clean";
+  } else if (valueLower === "yes") {
+    category = safeYesLabels.has(labelLower) ? "clean" : "issue";
+  } else if (/^\d+$/.test(valueLower)) {
+    category = "informational";
+  } else if (valueLower.length > 0) {
+    category = "informational";
+  }
+
+  return { raw: text, label, value, category };
+}
+
+function bucketAnnouncements(items: string[]) {
+  const parsed = items.map(parseAnnouncement);
+  return {
+    auctionLight: parsed.find((item) => item.category === "auction_light") || null,
+    issues: parsed.filter((item) => item.category === "issue"),
+    unknown: parsed.filter((item) => item.category === "unknown"),
+    informational: parsed.filter((item) => item.category === "informational"),
+    clean: parsed.filter((item) => item.category === "clean"),
+  };
+}
+
+type EquipmentSectionItem = {
+  key: string;
+  title: string;
+  meta?: string | null;
+  detail?: string | null;
+};
+
+function resolveEquipmentSection({
+  equipmentFeatures,
+  highValueOptions,
+  installedEquipment,
+}: {
+  equipmentFeatures: string[];
+  highValueOptions: EquipmentOption[];
+  installedEquipment: EquipmentOption[];
+}): {
+  title: string;
+  subtitle: string | null;
+  items: EquipmentSectionItem[];
+} {
+  if (equipmentFeatures.length > 0) {
+    return {
+      title: "EQUIPMENT & FEATURES",
+      subtitle: "Vehicle feature list extracted from the Liquid Motors condition report.",
+      items: equipmentFeatures.map((feature) => ({
+        key: feature.toLowerCase(),
+        title: feature,
+      })),
+    };
+  }
+
+  const source = highValueOptions.length > 0 ? highValueOptions : installedEquipment;
+  const subtitle = highValueOptions.length > 0
+    ? "High value OEM options from the OVE listing build data."
+    : installedEquipment.length > 0
+      ? "Installed equipment from the OVE listing build data."
+      : null;
+
+  return {
+    title: highValueOptions.length > 0 ? "HIGH VALUE OPTIONS" : "INSTALLED EQUIPMENT",
+    subtitle,
+    items: source
+      .map((item, index) => {
+        const title = item.primary_description || item.extended_description;
+        if (!title) return null;
+        const generics = Array.isArray(item.generics)
+          ? item.generics.map((generic) => generic?.name).filter(Boolean).join(", ")
+          : "";
+        const metaParts = [
+          item.classification,
+          item.installed_reason,
+          item.oem_option_code ? `Code ${item.oem_option_code}` : null,
+          typeof item.msrp === "number" ? `MSRP ${fmtMoney(item.msrp)}` : null,
+        ].filter(Boolean);
+        return {
+          key: `${index}-${title}`.toLowerCase(),
+          title,
+          meta: metaParts.join(" · ") || null,
+          detail: item.extended_description || generics || null,
+        };
+      })
+      .filter(Boolean) as EquipmentSectionItem[],
+  };
+}
+
+function resolveTireDisplayItems(tireDepths: Record<string, TireDepth> | undefined): Array<{ key: string; tire: TireDepth }> {
+  if (!tireDepths) return [];
+  const positionGroups = [
+    ["lf", "left_front", "driver_front"],
+    ["rf", "right_front", "passenger_front"],
+    ["lr", "left_rear", "driver_rear"],
+    ["rr", "right_rear", "passenger_rear"],
+    ["spare"],
+  ];
+
+  const items: Array<{ key: string; tire: TireDepth }> = [];
+  for (const aliases of positionGroups) {
+    const key = aliases.find((alias) => tireDepths[alias]);
+    if (!key) continue;
+    items.push({ key, tire: tireDepths[key] });
+  }
+  return items;
 }
 
 function fmtMoney(value: number | null | undefined): string {

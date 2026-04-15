@@ -9,6 +9,7 @@ from app.api.deps import (
 from app.core.responses import ok
 from app.db.session import get_db
 from app.services.audit_service import log_event
+from app.services.ghl_lifecycle_service import GHLLifecycleService
 
 router = APIRouter()
 
@@ -16,8 +17,9 @@ router = APIRouter()
 @router.post("/ghl", dependencies=[Depends(require_ghl_webhook_auth)])
 def ghl_webhook(payload: dict, db: Session = Depends(get_db)) -> dict:
     log_event(db, deal_id=payload.get("deal_id"), event_type="webhook_ghl", actor="system", payload=payload)
+    outcome = GHLLifecycleService().process_webhook(db, payload)
     db.commit()
-    return ok({"accepted": True})
+    return ok(outcome)
 
 
 @router.post("/docusign", dependencies=[Depends(require_docusign_webhook_auth)])

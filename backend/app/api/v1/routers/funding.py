@@ -7,7 +7,7 @@ from app.core.responses import ok
 from app.db.session import get_db
 from app.models.entities import Deal, FundingCase
 from app.services.audit_service import log_event
-from app.services.deal_service import transition_deal_state
+from app.services.deal_service import advance_deal_for_trigger
 
 router = APIRouter(dependencies=[Depends(require_service_token)])
 
@@ -26,8 +26,7 @@ def submit_app(deal_id: str, db: Session = Depends(get_db)) -> dict:
         case.funding_state = FundingState.CREDIT_APP_SUBMITTED
 
     deal.funding_state = FundingState.CREDIT_APP_SUBMITTED
-    if deal.stage == DealState.VEHICLE_SELECTED:
-        transition_deal_state(db, deal=deal, new_state=DealState.FUNDING, actor="agent", reason="funding_started")
+    advance_deal_for_trigger(db, deal=deal, trigger="funding_started")
 
     log_event(db, deal_id=deal.id, event_type="funding_submit_app", actor="agent")
     db.commit()
@@ -47,14 +46,7 @@ def confirm_funding(deal_id: str, db: Session = Depends(get_db)) -> dict:
     case.funding_state = FundingState.FULLY_FUNDED
     deal.funding_state = FundingState.FULLY_FUNDED
 
-    if deal.stage == DealState.FUNDING:
-        transition_deal_state(
-            db,
-            deal=deal,
-            new_state=DealState.ACQUISITION_PENDING,
-            actor="agent",
-            reason="funding_confirmed",
-        )
+    advance_deal_for_trigger(db, deal=deal, trigger="funding_confirmed")
 
     log_event(db, deal_id=deal.id, event_type="funding_confirmed", actor="agent")
     db.commit()

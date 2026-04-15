@@ -1,8 +1,12 @@
+import ast
 import csv
 import io
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.params import Param
@@ -12,16 +16,40 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_optional_user, require_service_token, require_wordpress_export_auth
 from app.core.config import settings
-from app.core.constants import InventorySourceType
+from app.core.constants import ImageTier, InventorySourceType
 from app.core.responses import ok
 from app.db.session import get_db
 from app.integrations.marketcheck_client import MarketCheckClient
-from app.models.entities import Deal, GarageItem, OveVehicleDetail, User, Vehicle
+from app.integrations.nhtsa_client import NHTSAClient, categorize_decode
+from app.models.entities import Deal, GarageItem, OveVehicleDetail, User, Vehicle, VehicleHistoryEnrichment, VehicleImageAsset, VehicleTaxonomyCache
+from app.services.marketcheck_history_enrichment_service import (
+    decode_option_packages,
+    enrich_vehicle_history,
+    enrichment_metadata_from_record,
+    is_thin_listing,
+    merge_listing_metadata,
+    run_history_enrichment_batch,
+    select_best_history_entry,
+)
+from app.services.seller_comment_service import (
+    build_virtualcarhub_seller_comment,
+    cache_vehicle_seller_comment,
+    get_cached_vehicle_seller_comment,
+)
 from app.services.image_pipeline_service import resolve_vehicle_card_media, resolve_vehicle_display_context
 from app.services.inventory_taxonomy_service import (
     MIN_TAXONOMY_YEAR,
     get_inventory_taxonomy_facets,
     sync_marketcheck_taxonomy_cache,
+)
+from app.services.payment_estimate_service import (
+    DEFAULT_CREDIT_TIER_ID,
+    DEFAULT_LOAN_TERM_MONTHS,
+    build_payment_estimate,
+)
+from app.services.photo_access_service import (
+    can_view_protected_vehicle_photos,
+    protected_photo_access_message,
 )
 from app.services.inventory_service import SOURCE_PRIORITY, ingest_marketcheck_inventory, seed_inventory
 from app.services.zip_radius_service import normalize_zip_code, zip_codes_within_radius
@@ -107,7 +135,9 @@ PUBLIC_RETAIL_SOURCE = "retail"
 VCH_MARGIN = 1500.0
 AUCTION_BUY_FEE_UNDER_50K = 1000.0
 AUCTION_BUY_FEE_OVER_50K = 1300.0
-AGED_INVENTORY_MIN_DOM = 50
+DETAIL_SHOP_FEE = 150.0
+MARKETING_FEE = 599.0
+AGED_INVENTORY_MIN_DOM = 60
 
 
 def _marketcheck_client() -> MarketCheckClient:
@@ -159,19 +189,104 @@ def _to_float(value: Any) -> float | None:
 
 
 def _normalize_feature_list(values: Any) -> list[str]:
+    return [item["description"] for item in _normalize_feature_details(values)]
+
+
+def _coerce_feature_mapping(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    text = _to_str(value)
+    if not text or not text.startswith("{") or not text.endswith("}"):
+        return None
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _split_feature_text(value: str | None) -> tuple[str | None, str | None]:
+    text = _to_str(value)
+    if not text:
+        return None, None
+
+    if "@" not in text:
+        return None, text
+
+    prefix, remainder = text.split("@", 1)
+    category = _to_str(prefix)
+    description = _to_str(remainder)
+    if not category or not description:
+        return None, text
+
+    normalized = category.lower()
+    known_categories = {
+        "comfort & convenience",
+        "engine",
+        "exterior",
+        "infotainment",
+        "interior",
+        "packages",
+        "performance",
+        "safety & driver assist",
+        "technology",
+        "transmission",
+        "vehicle segment",
+    }
+    if normalized not in known_categories:
+        return None, text
+
+    return category, description
+
+
+def _normalize_feature_detail(value: Any) -> dict[str, str | None] | None:
+    mapping = _coerce_feature_mapping(value)
+    if mapping is not None:
+        raw_description = _to_str(
+            mapping.get("description")
+            or mapping.get("name")
+            or mapping.get("feature")
+            or mapping.get("value")
+        )
+        if not raw_description:
+            return None
+        category = _to_str(mapping.get("category"))
+        split_category, description = _split_feature_text(raw_description)
+        if not description:
+            return None
+        return {
+            "category": category or split_category,
+            "description": description,
+            "type": _to_str(mapping.get("type")),
+        }
+
+    text = _to_str(value)
+    if not text:
+        return None
+    category, description = _split_feature_text(text)
+    return {"category": category, "description": description or text, "type": None}
+
+
+def _normalize_feature_details(values: Any) -> list[dict[str, str | None]]:
     if not isinstance(values, list):
         return []
-    out: list[str] = []
+    out: list[dict[str, str | None]] = []
     seen: set[str] = set()
     for value in values:
-        text = _to_str(value)
-        if not text:
+        item = _normalize_feature_detail(value)
+        if not item:
             continue
-        key = text.lower()
+        key = "|".join(
+            [
+                (item.get("category") or "").strip().lower(),
+                (item.get("description") or "").strip().lower(),
+                (item.get("type") or "").strip().lower(),
+            ]
+        )
         if key in seen:
             continue
         seen.add(key)
-        out.append(text)
+        out.append(item)
     return out
 
 
@@ -247,22 +362,29 @@ def _pricing_breakdown(base_price: float | None) -> dict[str, float | None]:
         return {
             "source_price": None,
             "buy_fee": None,
+            "detail_shop_fee": round(DETAIL_SHOP_FEE, 2),
             "margin": VCH_MARGIN,
+            "marketing_fee": round(MARKETING_FEE, 2),
             "advertised_price": None,
         }
     buy_fee = _auction_buy_fee(source_price)
     return {
         "source_price": round(source_price, 2),
         "buy_fee": round(buy_fee, 2),
+        "detail_shop_fee": round(DETAIL_SHOP_FEE, 2),
         "margin": round(VCH_MARGIN, 2),
-        "advertised_price": round(source_price + buy_fee + VCH_MARGIN, 2),
+        "marketing_fee": round(MARKETING_FEE, 2),
+        "advertised_price": round(source_price + buy_fee + DETAIL_SHOP_FEE + VCH_MARGIN + MARKETING_FEE, 2),
     }
 
 
 def _advertised_price_expr():
     return case(
-        (Vehicle.price_asking <= 50000, Vehicle.price_asking + AUCTION_BUY_FEE_UNDER_50K + VCH_MARGIN),
-        else_=Vehicle.price_asking + AUCTION_BUY_FEE_OVER_50K + VCH_MARGIN,
+        (
+            Vehicle.price_asking <= 50000,
+            Vehicle.price_asking + AUCTION_BUY_FEE_UNDER_50K + DETAIL_SHOP_FEE + VCH_MARGIN + MARKETING_FEE,
+        ),
+        else_=Vehicle.price_asking + AUCTION_BUY_FEE_OVER_50K + DETAIL_SHOP_FEE + VCH_MARGIN + MARKETING_FEE,
     )
 
 
@@ -341,6 +463,57 @@ def _normalized_pick(normalized: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _compute_deal_rating(price_asking: float | None, mmr: Any) -> dict[str, Any] | None:
+    """Return deal-quality label based on price_asking / MMR ratio."""
+    if not mmr or not price_asking:
+        return None
+    try:
+        mmr_f = float(mmr)
+    except (TypeError, ValueError):
+        return None
+    if mmr_f <= 0:
+        return None
+    ratio = round(price_asking / mmr_f, 2)
+    if ratio >= 1.50:
+        label, color = "High", "red"
+    elif ratio >= 1.25:
+        label, color = "Fair", "orange"
+    elif ratio >= 1.10:
+        label, color = "Good", "yellow"
+    elif ratio >= 0.96:
+        label, color = "Great", "green"
+    else:
+        label, color = "Excellent", "green"
+    return {"ratio": ratio, "label": label, "color": color}
+
+
+def _compute_badges(
+    year: int | None,
+    odometer: int | None,
+    price_asking: float | None,
+    mmr: Any,
+) -> list[dict[str, str]]:
+    """Build a list of qualifying badge dicts for a vehicle."""
+    current_year = datetime.now(UTC).year
+    badges: list[dict[str, str]] = []
+
+    # Deal quality badge (MMR-based)
+    deal = _compute_deal_rating(price_asking, mmr)
+    if deal:
+        badges.append({"type": "deal_quality", "label": deal["label"], "color": deal["color"], "ratio": str(deal["ratio"])})
+
+    if year is not None and odometer is not None:
+        age = current_year - year
+        # Factory Warranty badge
+        if age < 3 and odometer < 36_000:
+            badges.append({"type": "factory_warranty", "label": "Factory Warranty*", "color": "blue"})
+        # CPO eligibility badge
+        if age < 5 and odometer < 80_000:
+            badges.append({"type": "cpo_eligible", "label": "Ask About CPO", "color": "teal"})
+
+    return badges
+
+
 def _parse_iso8601(value: str | None) -> datetime | None:
     if value in (None, ""):
         return None
@@ -389,19 +562,30 @@ def _build_vehicle_title(vehicle: Vehicle) -> str:
 
 
 def _build_vehicle_slug(vehicle: Vehicle) -> str:
+    # Human-readable URL slug used by the WordPress export and the
+    # /cars/<id>/<slug> canonical URL. We intentionally swap the VIN for
+    # the public_slug so the last six production-sequence digits never
+    # leak into public page URLs or search-indexed metadata.
+    identifier = (vehicle.public_slug or vehicle.vin or "").lower()
     parts = [
         _normalize_slug_part(vehicle.year),
         _normalize_slug_part(vehicle.make),
         _normalize_slug_part(vehicle.model),
         _normalize_slug_part(vehicle.trim),
-        _normalize_slug_part(vehicle.vin),
+        _normalize_slug_part(identifier),
     ]
     filtered = [part for part in parts if part]
-    return "-".join(filtered) or vehicle.vin.lower()
+    return "-".join(filtered) or identifier
 
 
-def _build_vdp_links(vin: str) -> tuple[str, str]:
-    path = f"/vinventory/{vin}"
+def _build_vdp_links(vehicle_or_vin) -> tuple[str, str]:
+    # Accept either a Vehicle row or a bare VIN so legacy call sites keep
+    # working; always emit the public slug if available.
+    if hasattr(vehicle_or_vin, "public_slug"):
+        identifier = vehicle_or_vin.public_slug or vehicle_or_vin.vin
+    else:
+        identifier = vehicle_or_vin
+    path = f"/vinventory/{identifier}"
     base = settings.public_web_base_url.rstrip("/")
     return path, f"{base}{path}"
 
@@ -431,7 +615,7 @@ def _serialize_wordpress_vehicle(db: Session, vehicle: Vehicle) -> dict[str, Any
     features = _normalize_feature_list(vehicle.features_raw or [])
     source_name = (vehicle.source_type or "").lower()
     source_priority = SOURCE_PRIORITY.get(source_name, 0)
-    vdp_path, vdp_url = _build_vdp_links(vehicle.vin)
+    vdp_path, vdp_url = _build_vdp_links(vehicle)
     pricing = _pricing_breakdown(vehicle.price_asking)
 
     return {
@@ -488,6 +672,10 @@ def _serialize_wordpress_vehicle(db: Session, vehicle: Vehicle) -> dict[str, Any
         "buy_fee": pricing["buy_fee"],
         "margin": pricing["margin"],
         "pricing": pricing,
+        "badges": _compute_badges(
+            vehicle.year, vehicle.odometer, vehicle.price_asking,
+            _normalized_pick(normalized, "mmr", "mmr_value", "manheim_mmr"),
+        ),
         "marketcheck_average_retail": None,
         "price_delta_marketcheck": None,
         "price_delta_marketcheck_pct": None,
@@ -727,6 +915,10 @@ def _build_marketcheck_search_params(
             params["year"] = min_year
         else:
             params["year_range"] = f"{min_year}-{max_year}"
+    if min_dom is not None or max_dom is not None:
+        low = min_dom if min_dom is not None else 0
+        high = max_dom if max_dom is not None else 9999
+        params["dom_range"] = f"{low}-{high}"
     return {k: v for k, v in params.items() if v not in (None, "")}
 
 
@@ -735,20 +927,28 @@ def _extract_listing_metadata(listing: dict[str, Any] | None) -> dict[str, Any]:
     build = listing.get("build") if isinstance(listing.get("build"), dict) else {}
     extra = listing.get("extra") if isinstance(listing.get("extra"), dict) else {}
     dealer = listing.get("dealer") if isinstance(listing.get("dealer"), dict) else {}
+    media = listing.get("media") if isinstance(listing.get("media"), dict) else {}
 
-    features = _normalize_feature_list(extra.get("features") or listing.get("features") or [])
-    high_value = _normalize_feature_list(extra.get("high_value_features") or [])
-    options = _normalize_feature_list(extra.get("options") or [])
+    features = _normalize_feature_details(extra.get("features") or listing.get("features") or [])
+    high_value = _normalize_feature_details(extra.get("high_value_features") or [])
+    options = _normalize_feature_details(extra.get("options") or [])
+    option_packages = _normalize_feature_details(extra.get("options_packages") or [])
 
-    merged_features: list[str] = []
+    merged_feature_details: list[dict[str, str | None]] = []
     seen: set[str] = set()
-    for source in (features, high_value, options):
-        for value in source:
-            key = value.lower()
+    for source in (features, high_value, options, option_packages):
+        for item in source:
+            description = item.get("description")
+            if not description:
+                continue
+            key = description.lower()
             if key in seen:
                 continue
             seen.add(key)
-            merged_features.append(value)
+            merged_feature_details.append(item)
+
+    photo_links = [str(item) for item in (media.get("photo_links") or []) if _to_str(item)]
+    photo_links_cached = [str(item) for item in (media.get("photo_links_cached") or []) if _to_str(item)]
 
     return {
         "exterior_color": _to_str(
@@ -774,11 +974,21 @@ def _extract_listing_metadata(listing: dict[str, Any] | None) -> dict[str, Any]:
             or extra.get("description")
             or listing.get("description")
         ),
+        "seller_comments": _to_str(extra.get("seller_comments") or listing.get("seller_comments")),
         "dealer_name": _to_str(dealer.get("name") or listing.get("mc_dealership") or listing.get("heading")),
         "city": _to_str(dealer.get("city") or listing.get("city")),
-        "features": merged_features,
-        "high_value_features": high_value,
-        "options": options,
+        "photo_links": photo_links,
+        "photo_links_cached": photo_links_cached,
+        "supplemental_photo_links": list(dict.fromkeys([*photo_links_cached, *photo_links])),
+        "features": [item["description"] for item in merged_feature_details if item.get("description")],
+        "feature_details": merged_feature_details,
+        "high_value_features": [item["description"] for item in high_value if item.get("description")],
+        "high_value_feature_details": high_value,
+        "options": [item["description"] for item in options if item.get("description")],
+        "option_details": options,
+        "option_packages": [item["description"] for item in option_packages if item.get("description")],
+        "option_package_codes": [item["description"] for item in option_packages if item.get("description")],
+        "option_package_details": option_packages,
     }
 
 
@@ -803,6 +1013,56 @@ def _fetch_marketcheck_listing_by_vehicle(client: MarketCheckClient, vehicle: Ve
             listing = None
 
     return listing
+
+
+def _try_marketcheck_history_enrichment(vehicle: Vehicle) -> dict[str, Any]:
+    """For auction/OVE vehicles, look up MarketCheck history to find the last
+    retail listing, then pull build data, factory colors, and options."""
+    try:
+        client = _marketcheck_client()
+        history = client.get_history(vehicle.vin)
+        if not isinstance(history, (dict, list)):
+            return {}
+
+        if isinstance(history, list):
+            listings = [entry for entry in history if isinstance(entry, dict)]
+        else:
+            listings = history.get("listings") or history.get("history") or []
+            if isinstance(history.get("id"), str):
+                # Single-object response — the history endpoint itself returned a listing
+                listings = [history]
+        if not listings:
+            return {}
+
+        best = select_best_history_entry(listings, preferred_source_url=vehicle.source_url)
+        if not best:
+            best = listings[0] if isinstance(listings[0], dict) else {}
+
+        # If we got a listing_id but minimal data, fetch the full listing
+        listing_id = best.get("id") or best.get("listing_id")
+        if listing_id and not best.get("build"):
+            try:
+                full = client.get_listing(str(listing_id))
+                if isinstance(full, dict) and (full.get("vin") or "").upper() == vehicle.vin.upper():
+                    best = full
+            except Exception:
+                pass
+
+        metadata = decode_option_packages(vehicle.vin, _extract_listing_metadata(best), client)
+        source_comment = metadata.get("seller_comments") or metadata.get("description")
+        rewritten_comment, rewrite_provider = build_virtualcarhub_seller_comment(
+            vehicle=vehicle,
+            source_text=source_comment,
+            metadata=metadata,
+        )
+        metadata["seller_comments_original"] = source_comment
+        if rewritten_comment:
+            metadata["seller_comments"] = rewritten_comment
+            metadata["seller_comment_provider"] = rewrite_provider
+        return metadata
+    except Exception:
+        logger.debug("MarketCheck history enrichment failed for vin=%s", vehicle.vin, exc_info=True)
+        return {}
 
 
 def _local_facets(
@@ -868,11 +1128,11 @@ def _local_facets(
         add("body_type", row.body_type)
         add("state", row.location_state)
         add("city", normalized.get("city"))
-        add("exterior_color", normalized.get("exterior_color"))
-        add("interior_color", normalized.get("interior_color"))
-        add("drivetrain", row.drivetrain)
-        add("fuel_type", normalized.get("fuel_type"))
-        add("transmission", normalized.get("transmission"))
+        add("exterior_color", normalized.get("exterior_color") or None)
+        add("interior_color", normalized.get("interior_color") or None)
+        add("drivetrain", normalized.get("drivetrain") or row.drivetrain)
+        add("fuel_type", normalized.get("fuel_type") or None)
+        add("transmission", normalized.get("transmission") or None)
         add("inventory_type", normalized.get("inventory_type"))
 
     return {
@@ -1055,6 +1315,22 @@ def sync_inventory_taxonomy(
     )
     db.commit()
     return ok(report.to_dict())
+
+
+@router.get("/taxonomy/list")
+def list_taxonomy_routes(db: Session = Depends(get_db)) -> dict:
+    """Return all unique make, make/model, make/model/trim combos for SEO sitemap generation."""
+    rows = db.execute(
+        select(
+            VehicleTaxonomyCache.make,
+            VehicleTaxonomyCache.model,
+            VehicleTaxonomyCache.trim,
+        ).where(VehicleTaxonomyCache.active.is_(True))
+        .distinct()
+        .order_by(VehicleTaxonomyCache.make, VehicleTaxonomyCache.model, VehicleTaxonomyCache.trim)
+    ).all()
+    routes = [{"make": r[0], "model": r[1], "trim": r[2] or ""} for r in rows]
+    return ok({"routes": routes, "count": len(routes)})
 
 
 class _ParseQueryBody(BaseModel):
@@ -1262,7 +1538,13 @@ def search_inventory(
                 }
             )
 
-    stmt = select(Vehicle).where(Vehicle.available.is_(True))
+    stmt = select(Vehicle).where(
+        Vehicle.available.is_(True),
+        or_(
+            Vehicle.quality_firewall_pass.is_(True),
+            Vehicle.quality_firewall_pass.is_(None),
+        ),
+    )
     if q:
         clean_q = q.strip()
         # VIN exact match (17 alphanumeric characters)
@@ -1378,6 +1660,7 @@ def search_inventory(
         items.append(
             {
                 "vin": row.vin,
+                "public_slug": row.public_slug,
                 "listing_id": row.listing_id,
                 "year": row.year,
                 "make": row.make,
@@ -1398,6 +1681,7 @@ def search_inventory(
                 "source_filter_value": _public_source_value(row.source_type),
                 "source_label": _public_source_label(row.source_type),
                 "thumbnail": media.thumbnail,
+                "evox_pending": media.evox_pending,
                 "dealer_photos_gated": media.dealer_photos_gated,
                 "gated_photo_count": media.gated_photo_count,
                 "images_count": len(row.images or []),
@@ -1405,10 +1689,14 @@ def search_inventory(
                 "display_mode": media.display_mode.value,
                 "inspection_status": media.inspection_status.value,
                 "has_inspection_report": media.has_inspection_report,
-                "exterior_color": normalized.get("exterior_color"),
-                "interior_color": normalized.get("interior_color"),
-                "fuel_type": normalized.get("fuel_type"),
-                "transmission": normalized.get("transmission"),
+                "exterior_color": normalized.get("exterior_color") or None,
+                "interior_color": normalized.get("interior_color") or None,
+                "fuel_type": normalized.get("fuel_type") or None,
+                "transmission": normalized.get("transmission") or None,
+                "engine_type": normalized.get("engine_type") or row.engine_type,
+                "cylinders": row.cylinders,
+                "drivetrain": normalized.get("drivetrain") or row.drivetrain,
+                "odometer_units": normalized.get("odometer_units") or "mi",
                 "inventory_type": normalized.get("inventory_type"),
                 "days_on_market": normalized.get("days_on_market"),
                 "single_owner": normalized.get("single_owner"),
@@ -1420,6 +1708,10 @@ def search_inventory(
                 "pickup_location": normalized.get("pickup_location"),
                 "inventory_status": normalized.get("status"),
                 "inventory_label": normalized.get("inventory"),
+                "badges": _compute_badges(
+                    row.year, row.odometer, row.price_asking,
+                    _normalized_pick(normalized, "mmr", "mmr_value", "manheim_mmr"),
+                ),
             }
         )
 
@@ -1660,18 +1952,94 @@ def wordpress_inventory_export(
     )
 
 
-@router.get("/{vin}")
+class EvoxBatchRequest(BaseModel):
+    vins: list[str]
+
+
+@router.post("/evox-batch")
+def batch_fetch_evox_images(
+    body: EvoxBatchRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Batch-fetch EVOX card images for up to 10 VINs.
+
+    Called by the frontend after search results load when vehicles have
+    evox_pending=true. Fetches color-accurate card images from EVOX,
+    caches them, and returns updated image URLs per VIN.
+    """
+    from app.services.evox_service import batch_build_evox_manifests, sync_evox_source_assets, EVOX_SOURCE_KIND
+
+    if not settings.has_evox:
+        return ok({"results": {}})
+
+    vins = [v.strip().upper() for v in body.vins[:10] if v.strip()]
+    if not vins:
+        return ok({"results": {}})
+
+    # Load vehicles and filter to those without cached EVOX card assets
+    vehicles: list[Vehicle] = []
+    for vin in vins:
+        vehicle = db.get(Vehicle, vin)
+        if not vehicle:
+            continue
+        # Check if EVOX card assets already exist
+        existing = db.scalar(
+            select(VehicleImageAsset.id).where(
+                VehicleImageAsset.vin == vin,
+                VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
+                VehicleImageAsset.source_kind == EVOX_SOURCE_KIND,
+                VehicleImageAsset.role.in_(["hero", "gallery"]),
+                VehicleImageAsset.active.is_(True),
+            ).limit(1)
+        )
+        if not existing:
+            vehicles.append(vehicle)
+
+    if not vehicles:
+        return ok({"results": {}})
+
+    # Batch query EVOX (up to 10 VINs per API call)
+    manifests = batch_build_evox_manifests(vehicles, detail_level="card")
+
+    # Sync results to database
+    results: dict[str, dict[str, Any]] = {}
+    for vehicle in vehicles:
+        manifest = manifests.get(vehicle.vin)
+        if not manifest:
+            continue
+        sync_evox_source_assets(db, vehicle=vehicle, manifest=manifest)
+        results[vehicle.vin] = {
+            "hero_url": manifest.hero_url,
+            "gallery_urls": manifest.card_gallery_urls,
+            "match_level": manifest.match_level,
+            "color_info": {
+                "color_code": manifest.color_info.color_code,
+                "color_title": manifest.color_info.color_title,
+                "color_simpletitle": manifest.color_info.color_simpletitle,
+                "is_exact_match": manifest.color_info.is_exact_match,
+            } if manifest.color_info else None,
+        }
+
+    db.commit()
+    return ok({"results": results})
+
+
+@router.get("/{identifier}")
 def get_inventory_vehicle(
-    vin: str,
+    identifier: str,
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_user),
 ) -> dict:
-    vehicle = db.get(Vehicle, vin.upper())
+    from app.services.vin_slug_service import resolve_vehicle_identifier
+
+    vehicle = resolve_vehicle_identifier(db, identifier)
     if not vehicle:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+    vin = vehicle.vin
 
     # Check if the vehicle is in the user's garage
     is_in_garage = False
+    active_deal = None
     if current_user:
         active_deal = db.scalar(
             select(Deal).where(
@@ -1688,18 +2056,33 @@ def get_inventory_vehicle(
             )
             is_in_garage = garage_item is not None
 
-    display_context = resolve_vehicle_display_context(db, vehicle=vehicle, is_garage_view=is_in_garage)
+    can_view_protected_photos = can_view_protected_vehicle_photos(user=current_user, deal=active_deal)
+    display_context = resolve_vehicle_display_context(
+        db,
+        vehicle=vehicle,
+        is_garage_view=is_in_garage,
+        allow_protected_photos=can_view_protected_photos,
+    )
 
     # Lazy-load full EVOX assets (stills, spin, interior pano) on detail view if not already synced
-    if display_context.get("has_evox_stock") and not display_context.get("evox_exterior_stills"):
+    has_evox_card = display_context.get("has_evox_stock")
+    has_evox_detail = bool(display_context.get("evox_exterior_stills"))
+    should_fetch_evox_detail = settings.has_evox and not has_evox_detail
+    if should_fetch_evox_detail:
         try:
             from app.services.evox_service import build_evox_manifest, sync_evox_source_assets
-            full_manifest = build_evox_manifest(db, vehicle, detail_level="full")
+            full_manifest = build_evox_manifest(vehicle, detail_level="full")
             if full_manifest:
-                sync_evox_source_assets(db, vehicle=vehicle, detail_level="full")
-                display_context = resolve_vehicle_display_context(db, vehicle=vehicle, is_garage_view=is_in_garage)
+                sync_evox_source_assets(db, vehicle=vehicle, manifest=full_manifest)
+                db.commit()
+                display_context = resolve_vehicle_display_context(
+                    db,
+                    vehicle=vehicle,
+                    is_garage_view=is_in_garage,
+                    allow_protected_photos=can_view_protected_photos,
+                )
         except Exception:
-            pass  # Non-critical; card-level images still display
+            logger.warning("EVOX detail fetch failed for vin=%s", vehicle.vin, exc_info=True)
 
     resolved_images = display_context.get("gallery_images") or (vehicle.images or [])
     hero_image = display_context.get("hero_image") or (resolved_images[0] if resolved_images else None)
@@ -1707,10 +2090,43 @@ def get_inventory_vehicle(
     listing_meta: dict[str, Any] = {}
     if settings.has_marketcheck and vehicle.source_type == "marketcheck":
         try:
-            listing = _fetch_marketcheck_listing_by_vehicle(_marketcheck_client(), vehicle)
-            listing_meta = _extract_listing_metadata(listing)
+            client = _marketcheck_client()
+            listing = _fetch_marketcheck_listing_by_vehicle(client, vehicle)
+            listing_meta = decode_option_packages(vehicle.vin, _extract_listing_metadata(listing), client)
         except Exception:
             listing_meta = {}
+
+    history_enrichment = None
+    history_listing_meta: dict[str, Any] = {}
+    if _is_auction_source(vehicle.source_type):
+        history_enrichment = db.get(VehicleHistoryEnrichment, vehicle.vin)
+        history_listing_meta = enrichment_metadata_from_record(history_enrichment)
+
+        if settings.has_marketcheck and is_thin_listing(vehicle, history_listing_meta) and not history_listing_meta:
+            try:
+                history_enrichment = enrich_vehicle_history(db, vehicle=vehicle, force=False)
+                db.commit()
+                history_listing_meta = enrichment_metadata_from_record(history_enrichment)
+            except Exception:
+                db.rollback()
+                logger.debug("cached history enrichment refresh failed for vin=%s", vehicle.vin, exc_info=True)
+                history_listing_meta = {}
+
+        # Fall back to direct history lookup for thin auction rows if the cache is still empty.
+        if settings.has_marketcheck and not history_listing_meta and not listing_meta:
+            history_listing_meta = _try_marketcheck_history_enrichment(vehicle)
+
+    listing_meta = merge_listing_metadata(listing_meta, history_listing_meta)
+
+    # ── NHTSA VIN decode enrichment ──
+    nhtsa_categories: dict[str, Any] = {}
+    try:
+        nhtsa = NHTSAClient()
+        decode_result = nhtsa.decode_vin(vehicle.vin)
+        if decode_result.year:  # valid decode
+            nhtsa_categories = categorize_decode(decode_result)
+    except Exception:
+        logger.warning("NHTSA decode failed for %s", vehicle.vin, exc_info=True)
 
     db_features = _normalize_feature_list(vehicle.features_raw or [])
     listing_features = listing_meta.get("features") or []
@@ -1740,9 +2156,49 @@ def get_inventory_vehicle(
             "last_synced_at": ove_detail.last_synced_at,
         }
 
+    raw_listing_comment = (
+        listing_meta.get("seller_comments_original")
+        or listing_meta.get("seller_comments")
+        or listing_meta.get("description")
+    )
+    rewritten_listing_comment = (
+        listing_meta.get("seller_comments")
+        if listing_meta.get("seller_comments_original")
+        else None
+    )
+    if raw_listing_comment and not rewritten_listing_comment:
+        rewritten_listing_comment = get_cached_vehicle_seller_comment(vehicle, raw_listing_comment)
+        if not rewritten_listing_comment:
+            rewritten_listing_comment, rewrite_provider = build_virtualcarhub_seller_comment(
+                vehicle=vehicle,
+                source_text=raw_listing_comment,
+                metadata=listing_meta,
+            )
+            if rewritten_listing_comment:
+                try:
+                    if cache_vehicle_seller_comment(
+                        vehicle,
+                        source_text=raw_listing_comment,
+                        rewritten_text=rewritten_listing_comment,
+                        provider=rewrite_provider,
+                        source_kind="marketcheck_current" if vehicle.source_type == "marketcheck" else "listing_metadata",
+                    ):
+                        db.commit()
+                        normalized = vehicle.features_normalized or normalized
+                except Exception:
+                    db.rollback()
+                    logger.debug("seller comment cache persist failed for vin=%s", vehicle.vin, exc_info=True)
+
+    seller_comments = (
+        (ove_detail.seller_comments if ove_detail else None)
+        or rewritten_listing_comment
+        or raw_listing_comment
+    )
+
     return ok(
         {
             "vin": vehicle.vin,
+            "public_slug": vehicle.public_slug,
             "listing_id": vehicle.listing_id,
             "year": vehicle.year,
             "make": vehicle.make,
@@ -1777,15 +2233,29 @@ def get_inventory_vehicle(
             "display_mode": display_context.get("mode"),
             "inspection_status": display_context.get("inspection_status"),
             "has_inspection_report": bool(display_context.get("has_inspection_report")),
+            "can_view_protected_photos": can_view_protected_photos,
+            "protected_photo_access_message": protected_photo_access_message(user=current_user, deal=active_deal),
             "features_raw": merged_features,
             "features_full": merged_features,
             "high_value_features": listing_meta.get("high_value_features") or [],
+            "feature_details": listing_meta.get("feature_details") or [],
+            "high_value_feature_details": listing_meta.get("high_value_feature_details") or [],
             "options": listing_meta.get("options") or [],
+            "option_details": listing_meta.get("option_details") or [],
+            "option_packages": listing_meta.get("option_packages") or [],
+            "option_package_details": listing_meta.get("option_package_details") or [],
+            "photo_links": (listing_meta.get("photo_links") or []) if can_view_protected_photos else [],
+            "photo_links_cached": (listing_meta.get("photo_links_cached") or []) if can_view_protected_photos else [],
+            "supplemental_photo_links": (listing_meta.get("supplemental_photo_links") or []) if can_view_protected_photos else [],
             "description": listing_meta.get("description"),
-            "exterior_color": listing_meta.get("exterior_color") or normalized.get("exterior_color"),
-            "interior_color": listing_meta.get("interior_color") or normalized.get("interior_color"),
-            "fuel_type": listing_meta.get("fuel_type") or normalized.get("fuel_type"),
-            "transmission": listing_meta.get("transmission") or normalized.get("transmission"),
+            "exterior_color": normalized.get("exterior_color") or listing_meta.get("exterior_color") or None,
+            "interior_color": normalized.get("interior_color") or listing_meta.get("interior_color") or None,
+            "fuel_type": listing_meta.get("fuel_type") or normalized.get("fuel_type") or None,
+            "transmission": (
+                listing_meta.get("transmission")
+                or normalized.get("transmission")
+                or None
+            ),
             "inventory_type": listing_meta.get("inventory_type") or normalized.get("inventory_type"),
             "days_on_market": listing_meta.get("days_on_market") or normalized.get("days_on_market"),
             "auction_house": _normalized_pick(normalized, "auction_house"),
@@ -1793,13 +2263,22 @@ def get_inventory_vehicle(
             "inventory_status": _normalized_pick(normalized, "status"),
             "inventory_label": _normalized_pick(normalized, "inventory"),
             "odometer_units": _normalized_pick(normalized, "odometer_units") or "mi",
-            "transmission_type": listing_meta.get("transmission") or normalized.get("transmission"),
+            "transmission_type": (
+                listing_meta.get("transmission")
+                or normalized.get("transmission")
+                or None
+            ),
             "condition_report_grade": (
                 _normalized_pick(normalized, "condition_report_grade", "condition_grade")
                 or vehicle.condition_grade
+                or ((ove_detail.condition_report_json or {}).get("overall_grade") if ove_detail else None)
                 or ((ove_detail.condition_report_json or {}).get("grade") if ove_detail else None)
             ),
             "mmr": _normalized_pick(normalized, "mmr", "mmr_value", "manheim_mmr"),
+            "badges": _compute_badges(
+                vehicle.year, vehicle.odometer, vehicle.price_asking,
+                _normalized_pick(normalized, "mmr", "mmr_value", "manheim_mmr"),
+            ),
             "single_owner": (
                 listing_meta.get("single_owner")
                 if listing_meta.get("single_owner") is not None
@@ -1818,15 +2297,126 @@ def get_inventory_vehicle(
             "dealer_name": listing_meta.get("dealer_name") or normalized.get("dealer_name"),
             "city": listing_meta.get("city") or normalized.get("city"),
             "features_normalized": normalized,
-            "seller_comments": ove_detail.seller_comments if ove_detail else None,
+            "seller_comments": seller_comments,
             "condition_report": ove_detail.condition_report_json if ove_detail else {},
             "condition_report_url": _extract_cr_url(ove_detail),
             "listing_snapshot": ove_detail.listing_snapshot_json if ove_detail else {},
             "ove_detail": ove_payload,
+            "history_enrichment": {
+                "status": history_enrichment.status,
+                "source_listing_id": history_enrichment.source_listing_id,
+                "source_url": history_enrichment.source_url,
+                "last_enriched_at": _to_iso(history_enrichment.last_enriched_at),
+            } if history_enrichment else None,
             "available": vehicle.available,
             "last_seen_active": vehicle.last_seen_active,
             "updated_at": vehicle.updated_at,
             "display_context": display_context,
             "is_in_garage": is_in_garage,
+            "nhtsa_decoded": nhtsa_categories,
         }
     )
+
+
+@router.get("/{identifier}/payment-estimate")
+def get_inventory_vehicle_payment_estimate(
+    identifier: str,
+    credit_tier: str = Query(default=DEFAULT_CREDIT_TIER_ID),
+    months: int = Query(default=DEFAULT_LOAN_TERM_MONTHS, ge=12, le=96),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.vin_slug_service import resolve_vehicle_identifier
+
+    vehicle = resolve_vehicle_identifier(db, identifier)
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+
+    pricing = _pricing_breakdown(vehicle.price_asking)
+    principal = _to_float(pricing.get("advertised_price")) or 0.0
+    return ok(
+        {
+            "vin": vehicle.vin,
+            **build_payment_estimate(principal=principal, tier_id=credit_tier, months=months),
+        }
+    )
+
+
+@router.post("/history-enrichment/run", dependencies=[Depends(require_service_token)])
+def run_inventory_history_enrichment(
+    limit: int = Query(default=8, ge=1, le=50),
+    force: bool = Query(default=False),
+    vin: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    vins = [vin.strip().upper()] if vin and vin.strip() else None
+    return ok(run_history_enrichment_batch(db, limit=limit, force=force, vins=vins))
+
+
+@router.get("/{identifier}/similar")
+def get_similar_vehicles(
+    identifier: str,
+    limit: int = Query(default=6, le=12),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return vehicles similar to the given VIN based on make/model/price/year."""
+    from app.services.vin_slug_service import resolve_vehicle_identifier
+
+    vehicle = resolve_vehicle_identifier(db, identifier)
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+
+    # Build query: same make, prefer same model, within ±3 years and ±30% price
+    price = vehicle.price_asking or 0
+    price_lo = int(price * 0.7) if price else 0
+    price_hi = int(price * 1.3) if price else 999999
+
+    query = (
+        select(Vehicle)
+        .where(
+            Vehicle.vin != vehicle.vin,
+            Vehicle.available == True,  # noqa: E712
+            func.lower(Vehicle.make) == (vehicle.make or "").lower(),
+            Vehicle.year >= (vehicle.year or 2020) - 3,
+            Vehicle.year <= (vehicle.year or 2020) + 3,
+            Vehicle.price_asking >= price_lo,
+            Vehicle.price_asking <= price_hi,
+        )
+        .order_by(
+            # Prefer same model first
+            case((func.lower(Vehicle.model) == (vehicle.model or "").lower(), 0), else_=1),
+            Vehicle.updated_at.desc(),
+        )
+        .limit(limit)
+    )
+    rows = db.scalars(query).all()
+
+    results = []
+    for row in rows:
+        card_media = resolve_vehicle_card_media(db, row)
+        hero = card_media.get("hero") or (row.images[0] if row.images else None)
+        normalized = row.features_normalized or {}
+        results.append({
+            "vin": row.vin,
+            "public_slug": row.public_slug,
+            "year": row.year,
+            "make": row.make,
+            "model": row.model,
+            "trim": row.trim,
+            "body_type": row.body_type,
+            "price_asking": _pricing_breakdown(row.price_asking)["advertised_price"],
+            "odometer": row.odometer,
+            "location_state": row.location_state,
+            "location_zip": row.location_zip,
+            "exterior_color": normalized.get("exterior_color"),
+            "interior_color": normalized.get("interior_color"),
+            "source_type": row.source_type,
+            "source_label": _public_source_label(row.source_type),
+            "hero_image": hero,
+            "has_images": bool(row.images),
+            "badges": _compute_badges(
+                row.year, row.odometer, row.price_asking,
+                _normalized_pick(normalized, "mmr", "mmr_value", "manheim_mmr"),
+            ),
+        })
+
+    return ok(results)

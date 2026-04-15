@@ -14,6 +14,7 @@ from app.core.constants import (
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
 from app.models.entities import (
+    OveVehicleDetail,
     Vehicle,
     VehicleImageAsset,
     VehicleImageJob,
@@ -43,10 +44,11 @@ def _make_vehicle(vin: str) -> Vehicle:
     )
 
 
-def test_marketing_context_prefers_tier3_gallery_and_tier2_hero() -> None:
+def test_marketing_context_prefers_tier3_gallery_and_tier2_hero(monkeypatch) -> None:
     init_db()
     vin = "1HGBH41JXMN109186"
     with SessionLocal() as db:
+        monkeypatch.setattr(settings, "imagin_enabled", False)
         db.execute(delete(VehicleInspectionImage).where(VehicleInspectionImage.vin == vin))
         db.execute(delete(VehicleInspectionReport).where(VehicleInspectionReport.vin == vin))
         db.execute(delete(VehicleImageJob).where(VehicleImageJob.vin == vin))
@@ -161,7 +163,12 @@ def test_inspection_context_uses_verified_images_and_report() -> None:
         )
         db.commit()
 
-        context = resolve_vehicle_display_context(db, vehicle=vehicle, deal_stage=DealState.ACQUIRED)
+        context = resolve_vehicle_display_context(
+            db,
+            vehicle=vehicle,
+            deal_stage=DealState.ACQUIRED,
+            allow_protected_photos=True,
+        )
 
     assert context["mode"] == ImageDisplayMode.INSPECTION_REPORT.value
     assert context["inspection_status"] == InspectionStatus.NORMALIZED.value
@@ -311,7 +318,12 @@ def test_auction_context_uses_imagin_as_primary_and_appends_inspection_images(mo
         )
         db.commit()
 
-        context = resolve_vehicle_display_context(db, vehicle=vehicle, deal_stage=DealState.ACQUIRED)
+        context = resolve_vehicle_display_context(
+            db,
+            vehicle=vehicle,
+            deal_stage=DealState.ACQUIRED,
+            allow_protected_photos=True,
+        )
 
     assert context["mode"] == ImageDisplayMode.INSPECTION_REPORT.value
     assert context["has_imagin_stock"] is True
@@ -321,3 +333,72 @@ def test_auction_context_uses_imagin_as_primary_and_appends_inspection_images(mo
     assert context["gallery_images"][0].startswith("https://cdn.imagin.studio/getImage?")
     assert context["gallery_images"][-1] == f"https://inspect.example/{vin}/inspection_001.jpg"
     assert "IMAGIN studio reference images" in context["disclaimer"]
+
+
+def test_auction_context_exposes_ove_role_images_without_internal_inspection_report(monkeypatch) -> None:
+    init_db()
+    vin = "1N4BL4EV2NN423240"
+    with SessionLocal() as db:
+        db.execute(delete(VehicleInspectionImage).where(VehicleInspectionImage.vin == vin))
+        db.execute(delete(VehicleInspectionReport).where(VehicleInspectionReport.vin == vin))
+        db.execute(delete(VehicleImageJob).where(VehicleImageJob.vin == vin))
+        db.execute(delete(VehicleImageAsset).where(VehicleImageAsset.vin == vin))
+        db.execute(delete(OveVehicleDetail).where(OveVehicleDetail.vin == vin))
+        db.execute(delete(Vehicle).where(Vehicle.vin == vin))
+        db.commit()
+
+        monkeypatch.setattr(settings, "imagin_enabled", False)
+
+        vehicle = Vehicle(
+            vin=vin,
+            listing_id=f"{vin}-listing",
+            year=2022,
+            make="Nissan",
+            model="Altima",
+            trim="2.5 SV",
+            body_type="Sedan",
+            source_type="ove",
+            price_asking=18450,
+            images=["https://images.example.com/hero.jpg"],
+            available=True,
+        )
+        db.add(vehicle)
+        db.flush()
+
+        db.add(
+            OveVehicleDetail(
+                vin=vin,
+                source_platform=AuctionPlatform.MANHEIM,
+                images_json=[
+                    {"url": "https://images.example.com/hero.jpg", "role": "hero", "display_order": 0, "is_primary": True},
+                    {"url": "https://images.example.com/gallery-2.jpg", "role": "gallery", "display_order": 1, "is_primary": False},
+                    {"url": "https://images.example.com/inspection-1.jpg", "role": "inspection", "display_order": 2, "is_primary": False},
+                    {"url": "https://images.example.com/disclosure-1.jpg", "role": "disclosure", "display_order": 3, "is_primary": False},
+                ],
+                condition_report_json={
+                    "overall_grade": "4.6",
+                    "metadata": {
+                        "report_link": {"href": "http://content.liquidmotors.com/IR/15614/38020971.html"},
+                        "announcementsEnrichment": {"announcements": ["Open Recall"]},
+                    },
+                    "announcements": ["Open Recall"],
+                    "vehicle_history": {"owners": 1, "accidents": 0},
+                    "damage_items": [],
+                    "damage_summary": {"total_items": 0},
+                    "tire_depths": {
+                        "lf": {"position_label": "LF", "tread_depth": "6/32"},
+                        "rf": {"position_label": "RF", "tread_depth": "6/32"},
+                        "lr": {"position_label": "LR", "tread_depth": "7/32"},
+                        "rr": {"position_label": "RR", "tread_depth": "7/32"},
+                    },
+                },
+            )
+        )
+        db.commit()
+
+        context = resolve_vehicle_display_context(db, vehicle=vehicle, allow_protected_photos=True)
+
+    assert context["inspection_status"] == InspectionStatus.VERIFIED.value
+    assert context["inspection_images"] == ["https://images.example.com/inspection-1.jpg"]
+    assert context["disclosure_images"] == ["https://images.example.com/disclosure-1.jpg"]
+    assert "https://images.example.com/gallery-2.jpg" in context["gallery_images"]

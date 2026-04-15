@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     wordpress_export_topup_radius: int = Field(default=25, alias="WORDPRESS_EXPORT_TOPUP_RADIUS")
     wordpress_export_topup_limit: int = Field(default=200, alias="WORDPRESS_EXPORT_TOPUP_LIMIT")
     cors_origins: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
-    public_web_base_url: str = Field(default="https://virtualcarhub.com", alias="PUBLIC_WEB_BASE_URL")
+    public_web_base_url: str = Field(default="https://app.virtualcarhub.com", alias="PUBLIC_WEB_BASE_URL")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_file_path: str = Field(default="/var/log/virtual-carhub/backend.log", alias="LOG_FILE_PATH")
     object_storage_provider: Literal["none", "s3"] = Field(default="none", alias="OBJECT_STORAGE_PROVIDER")
@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     marketcheck_cache_ttl_search_seconds: int = Field(default=900, alias="MARKETCHECK_CACHE_TTL_SEARCH_SECONDS")
     marketcheck_cache_ttl_facets_seconds: int = Field(default=3600, alias="MARKETCHECK_CACHE_TTL_FACETS_SECONDS")
     marketcheck_cache_ttl_price_seconds: int = Field(default=86400, alias="MARKETCHECK_CACHE_TTL_PRICE_SECONDS")
+    marketcheck_history_enrichment_enabled: bool = Field(default=True, alias="MARKETCHECK_HISTORY_ENRICHMENT_ENABLED")
+    marketcheck_history_enrichment_interval_seconds: int = Field(default=900, alias="MARKETCHECK_HISTORY_ENRICHMENT_INTERVAL_SECONDS")
+    marketcheck_history_enrichment_batch_size: int = Field(default=8, alias="MARKETCHECK_HISTORY_ENRICHMENT_BATCH_SIZE")
+    marketcheck_history_enrichment_feature_min_count: int = Field(default=10, alias="MARKETCHECK_HISTORY_ENRICHMENT_FEATURE_MIN_COUNT")
+    marketcheck_history_enrichment_ttl_hours: int = Field(default=168, alias="MARKETCHECK_HISTORY_ENRICHMENT_TTL_HOURS")
+    marketcheck_history_enrichment_retry_hours: int = Field(default=24, alias="MARKETCHECK_HISTORY_ENRICHMENT_RETRY_HOURS")
+    marketcheck_history_enrichment_startup_delay_seconds: int = Field(default=45, alias="MARKETCHECK_HISTORY_ENRICHMENT_STARTUP_DELAY_SECONDS")
     imagin_enabled: bool = Field(default=False, alias="IMAGIN_ENABLED")
     imagin_customer_id: str = Field(default="", alias="IMAGIN_CUSTOMER_ID")
     imagin_secret: str = Field(default="", alias="IMAGIN_SECRET")
@@ -71,6 +78,30 @@ class Settings(BaseSettings):
         default="https://api.evoximages.com/api/v1", alias="EVOX_API_BASE_URL"
     )
     evox_prefer_webp: str = Field(default="true", alias="EVOX_PREFER_WEBP")
+
+    # OVE Inventory Staleness
+    ove_stale_threshold_days: int = Field(default=5, alias="OVE_STALE_THRESHOLD_DAYS")
+    ove_stale_cleanup_max_per_run: int = Field(default=5000, alias="OVE_STALE_CLEANUP_MAX_PER_RUN")
+    ove_stale_cleanup_enabled: bool = Field(default=True, alias="OVE_STALE_CLEANUP_ENABLED")
+    ove_stale_cleanup_interval_seconds: int = Field(default=7200, alias="OVE_STALE_CLEANUP_INTERVAL_SECONDS")
+    ove_stale_cleanup_startup_delay_seconds: int = Field(default=120, alias="OVE_STALE_CLEANUP_STARTUP_DELAY_SECONDS")
+
+    # OVE Operational Health thresholds (minutes). Used by /inventory/ove/health
+    # to classify staleness into ok / warning / critical bands.
+    ove_health_snapshot_warning_minutes: int = Field(default=360, alias="OVE_HEALTH_SNAPSHOT_WARNING_MINUTES")
+    ove_health_snapshot_critical_minutes: int = Field(default=720, alias="OVE_HEALTH_SNAPSHOT_CRITICAL_MINUTES")
+    ove_health_heartbeat_warning_minutes: int = Field(default=5, alias="OVE_HEALTH_HEARTBEAT_WARNING_MINUTES")
+    ove_health_heartbeat_critical_minutes: int = Field(default=15, alias="OVE_HEALTH_HEARTBEAT_CRITICAL_MINUTES")
+    # Default raised to $4000 to filter out fees-only OVE listings (e.g.,
+    # $3249 = auction fees with $0 vehicle cost). Real auction vehicles
+    # start well above this, so legitimate inventory is unaffected.
+    ove_min_vehicle_price: float = Field(default=4000.0, alias="OVE_MIN_VEHICLE_PRICE")
+    # Snapshot replacement safety guard. The scraper sends one full deduped
+    # snapshot per cycle. If incoming count >= this ratio of existing available
+    # OVE vehicles, the server does a full replace. Reject if below this to
+    # guard against truncated uploads.
+    ove_snapshot_min_ratio: float = Field(default=0.8, alias="OVE_SNAPSHOT_MIN_RATIO")
+    ove_snapshot_min_count: int = Field(default=100, alias="OVE_SNAPSHOT_MIN_COUNT")
 
     # NHTSA VIN Decoding (free, no key required)
     vin_decode_enabled: bool = Field(default=True, alias="VIN_DECODE_ENABLED")
@@ -119,6 +150,30 @@ class Settings(BaseSettings):
     ghl_return_authorization_template_id: str = Field(
         default="", alias="GHL_RETURN_AUTHORIZATION_TEMPLATE_ID"
     )
+    ghl_contact_cf_vch_user_id: str = Field(default="", alias="GHL_CONTACT_CF_VCH_USER_ID")
+    ghl_contact_cf_vch_deal_id: str = Field(default="", alias="GHL_CONTACT_CF_VCH_DEAL_ID")
+    ghl_contact_cf_vch_deal_stage: str = Field(default="", alias="GHL_CONTACT_CF_VCH_DEAL_STAGE")
+    ghl_contact_cf_vch_funding_state: str = Field(default="", alias="GHL_CONTACT_CF_VCH_FUNDING_STATE")
+    ghl_contact_cf_vch_selected_vin: str = Field(default="", alias="GHL_CONTACT_CF_VCH_SELECTED_VIN")
+    ghl_contact_cf_vch_profile_tier: str = Field(default="", alias="GHL_CONTACT_CF_VCH_PROFILE_TIER")
+    ghl_contact_cf_vch_profile_completion_pct: str = Field(
+        default="",
+        alias="GHL_CONTACT_CF_VCH_PROFILE_COMPLETION_PCT",
+    )
+    ghl_contact_cf_vch_preapproved: str = Field(default="", alias="GHL_CONTACT_CF_VCH_PREAPPROVED")
+    ghl_contact_cf_vch_preapproval_amount: str = Field(default="", alias="GHL_CONTACT_CF_VCH_PREAPPROVAL_AMOUNT")
+    ghl_contact_cf_vch_preapproval_until: str = Field(default="", alias="GHL_CONTACT_CF_VCH_PREAPPROVAL_UNTIL")
+    ghl_contact_cf_vch_cr_last_requested_at: str = Field(
+        default="",
+        alias="GHL_CONTACT_CF_VCH_CR_LAST_REQUESTED_AT",
+    )
+    ghl_contact_cf_vch_cr_last_completed_at: str = Field(
+        default="",
+        alias="GHL_CONTACT_CF_VCH_CR_LAST_COMPLETED_AT",
+    )
+    ghl_contact_cf_vch_cr_last_url: str = Field(default="", alias="GHL_CONTACT_CF_VCH_CR_LAST_URL")
+    ghl_contact_cf_routeone_app_id: str = Field(default="", alias="GHL_CONTACT_CF_ROUTEONE_APP_ID")
+    ghl_contact_cf_vch_lender_name: str = Field(default="", alias="GHL_CONTACT_CF_VCH_LENDER_NAME")
     ghl_documents_send_path: str = Field(
         default="/proposals/templates/send",
         alias="GHL_DOCUMENTS_SEND_PATH",
@@ -135,6 +190,13 @@ class Settings(BaseSettings):
     telnyx_api_key: str = Field(default="", alias="TELNYX_API_KEY")
     telnyx_phone_number: str = Field(default="", alias="TELNYX_PHONE_NUMBER")
     telnyx_base_url: str = Field(default="https://api.telnyx.com/v2", alias="TELNYX_BASE_URL")
+
+    # SendGrid email (password reset, notifications)
+    sendgrid_api_key: str = Field(default="", alias="SENDGRID_API_KEY")
+    sendgrid_from_email: str = Field(default="noreply@virtualcarhub.com", alias="SENDGRID_FROM_EMAIL")
+    sendgrid_from_name: str = Field(default="Virtual CarHub", alias="SENDGRID_FROM_NAME")
+    password_reset_expire_minutes: int = Field(default=30, alias="PASSWORD_RESET_EXPIRE_MINUTES")
+    email_login_expire_minutes: int = Field(default=1440, alias="EMAIL_LOGIN_EXPIRE_MINUTES")
 
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     datadog_api_key: str = Field(default="", alias="DATADOG_API_KEY")
@@ -195,6 +257,10 @@ class Settings(BaseSettings):
     @property
     def has_evox(self) -> bool:
         return self.evox_enabled and bool(self.evox_api_key)
+
+    @property
+    def has_sendgrid(self) -> bool:
+        return bool(self.sendgrid_api_key)
 
     @property
     def has_vin_decode(self) -> bool:

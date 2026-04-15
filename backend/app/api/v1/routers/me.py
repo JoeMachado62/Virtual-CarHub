@@ -13,15 +13,17 @@ from app.schemas.profile import ProfileUpdateRequest, QuickMatchRequest
 from app.schemas.returns import InitiateReturnRequest
 from app.schemas.ove_inventory import OveDetailRequestEnqueueRequest
 from app.services.audit_service import log_event
-from app.services.deal_service import advance_deal_to, transition_deal_state
+from app.services.deal_service import advance_deal_for_trigger
 from app.services.image_pipeline_service import (
     ensure_tier3_processing_job,
     resolve_vehicle_card_media,
     resolve_vehicle_display_context,
     sync_marketcheck_source_assets,
 )
+from app.services.ghl_lifecycle_service import GHLLifecycleService
 from app.services.matching_service import run_matching
 from app.services.ove_inventory_service import enqueue_ove_detail_request
+from app.services.photo_access_service import can_view_protected_vehicle_photos
 from app.services.profile_service import apply_full_profile, apply_quick_match, get_or_create_profile
 from app.services.return_service import initiate_return
 
@@ -35,21 +37,6 @@ CONDITION_REPORT_ELIGIBLE_FUNDING_STATES = {
     FundingState.CASH_BUYER,
 }
 
-SHOPPING_STAGE_ORDER = [
-    DealState.LEAD,
-    DealState.PRE_QUALIFYING,
-    DealState.QUALIFIED,
-    DealState.ENGAGED,
-    DealState.PROFILED,
-    DealState.MATCHING,
-    DealState.VEHICLE_SELECTED,
-    DealState.FUNDING,
-    DealState.ACQUISITION_PENDING,
-    DealState.ACQUIRED,
-    DealState.IN_TRANSIT,
-]
-
-
 def _normalize_vin(vin: str) -> str:
     normalized = vin.strip().upper()
     if len(normalized) != 17:
@@ -57,16 +44,27 @@ def _normalize_vin(vin: str) -> str:
     return normalized
 
 
-def _deal_stage_at_or_before(stage: DealState, target: DealState) -> bool:
-    try:
-        return SHOPPING_STAGE_ORDER.index(stage) <= SHOPPING_STAGE_ORDER.index(target)
-    except ValueError:
-        return False
+def _resolve_vehicle_or_404(db: Session, identifier: str) -> Vehicle:
+    """Accept either a VIN or a public slug and return the Vehicle row.
+
+    Raises 404 if nothing matches. Callers should use ``vehicle.vin`` as
+    the canonical key for any downstream lookups (garage items, deals,
+    etc.) since those tables key off the raw VIN.
+    """
+    from app.services.vin_slug_service import resolve_vehicle_identifier
+
+    vehicle = resolve_vehicle_identifier(db, identifier)
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found in inventory")
+    return vehicle
 
 
 def _condition_report_eligibility(deal, user) -> tuple[bool, str]:
-    # Check if user has manual pre-approval override
-    if user.is_preapproved:
+    # Check if user has manual pre-approval override. Guard against the
+    # helper being called with an unresolved FastAPI ``Depends`` marker
+    # (happens when route handlers are invoked directly without FastAPI
+    # resolving their default parameters, e.g. from tests).
+    if isinstance(user, User) and user.is_preapproved:
         # Check if pre-approval hasn't expired
         if user.preapproved_until and user.preapproved_until < datetime.now(UTC):
             return False, "Pre-approval has expired. Please contact support to renew."
@@ -135,15 +133,24 @@ def _serialize_garage_item(
     vehicle: Vehicle | None,
     *,
     deal_stage: DealState,
+    allow_protected_photos: bool,
 ) -> dict:
     if vehicle:
-        media = resolve_vehicle_card_media(db, vehicle=vehicle, deal_stage=deal_stage, deal_id=item.deal_id, is_garage_view=True)
+        media = resolve_vehicle_card_media(
+            db,
+            vehicle=vehicle,
+            deal_stage=deal_stage,
+            deal_id=item.deal_id,
+            is_garage_view=True,
+            allow_protected_photos=allow_protected_photos,
+        )
         display_context = resolve_vehicle_display_context(
             db,
             vehicle=vehicle,
             deal_stage=deal_stage,
             deal_id=item.deal_id,
             is_garage_view=True,
+            allow_protected_photos=allow_protected_photos,
         )
         thumbnail = media.thumbnail
         display_mode = media.display_mode.value
@@ -159,6 +166,7 @@ def _serialize_garage_item(
     return {
         "id": item.id,
         "vin": item.vin,
+        "public_slug": vehicle.public_slug if vehicle else None,
         "status": item.status,
         "source": item.source,
         "added_at": item.created_at,
@@ -246,6 +254,24 @@ def get_profile(
     )
 
 
+@router.get("/account-status")
+def get_account_status(
+    current_user: User = Depends(get_current_user),
+    current_deal=Depends(get_current_deal),
+) -> dict:
+    """Lightweight account-state lookup used by the frontend to decide
+    whether to reveal sensitive data like full VINs. Returns whether the
+    buyer is currently pre-qualified (either via manual admin override or
+    an active deal in a funding state that grants protected access)."""
+    is_preapproved = can_view_protected_vehicle_photos(user=current_user, deal=current_deal)
+    return ok(
+        {
+            "is_preapproved": is_preapproved,
+            "user_id": current_user.id,
+        }
+    )
+
+
 @router.put("/profile")
 def put_profile(
     payload: ProfileUpdateRequest,
@@ -257,22 +283,8 @@ def put_profile(
     apply_full_profile(profile, payload)
 
     if payload.is_complete:
-        if _deal_stage_at_or_before(current_deal.stage, DealState.PROFILED):
-            advance_deal_to(
-                db,
-                deal=current_deal,
-                target_state=DealState.PROFILED,
-                actor="buyer",
-                reason="full_profile_completed",
-            )
-        if _deal_stage_at_or_before(current_deal.stage, DealState.MATCHING):
-            advance_deal_to(
-                db,
-                deal=current_deal,
-                target_state=DealState.MATCHING,
-                actor="system",
-                reason="matching_run_triggered",
-            )
+        advance_deal_for_trigger(db, deal=current_deal, trigger="full_profile_completed")
+        advance_deal_for_trigger(db, deal=current_deal, trigger="matching_run_triggered")
         run_matching(db, profile=profile, deal=current_deal, limit=10)
 
     db.commit()
@@ -289,14 +301,7 @@ def post_quick_match(
     profile = get_or_create_profile(db, current_user.id)
     apply_quick_match(profile, payload)
 
-    if _deal_stage_at_or_before(current_deal.stage, DealState.MATCHING):
-        advance_deal_to(
-            db,
-            deal=current_deal,
-            target_state=DealState.MATCHING,
-            actor="system",
-            reason="quick_matching_run_triggered",
-        )
+    advance_deal_for_trigger(db, deal=current_deal, trigger="quick_matching_run_triggered")
 
     matches = run_matching(db, profile=profile, deal=current_deal, limit=10)
     db.commit()
@@ -355,6 +360,7 @@ def get_recommendations(
         [
             {
                 "vin": m.vin,
+                "public_slug": m.vehicle.public_slug if m.vehicle else None,
                 "match_score": m.match_score,
                 "explainability": m.explainability_text,
                 "market_retail": m.marketcheck_retail,
@@ -391,15 +397,12 @@ def select_recommendation(
 
     match.status = "selected"
     current_deal.selected_vin = vin
-    if current_deal.stage == DealState.MATCHING:
-        transition_deal_state(
-            db,
-            deal=current_deal,
-            new_state=DealState.VEHICLE_SELECTED,
-            actor="buyer",
-            reason="recommendation_selected",
-            payload={"vin": vin},
-        )
+    advance_deal_for_trigger(
+        db,
+        deal=current_deal,
+        trigger="recommendation_selected",
+        payload={"vin": vin},
+    )
 
     db.commit()
     return ok({"vin": vin, "status": "selected"})
@@ -432,6 +435,7 @@ def favorite_recommendation(
 @router.get("/garage")
 def get_garage(
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
     current_deal=Depends(get_current_deal),
 ) -> dict:
     garage_items = db.scalars(
@@ -441,25 +445,30 @@ def get_garage(
         .order_by(GarageItem.updated_at.desc())
     ).all()
     vehicles = {v.vin: v for v in db.scalars(select(Vehicle).where(Vehicle.vin.in_([item.vin for item in garage_items]))).all()}
+    allow_protected_photos = can_view_protected_vehicle_photos(user=current_user, deal=current_deal)
     return ok(
         [
-            _serialize_garage_item(db, item, vehicles.get(item.vin), deal_stage=current_deal.stage)
+            _serialize_garage_item(
+                db,
+                item,
+                vehicles.get(item.vin),
+                deal_stage=current_deal.stage,
+                allow_protected_photos=allow_protected_photos,
+            )
             for item in garage_items
         ]
     )
 
 
-@router.post("/garage/{vin}")
+@router.post("/garage/{identifier}")
 def add_to_garage(
-    vin: str,
+    identifier: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     current_deal=Depends(get_current_deal),
 ) -> dict:
-    normalized_vin = _normalize_vin(vin)
-    vehicle = db.get(Vehicle, normalized_vin)
-    if not vehicle:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found in inventory")
+    vehicle = _resolve_vehicle_or_404(db, identifier)
+    normalized_vin = vehicle.vin
 
     item = db.scalar(
         select(GarageItem).where(GarageItem.deal_id == current_deal.id, GarageItem.vin == normalized_vin)
@@ -569,27 +578,31 @@ def add_to_garage(
     db.refresh(item)
     return ok(
         {
-            "garage_item": _serialize_garage_item(db, item, vehicle, deal_stage=current_deal.stage),
+            "garage_item": _serialize_garage_item(
+                db,
+                item,
+                vehicle,
+                deal_stage=current_deal.stage,
+                allow_protected_photos=can_view_protected_vehicle_photos(user=current_user, deal=current_deal),
+            ),
             "dealer_photos_fetched": mc_images_fetched,
         }
     )
 
 
-@router.post("/vehicles/{vin}/condition-report-request")
+@router.post("/vehicles/{identifier}/condition-report-request")
 def request_vehicle_condition_report(
-    vin: str,
+    identifier: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     current_deal=Depends(get_current_deal),
 ) -> dict:
-    normalized_vin = _normalize_vin(vin)
     eligible, reason = _condition_report_eligibility(current_deal, current_user)
     if not eligible:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
 
-    vehicle = db.get(Vehicle, normalized_vin)
-    if not vehicle:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found in inventory")
+    vehicle = _resolve_vehicle_or_404(db, identifier)
+    normalized_vin = vehicle.vin
     if vehicle.source_type not in {InventorySourceType.OVE.value, InventorySourceType.AUCTION.value}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -650,17 +663,26 @@ def request_vehicle_condition_report(
             "source_platform": source_platform.value,
         },
     )
+    try:
+        GHLLifecycleService().record_condition_report_requested(
+            user=current_user,
+            deal=current_deal,
+            vin=normalized_vin,
+        )
+    except Exception:
+        pass
     db.commit()
     return ok(response)
 
 
-@router.delete("/garage/{vin}")
+@router.delete("/garage/{identifier}")
 def remove_from_garage(
-    vin: str,
+    identifier: str,
     db: Session = Depends(get_db),
     current_deal=Depends(get_current_deal),
 ) -> dict:
-    normalized_vin = _normalize_vin(vin)
+    vehicle = _resolve_vehicle_or_404(db, identifier)
+    normalized_vin = vehicle.vin
     item = db.scalar(
         select(GarageItem).where(GarageItem.deal_id == current_deal.id, GarageItem.vin == normalized_vin)
     )
@@ -672,17 +694,15 @@ def remove_from_garage(
     return ok({"vin": normalized_vin, "status": "removed"})
 
 
-@router.post("/garage/{vin}/acquire")
+@router.post("/garage/{identifier}/acquire")
 def start_garage_acquisition(
-    vin: str,
+    identifier: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
     current_deal=Depends(get_current_deal),
 ) -> dict:
-    normalized_vin = _normalize_vin(vin)
-    vehicle = db.get(Vehicle, normalized_vin)
-    if not vehicle:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found in inventory")
+    vehicle = _resolve_vehicle_or_404(db, identifier)
+    normalized_vin = vehicle.vin
 
     item = db.scalar(
         select(GarageItem).where(GarageItem.deal_id == current_deal.id, GarageItem.vin == normalized_vin)
@@ -720,22 +740,12 @@ def start_garage_acquisition(
 
     current_deal.selected_vin = normalized_vin
 
-    if current_deal.stage in {
-        DealState.LEAD,
-        DealState.PRE_QUALIFYING,
-        DealState.QUALIFIED,
-        DealState.ENGAGED,
-        DealState.PROFILED,
-        DealState.MATCHING,
-    }:
-        advance_deal_to(
-            db,
-            deal=current_deal,
-            target_state=DealState.VEHICLE_SELECTED,
-            actor="buyer",
-            reason="garage_vehicle_selected",
-            payload={"vin": normalized_vin},
-        )
+    advance_deal_for_trigger(
+        db,
+        deal=current_deal,
+        trigger="garage_vehicle_selected",
+        payload={"vin": normalized_vin},
+    )
 
     ensure_tier3_processing_job(
         db,
@@ -765,12 +775,27 @@ def start_garage_acquisition(
                 **ove_refresh,
             },
         )
+    try:
+        GHLLifecycleService().record_garage_acquisition_started(
+            user=current_user,
+            deal=current_deal,
+            vin=vehicle.vin,
+            started_at=item.acquisition_started_at,
+        )
+    except Exception:
+        pass
 
     db.commit()
     db.refresh(item)
     return ok(
         {
-            "garage_item": _serialize_garage_item(db, item, vehicle, deal_stage=current_deal.stage),
+            "garage_item": _serialize_garage_item(
+                db,
+                item,
+                vehicle,
+                deal_stage=current_deal.stage,
+                allow_protected_photos=can_view_protected_vehicle_photos(user=current_user, deal=current_deal),
+            ),
             "deal": {
                 "id": current_deal.id,
                 "stage": current_deal.stage.value,

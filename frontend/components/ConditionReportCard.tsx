@@ -28,7 +28,6 @@ type ConditionReportCardProps = {
   report?: Record<string, unknown> | null;
   grade?: string | null;
   sellerComments?: string | null;
-  auctionHouse?: string | null;
   pickupLocation?: string | null;
   inventoryStatus?: string | null;
   mmr?: number | null;
@@ -39,33 +38,38 @@ export function ConditionReportCard({
   report,
   grade,
   sellerComments,
-  auctionHouse,
   pickupLocation,
   inventoryStatus,
   mmr,
   title = "VCH Condition Report",
 }: ConditionReportCardProps) {
   const normalizedReport = report || {};
-  const announcements = toStringList(normalizedReport.announcements);
-  const problemHighlights = toStringList(normalizedReport.problem_highlights);
+  const announcements = toStringList(normalizedReport.announcements).filter((item) => !containsMarketplaceMention(item));
+  const problemHighlights = toStringList(normalizedReport.problem_highlights).filter((item) => !containsMarketplaceMention(item));
+  const equipmentFeatures = toStringList(normalizedReport.equipment_features).filter((item) => !containsMarketplaceMention(item));
+  const highValueOptions = Array.isArray(normalizedReport.high_value_options) ? normalizedReport.high_value_options as Array<Record<string, unknown>> : [];
   const damageItems = Array.isArray(normalizedReport.damage_items) ? (normalizedReport.damage_items as DamageItem[]) : [];
   const damageSummary = normalizedReport.damage_summary as DamageSummary | undefined;
   const vehicleHistory = normalizedReport.vehicle_history as VehicleHistory | undefined;
-  const aiSummary = typeof normalizedReport.ai_summary === "string" ? normalizedReport.ai_summary : null;
+  const aiSummary = typeof normalizedReport.ai_summary === "string" && !containsMarketplaceMention(normalizedReport.ai_summary)
+    ? normalizedReport.ai_summary
+    : null;
+  const sanitizedSellerComments = sanitizeMarketplaceCopy(sellerComments);
+  const locationBadge = formatPickupLocation(pickupLocation);
 
   // Primitive highlights — exclude keys that are rendered as dedicated sections
-  const RICH_KEYS = new Set(["announcements", "remarks", "seller_comments_items", "problem_highlights", "damage_items", "damage_summary", "tire_depths", "vehicle_history", "severity_summary", "ai_summary", "metadata", "raw_text"]);
-  const highlights = collectPrimitiveEntries(normalizedReport).filter(([, , key]) => !RICH_KEYS.has(key));
+  const RICH_KEYS = new Set(["announcements", "remarks", "seller_comments_items", "problem_highlights", "damage_items", "damage_summary", "tire_depths", "vehicle_history", "severity_summary", "ai_summary", "metadata", "raw_text", "equipment_features", "installed_equipment", "high_value_options"]);
+  const highlights = collectPrimitiveEntries(normalizedReport)
+    .filter(([, value, key]) => !RICH_KEYS.has(key) && !containsMarketplaceMention(value));
 
-  const hasAnyContent = announcements.length > 0 || problemHighlights.length > 0 || highlights.length > 0 || sellerComments || damageItems.length > 0 || vehicleHistory || aiSummary;
+  const hasAnyContent = announcements.length > 0 || problemHighlights.length > 0 || highlights.length > 0 || sanitizedSellerComments || damageItems.length > 0 || vehicleHistory || aiSummary || equipmentFeatures.length > 0 || highValueOptions.length > 0;
 
   return (
     <article className="card">
       <h3>{title}</h3>
       <div className="inventory-feature-grid" style={{ marginBottom: 12 }}>
         {grade ? <span className="badge">Grade {grade}</span> : null}
-        {auctionHouse ? <span className="badge">{auctionHouse}</span> : null}
-        {pickupLocation ? <span className="badge">{pickupLocation}</span> : null}
+        {locationBadge ? <span className="badge">{locationBadge}</span> : null}
         {inventoryStatus ? <span className="badge">Status {inventoryStatus}</span> : null}
         {mmr !== null && mmr !== undefined ? <span className="badge">MMR {formatMoney(mmr)}</span> : null}
         {damageSummary?.structural_issue && <span className="badge" style={{ background: "#e74c3c", color: "#fff" }}>Structural Issue</span>}
@@ -87,7 +91,7 @@ export function ConditionReportCard({
       {/* AI summary */}
       {aiSummary && <p style={{ marginTop: 0, fontSize: 13, color: "#ccc" }}>{aiSummary}</p>}
 
-      {sellerComments ? <p style={{ marginTop: 0 }}>Seller Comments: {sellerComments}</p> : null}
+      {sanitizedSellerComments ? <p style={{ marginTop: 0 }}>Seller Comments: {sanitizedSellerComments}</p> : null}
 
       {announcements.length > 0 && (
         <>
@@ -95,6 +99,20 @@ export function ConditionReportCard({
           <ul style={{ marginTop: 0, paddingLeft: 20 }}>
             {announcements.map((item) => <li key={item}>{item}</li>)}
           </ul>
+        </>
+      )}
+
+      {(equipmentFeatures.length > 0 || highValueOptions.length > 0) && (
+        <>
+          <h4 style={{ marginBottom: 8 }}>{equipmentFeatures.length > 0 ? "Equipment & Features" : "High Value Options"}</h4>
+          <div className="inventory-feature-grid" style={{ gap: 6 }}>
+            {equipmentFeatures.slice(0, 12).map((item) => <span className="badge" key={item}>{item}</span>)}
+            {highValueOptions.slice(0, 8).map((item, index) => {
+              const label = typeof item.primary_description === "string" ? item.primary_description : null;
+              if (!label) return null;
+              return <span className="badge" key={`${label}-${index}`}>{label}</span>;
+            })}
+          </div>
         </>
       )}
 
@@ -144,6 +162,34 @@ export function ConditionReportCard({
       ) : null}
     </article>
   );
+}
+
+function containsMarketplaceMention(value: string | null | undefined): boolean {
+  const text = (value || "").toLowerCase();
+  return text.includes("manheim");
+}
+
+function sanitizeMarketplaceCopy(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const sentences = value
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .filter((sentence) => !containsMarketplaceMention(sentence));
+  const sanitized = sentences.join(" ").trim();
+  return sanitized || null;
+}
+
+function formatPickupLocation(value: string | null | undefined): string | null {
+  const text = (value || "").trim();
+  if (!text || containsMarketplaceMention(text)) return null;
+  const match = text.match(/^([A-Z]{2})\s*-\s*(.+)$/);
+  if (!match) return text;
+  const state = match[1];
+  const city = match[2]
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+  return `${city}, ${state}`;
 }
 
 function collectPrimitiveEntries(report: Record<string, unknown>): Array<[string, string, string]> {

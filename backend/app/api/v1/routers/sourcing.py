@@ -7,7 +7,7 @@ from app.core.responses import ok
 from app.db.session import get_db
 from app.models.entities import AcquisitionOrder, Deal
 from app.services.audit_service import log_event
-from app.services.deal_service import transition_deal_state
+from app.services.deal_service import advance_deal_for_trigger
 
 router = APIRouter(dependencies=[Depends(require_service_token)])
 
@@ -59,12 +59,10 @@ def confirm_acquisition(deal_id: str, payload: dict, db: Session = Depends(get_d
     if deal.stage != DealState.ACQUISITION_PENDING:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Deal not in acquisition pending")
 
-    transition_deal_state(
+    advance_deal_for_trigger(
         db,
         deal=deal,
-        new_state=DealState.ACQUIRED,
-        actor="agent",
-        reason="acquisition_confirmed",
+        trigger="acquisition_confirmed",
         payload=payload,
     )
     log_event(db, deal_id=deal.id, event_type="acquisition_confirmed", actor="agent", payload=payload)
