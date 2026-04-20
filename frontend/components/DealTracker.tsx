@@ -15,6 +15,10 @@ const BASE_FLOW = [
   "DELIVERED",
 ];
 
+const DISPLAY_NAMES: Record<string, string> = {
+  FUNDING: "FINANCE",
+};
+
 const STAGES = [
   ...BASE_FLOW,
   "RETURN_PENDING",
@@ -63,7 +67,7 @@ export function DealTracker({ stage }: { stage: string }) {
         return (
           <div key={item} className={`stage-pill stage-pill-${status}`}>
             <span className="stage-pill-status">{stageStatusLabel(status)}</span>
-            <strong>{item.replaceAll("_", " ")}</strong>
+            <strong>{DISPLAY_NAMES[item] || item.replaceAll("_", " ")}</strong>
           </div>
         );
       })}

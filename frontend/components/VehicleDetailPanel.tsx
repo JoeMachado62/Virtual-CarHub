@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
+import { AuthModal } from "@/components/AuthModal";
 import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
 import { AuthState, clearAuthState, loadValidAuthState } from "@/lib/auth";
@@ -29,6 +30,11 @@ type VehicleDisplayContext = {
   hero_image?: string | null;
   gallery_images?: string[];
   marketing_images?: string[];
+  reference_images?: string[];
+  reference_detail_images?: string[];
+  reference_provider?: string | null;
+  has_reference_stock?: boolean;
+  reference_color_exact?: boolean;
   imagin_images?: string[];
   spin_images?: string[];
   source_images?: string[];
@@ -299,6 +305,8 @@ function CategoryCard({ title, icon, items, color }: {
 
 export function VehicleDetailPanel({ vin }: { vin: string }) {
   const [auth, setAuth] = useState<AuthState | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"garage" | "acquire" | "cr" | null>(null);
   const [isPreapproved, setIsPreapproved] = useState(false);
   const [inGarage, setInGarage] = useState(false);
   const [vehicle, setVehicle] = useState<VehicleDetail | null>(null);
@@ -547,10 +555,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     setPhotoModalIndex((current) => getNextIndex(current ?? 0, displayImages.length));
   }
 
-  async function addToGarage() {
-    if (!auth?.accessToken) {
-      setActionError("Sign in from VInventory before saving vehicles to My Garage.");
-      setActionMessage(null);
+  async function addToGarage(tokenOverride?: string) {
+    const token = tokenOverride || auth?.accessToken;
+    if (!token) {
+      setPendingAction("garage");
+      setShowAuthModal(true);
       return;
     }
     setActionLoading("garage");
@@ -558,7 +567,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     setActionMessage(null);
     const response = await apiFetch<{
       ove_detail_refresh?: { queued?: boolean; deduplicated?: boolean } | null;
-    }>(`/me/garage/${encodeURIComponent(currentVehicle.vin)}`, { method: "POST" }, auth.accessToken);
+    }>(`/me/garage/${encodeURIComponent(currentVehicle.vin)}`, { method: "POST" }, token);
     if (handleUnauthorized(response)) { setActionLoading(null); return; }
     if (response.status !== "ok") {
       setActionError(response.error?.message || "Unable to save vehicle to garage.");
@@ -576,7 +585,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     const refreshed = await apiFetch<VehicleDetail>(
       `/inventory/${encodeURIComponent(currentVehicle.vin)}`,
       undefined,
-      auth.accessToken,
+      token,
     );
     if (refreshed.status === "ok") {
       setVehicle(refreshed.data);
@@ -585,10 +594,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     }
   }
 
-  async function startAcquisition() {
-    if (!auth?.accessToken) {
-      setActionError("Sign in from VInventory before starting acquisition.");
-      setActionMessage(null);
+  async function startAcquisition(tokenOverride?: string) {
+    const token = tokenOverride || auth?.accessToken;
+    if (!token) {
+      setPendingAction("acquire");
+      setShowAuthModal(true);
       return;
     }
     setActionLoading("acquire");
@@ -597,7 +607,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     const response = await apiFetch(
       `/me/garage/${encodeURIComponent(currentVehicle.vin)}/acquire`,
       { method: "POST" },
-      auth.accessToken,
+      token,
     );
     if (handleUnauthorized(response)) { setActionLoading(null); return; }
     if (response.status !== "ok") {
@@ -610,10 +620,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     window.location.href = `/dashboard?vin=${encodeURIComponent(currentVehicle.vin)}`;
   }
 
-  async function requestConditionReport() {
-    if (!auth?.accessToken) {
-      setActionError("Sign in from VInventory before requesting a condition report.");
-      setActionMessage(null);
+  async function requestConditionReport(tokenOverride?: string) {
+    const token = tokenOverride || auth?.accessToken;
+    if (!token) {
+      setPendingAction("cr");
+      setShowAuthModal(true);
       return;
     }
     setActionLoading("condition-report");
@@ -628,7 +639,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     }>(
       `/me/vehicles/${encodeURIComponent(currentVehicle.vin)}/condition-report-request`,
       { method: "POST" },
-      auth.accessToken,
+      token,
     );
     if (handleUnauthorized(response)) { setActionLoading(null); return; }
     if (response.status !== "ok") {
@@ -653,7 +664,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
 
   const featureLimit = showAllFeatures ? expandedFeatureBadges.length : 24;
   const isAuction = vehicle.source_type === "ove" || vehicle.source_type === "auction";
-  const sellerSummary = ((vehicle.seller_comments || "").trim()) || buildFallbackSellerSummary(vehicle);
+  const sellerSummary = sanitizePublicText((vehicle.seller_comments || "").trim()) || buildFallbackSellerSummary(vehicle);
 
   return (
     <div className="vdp-wrap">
@@ -820,17 +831,17 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 {vehicle.is_in_garage ? (
                   <button className="vdp-action-btn vdp-action-primary" disabled>In My Garage</button>
                 ) : (
-                  <button className="vdp-action-btn vdp-action-primary" onClick={addToGarage} disabled={actionLoading !== null}>
+                  <button className="vdp-action-btn vdp-action-primary" onClick={() => addToGarage()} disabled={actionLoading !== null}>
                     {actionLoading === "garage" ? "Saving..." : "Save to My Garage"}
                   </button>
                 )}
 
-                <button className="vdp-action-btn vdp-action-dark" onClick={startAcquisition} disabled={actionLoading !== null}>
+                <button className="vdp-action-btn vdp-action-dark" onClick={() => startAcquisition()} disabled={actionLoading !== null}>
                   {actionLoading === "acquire" ? "Starting..." : "Start Acquisition"}
                 </button>
 
                 {!vehicle.has_inspection_report && reportStatus !== "pending" ? (
-                  <button className="vdp-action-btn vdp-action-accent" onClick={requestConditionReport} disabled={actionLoading !== null}>
+                  <button className="vdp-action-btn vdp-action-accent" onClick={() => requestConditionReport()} disabled={actionLoading !== null}>
                     {actionLoading === "condition-report" ? "Requesting..." : "Order CR"}
                   </button>
                 ) : null}
@@ -899,7 +910,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                         {[vehicle.city, vehicle.location_state].filter(Boolean).join(", ")}
                       </span>
                     ) : null}
-                    {vehicle.dealer_name ? <span className="badge">{vehicle.dealer_name}</span> : null}
+                    {vehicle.dealer_name && !isAuction ? <span className="badge">{vehicle.dealer_name}</span> : null}
                     {vehicle.source_label ? <span className="badge">{toPublicSourceLabel(vehicle.source_label, vehicle.source_type)}</span> : null}
                   </div>
                 </div>
@@ -912,11 +923,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 <h3>Additional Vehicle Photos Available</h3>
                 <p>{vehicle.protected_photo_access_message || "Sign in and complete buyer pre-qualification to unlock actual vehicle photos."}</p>
                 {!auth?.accessToken ? (
-                  <button className="vdp-action-btn vdp-action-primary" onClick={addToGarage} disabled={actionLoading !== null}>
+                  <button className="vdp-action-btn vdp-action-primary" onClick={() => addToGarage()} disabled={actionLoading !== null}>
                     {actionLoading === "garage" ? "Saving..." : "Save to My Garage"}
                   </button>
                 ) : !vehicle.can_view_protected_photos ? (
-                  <button className="vdp-action-btn vdp-action-dark" onClick={startAcquisition} disabled={actionLoading !== null}>
+                  <button className="vdp-action-btn vdp-action-dark" onClick={() => startAcquisition()} disabled={actionLoading !== null}>
                     {actionLoading === "acquire" ? "Starting..." : "Continue Qualification"}
                   </button>
                 ) : null}
@@ -943,7 +954,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                   <ConditionReportCard
                     report={vehicle.condition_report || conditionReport}
                     grade={vehicle.condition_report_grade || vehicle.condition_grade}
-                    sellerComments={vehicle.seller_comments}
+                    sellerComments={sanitizePublicText(vehicle.seller_comments)}
                     pickupLocation={vehicle.pickup_location}
                     inventoryStatus={vehicle.inventory_status || vehicle.inventory_label}
                     mmr={vehicle.mmr}
@@ -1086,6 +1097,21 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
             </p>
           </section>
         </div>
+      ) : null}
+
+      {showAuthModal ? (
+        <AuthModal
+          onClose={() => { setShowAuthModal(false); setPendingAction(null); }}
+          onAuthenticated={(nextAuth) => {
+            setAuth(nextAuth);
+            setShowAuthModal(false);
+            const action = pendingAction;
+            setPendingAction(null);
+            if (action === "garage") addToGarage(nextAuth.accessToken);
+            else if (action === "acquire") startAcquisition(nextAuth.accessToken);
+            else if (action === "cr") requestConditionReport(nextAuth.accessToken);
+          }}
+        />
       ) : null}
     </div>
   );
@@ -1454,6 +1480,28 @@ function buildExpandedFeatureBadges(vehicle: VehicleDetail, structuredFeatures: 
   return merged;
 }
 
+/**
+ * Strip phone numbers, emails, URLs, and auction house names from text
+ * shown to public buyers to prevent leaking wholesale contact details.
+ */
+function sanitizePublicText(text: string | null | undefined): string {
+  if (!text) return "";
+  let cleaned = text;
+  // Phone numbers (various formats)
+  cleaned = cleaned.replace(/(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g, "");
+  // Email addresses
+  cleaned = cleaned.replace(/[\w.+-]+@[\w.-]+\.\w{2,}/g, "");
+  // URLs
+  cleaned = cleaned.replace(/https?:\/\/[^\s,)]+/gi, "");
+  cleaned = cleaned.replace(/www\.[^\s,)]+/gi, "");
+  // Auction house / wholesale marketplace names
+  const auctionNames = /\b(Manheim|ADESA|TradeRev|SmartAuction|Smart Auction|Ally\s+Smart\s*Auction|OPENLANE|OVE\.com|ACV\s+Auctions|ACV|BacklotCars|Backlot\s+Cars)\b/gi;
+  cleaned = cleaned.replace(auctionNames, "");
+  // Collapse leftover whitespace and punctuation artifacts
+  cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
+  return cleaned;
+}
+
 function buildFallbackSellerSummary(vehicle: VehicleDetail): string {
   const parts: string[] = [];
   const title = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
@@ -1595,6 +1643,13 @@ function resolveDisplayImages(vehicle: VehicleDetail | null | undefined): string
   const ctx = vehicle.display_context;
   const hero = resolveHeroImage(vehicle);
   const supplemental = vehicle.supplemental_photo_links || vehicle.photo_links_cached || vehicle.photo_links || [];
+  const referenceDetail = ctx?.reference_detail_images || [];
+  if (referenceDetail.length) {
+    const base = ctx?.gallery_images || vehicle.display_images || [];
+    const seen = new Set(referenceDetail);
+    const merged = [hero, ...base.filter((url: string) => !seen.has(url)), ...referenceDetail, ...supplemental];
+    return Array.from(new Set(merged.filter(Boolean) as string[]));
+  }
   const extStills = ctx?.evox_exterior_stills || [];
   const intStills = ctx?.evox_interior_stills || [];
   const intPano = ctx?.evox_interior_pano || [];

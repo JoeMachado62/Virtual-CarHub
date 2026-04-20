@@ -8,8 +8,20 @@ type AuctionSnapshotCardProps = {
 export function AuctionSnapshotCard({ snapshot, title = "Auction Listing Snapshot" }: AuctionSnapshotCardProps) {
   const data = snapshot || {};
   const badges = toObjectList(data.badges);
-  const heroFacts = toObjectList(data.hero_facts);
-  const icons = toObjectList(data.icons);
+  const heroFacts = toObjectList(data.hero_facts).filter((item) => {
+    // Filter out hero facts whose value is a JSON blob or extremely long raw text
+    const val = typeof item.value === "string" ? item.value.trim() : "";
+    if (val.startsWith("{") || val.startsWith("[") || val.startsWith("<")) return false;
+    if (val.length > 200) return false;
+    return true;
+  });
+  const icons = toObjectList(data.icons).filter((item) => {
+    // Filter out icons that are SVG/image assets with no useful textual content
+    if (item.kind === "svg" || item.kind === "image") return false;
+    const name = typeof item.name === "string" ? item.name.trim() : "";
+    const val = typeof item.value === "string" ? item.value.trim() : "";
+    return Boolean(name || val);
+  });
   const sections = toObjectList(data.sections);
 
   if (
@@ -119,7 +131,13 @@ function describeSectionItem(value: unknown): string {
 }
 
 function toDisplayText(value: unknown, fallback: string): string {
-  if (typeof value === "string" && value.trim()) return value;
+  if (typeof value === "string" && value.trim()) {
+    const text = value.trim();
+    // Reject raw JSON blobs, SVG/HTML markup, or excessively long values
+    if (text.startsWith("{") || text.startsWith("[") || text.startsWith("<")) return fallback;
+    if (text.length > 200) return text.slice(0, 200) + "\u2026";
+    return text;
+  }
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   return fallback;
 }

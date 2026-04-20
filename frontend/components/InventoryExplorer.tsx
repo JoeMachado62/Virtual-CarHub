@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
+import { AuthModal } from "@/components/AuthModal";
 import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
 import { AuthState, clearAuthState, loadValidAuthState } from "@/lib/auth";
@@ -28,6 +29,12 @@ type VehicleDisplayContext = {
   hero_image?: string | null;
   gallery_images?: string[];
   marketing_images?: string[];
+  reference_images?: string[];
+  reference_detail_images?: string[];
+  reference_provider?: string | null;
+  has_reference_stock?: boolean;
+  reference_pending?: boolean;
+  reference_color_exact?: boolean;
   imagin_images?: string[];
   spin_images?: string[];
   source_images?: string[];
@@ -66,6 +73,7 @@ type InventoryItem = {
   source_label?: string | null;
   source_url?: string | null;
   thumbnail?: string | null;
+  reference_pending?: boolean;
   evox_pending?: boolean;
   dealer_photos_gated?: boolean;
   gated_photo_count?: number;
@@ -340,6 +348,9 @@ type InventoryExplorerProps = {
 export function InventoryExplorer({ initialMake, initialModel, initialTrim }: InventoryExplorerProps = {}) {
   const searchParams = useSearchParams();
   const [auth, setAuth] = useState<AuthState | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [pendingActionType, setPendingActionType] = useState<"garage" | "remove" | "acquire" | "cr" | null>(null);
+  const [pendingActionVin, setPendingActionVin] = useState<string | null>(null);
 
   const [filters, setFilters] = useState<FilterState>(INITIAL_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<FilterState>(INITIAL_FILTERS);
@@ -500,33 +511,33 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     void loadInventory(appliedFilters, page);
   }, [filtersReady, appliedFilters, page]);
 
-  // EVOX lazy-fetch: upgrade Imagin card images to EVOX color-accurate images
+  // Lazy-fetch factory reference thumbnails once rows land.
   useEffect(() => {
-    const pendingVins = rows.filter((r) => r.evox_pending).map((r) => r.vin);
+    const pendingVins = rows.filter((r) => r.reference_pending || r.evox_pending).map((r) => r.vin);
     if (pendingVins.length === 0) return;
 
     let cancelled = false;
-    async function fetchEvoxBatch() {
+    async function fetchReferenceBatch() {
       try {
         const resp = await apiFetch<{ results: Record<string, { hero_url: string; gallery_urls: string[] }> }>(
-          "/inventory/evox-batch",
+          "/inventory/reference-images/batch",
           { method: "POST", body: JSON.stringify({ vins: pendingVins.slice(0, 10) }) },
         );
         if (cancelled || resp.status !== "ok" || !resp.data?.results) return;
         const results = resp.data.results;
         setRows((prev) =>
           prev.map((item) => {
-            const evox = results[item.vin];
-            if (!evox) return item;
-            return { ...item, thumbnail: evox.hero_url, evox_pending: false };
+            const reference = results[item.vin];
+            if (!reference) return item;
+            return { ...item, thumbnail: reference.hero_url, reference_pending: false, evox_pending: false };
           }),
         );
       } catch {
-        // Non-critical — Imagin images remain displayed
+        // Non-critical: keep the existing thumbnail if the reference fetch fails.
       }
     }
 
-    void fetchEvoxBatch();
+    void fetchReferenceBatch();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows.map((r) => r.vin).join(",")]);
@@ -767,17 +778,18 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     setSelectedImage(null);
   }
 
-  function requireAuthForGarageAction(): AuthState | null {
+  function requireAuth(actionType: "garage" | "remove" | "acquire" | "cr", vin: string): AuthState | null {
     if (!auth?.accessToken) {
-      setGarageError("Sign in to save vehicles to your account-wide garage.");
-      setGarageNotice(null);
+      setPendingActionType(actionType);
+      setPendingActionVin(vin);
+      setShowAuthModal(true);
       return null;
     }
     return auth;
   }
 
-  async function addToGarage(vin: string) {
-    const session = requireAuthForGarageAction();
+  async function addToGarage(vin: string, sessionOverride?: AuthState) {
+    const session = sessionOverride || requireAuth("garage", vin);
     if (!session) return;
     setGarageActionVin(vin);
     setGarageError(null);
@@ -819,8 +831,8 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     setGarageActionVin(null);
   }
 
-  async function removeFromGarage(vin: string) {
-    const session = requireAuthForGarageAction();
+  async function removeFromGarage(vin: string, sessionOverride?: AuthState) {
+    const session = sessionOverride || requireAuth("remove", vin);
     if (!session) return;
     setGarageActionVin(vin);
     setGarageError(null);
@@ -843,8 +855,8 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     setGarageActionVin(null);
   }
 
-  async function startAcquisition(vin: string) {
-    const session = requireAuthForGarageAction();
+  async function startAcquisition(vin: string, sessionOverride?: AuthState) {
+    const session = sessionOverride || requireAuth("acquire", vin);
     if (!session) return;
     setGarageActionVin(vin);
     setGarageError(null);
@@ -882,8 +894,8 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     window.location.href = `/dashboard?vin=${encodeURIComponent(vin)}`;
   }
 
-  async function requestConditionReport(vin: string) {
-    const session = requireAuthForGarageAction();
+  async function requestConditionReport(vin: string, sessionOverride?: AuthState) {
+    const session = sessionOverride || requireAuth("cr", vin);
     if (!session) return;
     setGarageActionVin(vin);
     setGarageError(null);
@@ -1479,12 +1491,12 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
 
                   {selectedVehicle.display_context?.disclaimer ? (
                     <div style={{ display: "grid", gap: 8 }}>
-                      {(selectedVehicle.display_context?.has_imagin_stock ||
+                      {(selectedVehicle.display_context?.has_reference_stock ||
                         selectedVehicle.display_context?.inspection_images?.length) ? (
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          {selectedVehicle.display_context?.has_imagin_stock ? (
+                          {selectedVehicle.display_context?.has_reference_stock ? (
                             <span className="badge">
-                              Studio images {selectedVehicle.display_context?.imagin_images?.length || 0}
+                              Factory reference images {selectedVehicle.display_context?.reference_images?.length || 0}
                             </span>
                           ) : null}
                           {selectedVehicle.display_context?.spin_images?.length ? (
@@ -1566,6 +1578,26 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
             ) : null}
           </section>
         </div>
+      ) : null}
+
+      {showAuthModal ? (
+        <AuthModal
+          onClose={() => { setShowAuthModal(false); setPendingActionType(null); setPendingActionVin(null); }}
+          onAuthenticated={(nextAuth) => {
+            setAuth(nextAuth);
+            setShowAuthModal(false);
+            const actionType = pendingActionType;
+            const actionVin = pendingActionVin;
+            setPendingActionType(null);
+            setPendingActionVin(null);
+            if (actionType && actionVin) {
+              if (actionType === "garage") addToGarage(actionVin, nextAuth);
+              else if (actionType === "remove") removeFromGarage(actionVin, nextAuth);
+              else if (actionType === "acquire") startAcquisition(actionVin, nextAuth);
+              else if (actionType === "cr") requestConditionReport(actionVin, nextAuth);
+            }
+          }}
+        />
       ) : null}
     </>
   );

@@ -24,6 +24,17 @@ type VehicleHistory = {
   accidents?: number;
 };
 
+type AutoCheckReport = {
+  scrape_status?: string;
+  autocheck_score?: number | null;
+  owner_count?: number | null;
+  accident_count?: number | null;
+  title_brand_check?: string | null;
+  odometer_check?: string | null;
+  accident_check?: string | null;
+  vehicle_use?: string | null;
+};
+
 type ConditionReportCardProps = {
   report?: Record<string, unknown> | null;
   grade?: string | null;
@@ -51,6 +62,7 @@ export function ConditionReportCard({
   const damageItems = Array.isArray(normalizedReport.damage_items) ? (normalizedReport.damage_items as DamageItem[]) : [];
   const damageSummary = normalizedReport.damage_summary as DamageSummary | undefined;
   const vehicleHistory = normalizedReport.vehicle_history as VehicleHistory | undefined;
+  const autoCheck = normalizeAutoCheck(normalizedReport.autocheck);
   const aiSummary = typeof normalizedReport.ai_summary === "string" && !containsMarketplaceMention(normalizedReport.ai_summary)
     ? normalizedReport.ai_summary
     : null;
@@ -58,11 +70,30 @@ export function ConditionReportCard({
   const locationBadge = formatPickupLocation(pickupLocation);
 
   // Primitive highlights — exclude keys that are rendered as dedicated sections
-  const RICH_KEYS = new Set(["announcements", "remarks", "seller_comments_items", "problem_highlights", "damage_items", "damage_summary", "tire_depths", "vehicle_history", "severity_summary", "ai_summary", "metadata", "raw_text", "equipment_features", "installed_equipment", "high_value_options"]);
+  const RICH_KEYS = new Set([
+    "announcements", "remarks", "seller_comments_items", "problem_highlights",
+    "damage_items", "damage_summary", "tire_depths", "vehicle_history",
+    "severity_summary", "ai_summary", "metadata", "raw_text",
+    "equipment_features", "installed_equipment", "high_value_options",
+    "autocheck", "inspection", "mechanical_findings", "diagnostic_codes",
+    // Suppress fields already shown on the VDP or redundant with other CR sections
+    "exterior_color", "interior_color", "exterior_color_oem_name",
+    "exterior_paint_code", "exterior_color_rgb", "has_prior_paint",
+    "overall_grade", "paint_condition", "title_status", "title_state", "title_branding",
+  ]);
   const highlights = collectPrimitiveEntries(normalizedReport)
     .filter(([, value, key]) => !RICH_KEYS.has(key) && !containsMarketplaceMention(value));
 
-  const hasAnyContent = announcements.length > 0 || problemHighlights.length > 0 || highlights.length > 0 || sanitizedSellerComments || damageItems.length > 0 || vehicleHistory || aiSummary || equipmentFeatures.length > 0 || highValueOptions.length > 0;
+  // Inspection issue counts from structured NAAA inspection data
+  const inspection = normalizedReport.inspection as Record<string, { label: string; issue_count: number }> | undefined;
+  const inspectionSections = inspection
+    ? ["drivability", "exterior", "interior", "mechanical", "tires"]
+        .map((id) => inspection[id])
+        .filter(Boolean)
+    : [];
+  const totalIssues = inspectionSections.reduce((sum, s) => sum + (s.issue_count || 0), 0);
+
+  const hasAnyContent = announcements.length > 0 || problemHighlights.length > 0 || highlights.length > 0 || sanitizedSellerComments || damageItems.length > 0 || vehicleHistory || aiSummary || equipmentFeatures.length > 0 || highValueOptions.length > 0 || Boolean(autoCheck) || inspectionSections.length > 0;
 
   return (
     <article className="card">
@@ -76,7 +107,24 @@ export function ConditionReportCard({
         {vehicleHistory?.accidents != null && vehicleHistory.accidents > 0 && (
           <span className="badge" style={{ background: "#e74c3c", color: "#fff" }}>{vehicleHistory.accidents} Accident{vehicleHistory.accidents !== 1 ? "s" : ""}</span>
         )}
+        {totalIssues > 0 && (
+          <span className="badge" style={{ background: "#e7a33e", color: "#fff" }}>{totalIssues} CR Issue{totalIssues !== 1 ? "s" : ""}</span>
+        )}
       </div>
+
+      {/* NAAA Inspection Issue Summary */}
+      {inspectionSections.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4, marginBottom: 12, fontSize: 11 }}>
+          {inspectionSections.map((s) => (
+            <div key={s.label} style={{ textAlign: "center", padding: "4px 2px", background: s.issue_count > 0 ? "rgba(231,76,60,0.15)" : "rgba(255,255,255,0.03)", borderRadius: 4, border: `1px solid ${s.issue_count > 0 ? "rgba(231,76,60,0.4)" : "#333"}` }}>
+              <div style={{ fontWeight: 700, color: s.issue_count > 0 ? "#e74c3c" : "#7c7", fontSize: 16 }}>{s.issue_count}</div>
+              <div style={{ color: "#aaa", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.3px", lineHeight: 1.2 }}>
+                {s.label.replace("Mechanical & Diagnostic Trouble Codes", "Mechanical").replace("Drivability, Keys, & History", "Drivability").replace("Tires & Wheels", "Tires")}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Problem highlights — top priority summary */}
       {problemHighlights.length > 0 && (
@@ -143,6 +191,36 @@ export function ConditionReportCard({
         </div>
       )}
 
+      {autoCheck && (
+        <>
+          <h4 style={{ marginBottom: 8 }}>AutoCheck History</h4>
+          {autoCheck.scrape_status === "failed" ? (
+            <p style={{ marginTop: 0, color: "#b7c2d9" }}>AutoCheck data is temporarily unavailable.</p>
+          ) : (
+            <>
+              <div className="inventory-feature-grid" style={{ gap: 6 }}>
+                {autoCheck.autocheck_score != null ? <span className="badge">AutoCheck Score: {autoCheck.autocheck_score}</span> : null}
+                {autoCheck.owner_count != null ? <span className="badge">Owners: {autoCheck.owner_count}</span> : null}
+                {autoCheck.accident_count != null ? (
+                  <span
+                    className="badge"
+                    style={autoCheck.accident_count > 0 ? { background: "#e74c3c", color: "#fff" } : undefined}
+                  >
+                    Accidents: {autoCheck.accident_count}
+                  </span>
+                ) : null}
+                {autoCheck.title_brand_check ? <span className="badge">Title Brand: {autoCheck.title_brand_check}</span> : null}
+                {autoCheck.odometer_check ? <span className="badge">Odometer: {autoCheck.odometer_check}</span> : null}
+              </div>
+              <div className="inventory-modal-data-grid" style={{ marginTop: 10 }}>
+                {renderAutoCheckRow("Accident Check", autoCheck.accident_check)}
+                {renderAutoCheckRow("Vehicle Use", autoCheck.vehicle_use)}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
       {highlights.length > 0 && (
         <>
           <h4 style={{ marginBottom: 8 }}>Report Highlights</h4>
@@ -166,17 +244,26 @@ export function ConditionReportCard({
 
 function containsMarketplaceMention(value: string | null | undefined): boolean {
   const text = (value || "").toLowerCase();
-  return text.includes("manheim");
+  return /\b(manheim|adesa|traderev|smartauction|openlane|ove\.com|acv auctions|backlotcars)\b/.test(text);
 }
 
 function sanitizeMarketplaceCopy(value: string | null | undefined): string | null {
   if (!value) return null;
-  const sentences = value
+  let cleaned = value;
+  // Strip phone numbers, emails, URLs
+  cleaned = cleaned.replace(/(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g, "");
+  cleaned = cleaned.replace(/[\w.+-]+@[\w.-]+\.\w{2,}/g, "");
+  cleaned = cleaned.replace(/https?:\/\/[^\s,)]+/gi, "");
+  cleaned = cleaned.replace(/www\.[^\s,)]+/gi, "");
+  // Strip auction house names
+  cleaned = cleaned.replace(/\b(Manheim|ADESA|TradeRev|SmartAuction|Smart Auction|Ally\s+Smart\s*Auction|OPENLANE|OVE\.com|ACV\s+Auctions|ACV|BacklotCars|Backlot\s+Cars)\b/gi, "");
+  // Split into sentences and filter any that still mention marketplace
+  const sentences = cleaned
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.trim())
     .filter(Boolean)
     .filter((sentence) => !containsMarketplaceMention(sentence));
-  const sanitized = sentences.join(" ").trim();
+  const sanitized = sentences.join(" ").replace(/\s{2,}/g, " ").trim();
   return sanitized || null;
 }
 
@@ -229,4 +316,42 @@ function severityColor(color?: string): string {
     case "green": return "#7c7";
     default: return "#aaa";
   }
+}
+
+function normalizeAutoCheck(value: unknown): AutoCheckReport | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  return {
+    scrape_status: typeof raw.scrape_status === "string" ? raw.scrape_status : undefined,
+    autocheck_score: toFiniteNumber(raw.autocheck_score),
+    owner_count: toFiniteNumber(raw.owner_count),
+    accident_count: toFiniteNumber(raw.accident_count),
+    title_brand_check: normalizeText(raw.title_brand_check),
+    odometer_check: normalizeText(raw.odometer_check),
+    accident_check: normalizeText(raw.accident_check),
+    vehicle_use: normalizeText(raw.vehicle_use),
+  };
+}
+
+function normalizeText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return Math.round(parsed);
+  }
+  return null;
+}
+
+function renderAutoCheckRow(label: string, value: string | null | undefined) {
+  if (!value) return null;
+  return (
+    <div className="vinv-modal-data-row" key={label}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
 }

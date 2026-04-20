@@ -2,7 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
 import { loadValidAuthState } from "@/lib/auth";
@@ -59,7 +59,7 @@ type VehicleDetail = {
     condition_report?: Record<string, unknown>;
     listing_snapshot?: Record<string, unknown>;
     page_url?: string | null;
-    images?: Array<{ url: string; role?: string; display_order?: number; is_primary?: boolean } | string>;
+    images?: Array<{ url: string; role?: string; category?: string; display_order?: number; is_primary?: boolean } | string>;
   };
 };
 
@@ -74,14 +74,6 @@ type DamageItem = {
   severity_rank?: number;
 };
 
-type TireDepth = {
-  position_label?: string;
-  tread_depth?: string;
-  brand?: string;
-  size?: string;
-  wheel_type?: string;
-};
-
 type EquipmentOption = {
   primary_description?: string;
   extended_description?: string;
@@ -92,15 +84,80 @@ type EquipmentOption = {
   generics?: Array<{ name?: string }>;
 };
 
+type AutoCheckReport = {
+  scrape_status: "success" | "partial" | "failed" | "not_attempted";
+  attempted_at?: string | null;
+  autocheck_score?: number | null;
+  owner_count?: number | null;
+  accident_count?: number | null;
+  title_brand_check?: string | null;
+  odometer_check?: string | null;
+  accident_check?: string | null;
+  damage_check?: string | null;
+  vehicle_use?: string | null;
+  buyback_protection?: string | null;
+  full_report_text?: string | null;
+  view_report_href?: string | null;
+  failure_category?: string | null;
+  failure_message?: string | null;
+};
+
+type InspectionField = {
+  label: string;
+  value: string;
+  has_issue: boolean;
+};
+
+type InspectionSection = {
+  label: string;
+  fields: Record<string, InspectionField>;
+  issue_count: number;
+};
+
+type Inspection = Record<string, InspectionSection>;
+
+type CategorizedImage = {
+  url: string;
+  category: string;
+  role?: string;
+};
+
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
 const AUCTION_DEFAULT = "/assets/images/portfolio/VCH Auction default image.webp";
+
+const GRADE_LABELS: Record<string, string> = {
+  "5.0": "Extra Clean",
+  "4.5": "Clean",
+  "4.0": "Clean",
+  "3.5": "Average",
+  "3.0": "Average",
+  "2.5": "Rough",
+  "2.0": "Rough",
+  "1.5": "Damaged",
+  "1.0": "Damaged",
+};
+
+const IMAGE_CATEGORIES = [
+  { id: "all", label: "ALL" },
+  { id: "ext", label: "EXT" },
+  { id: "int", label: "INT" },
+  { id: "misc", label: "MISC" },
+  { id: "dmg", label: "DMG" },
+  { id: "video", label: "VIDEO" },
+] as const;
+
+const INSPECTION_SECTION_ORDER = ["drivability", "exterior", "interior", "mechanical", "tires"] as const;
 
 export function ConditionReportDocument({ vin }: { vin: string }) {
   const [vehicle, setVehicle] = useState<VehicleDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [canRevealVin, setCanRevealVin] = useState(false);
+
+  // Gallery state
+  const [galleryIndex, setGalleryIndex] = useState(0);
+  const [activeCategory, setActiveCategory] = useState("all");
+  const [lightboxOpen, setLightboxOpen] = useState(false);
 
   useEffect(() => {
     async function loadVehicle() {
@@ -143,7 +200,6 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
     return () => { cancelled = true; };
   }, [vin]);
 
-  // Extract structured data from wherever it lives
   const report = useMemo(() => {
     if (!vehicle) return {};
     return vehicle.condition_report || vehicle.display_context?.condition_report || {};
@@ -153,79 +209,72 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   const crMetadata = useMemo(() => ((report.metadata || {}) as Record<string, unknown>), [report]);
   const crReportLink = useMemo(() => ((crMetadata.report_link || {}) as Record<string, unknown>), [crMetadata]);
   const crGrade = vehicle?.condition_report_grade || vehicle?.condition_grade || (crReportLink.title as string) || null;
-  const galleryImages = resolveReportImages(vehicle);
-  const inspectionImages = vehicle?.display_context?.inspection_images || [];
-  const disclosureImages = vehicle?.display_context?.disclosure_images || [];
-  const allImages = [...galleryImages, ...inspectionImages, ...disclosureImages];
-  const primaryImage = resolveHeroImage(vehicle) || allImages[0] || AUCTION_DEFAULT;
+  const gradeLabel = crGrade ? GRADE_LABELS[crGrade] || (parseFloat(crGrade) >= 4.0 ? "Clean" : parseFloat(crGrade) >= 3.0 ? "Average" : "Rough") : null;
 
-  // Parse announcements. Preference order:
-  //   1. report.announcements (array) — the structured field
-  //   2. report.metadata.announcementsEnrichment.announcements — OVE's enrichment block
-  //   3. announcementsEnrichment.announcements inside raw_text (when raw_text is a
-  //      JSON blob, which the current scraper emits as `"<Color>: {...json}"`)
-  //   4. Regex over raw_text — ONLY if raw_text looks like plain text, not JSON.
-  //      The old code ran the regex unconditionally and swallowed thousands of
-  //      characters of JSON into a single "announcement" bullet.
-  // Any final item longer than MAX_ITEM_CHARS is dropped as a sanity guard.
-  const announcements = useMemo(() => {
-    const MAX_ITEM_CHARS = 400;
-    const sanitize = (items: unknown[]): string[] =>
-      items
-        .map((item) => (typeof item === "string" ? item.trim() : ""))
-        .filter((item) => item.length > 0 && item.length <= MAX_ITEM_CHARS);
-
-    const fromField = Array.isArray(report.announcements) ? sanitize(report.announcements as unknown[]) : [];
-    if (fromField.length > 0) return fromField;
-
-    const metaEnrichment = (crMetadata.announcementsEnrichment as Record<string, unknown> | undefined)
-      ?.announcements;
-    if (Array.isArray(metaEnrichment)) {
-      const items = sanitize(metaEnrichment);
-      if (items.length > 0) return items;
+  // Images — categorized
+  const categorizedImages = useMemo(() => resolveCategorizedImages(vehicle), [vehicle]);
+  const filteredImages = useMemo(() => {
+    if (activeCategory === "all") return categorizedImages;
+    return categorizedImages.filter((img) => img.category === activeCategory);
+  }, [categorizedImages, activeCategory]);
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: categorizedImages.length };
+    for (const img of categorizedImages) {
+      counts[img.category] = (counts[img.category] || 0) + 1;
     }
+    return counts;
+  }, [categorizedImages]);
 
-    const rawText = typeof report.raw_text === "string" ? report.raw_text : "";
-    if (!rawText) return [];
+  // Reset gallery index when category changes
+  useEffect(() => { setGalleryIndex(0); }, [activeCategory]);
 
-    // If raw_text is a JSON blob (possibly prefixed by "<Color>: "), parse it
-    // and pull the structured field out instead of regexing over it.
-    const jsonStart = rawText.indexOf("{");
-    if (jsonStart >= 0 && jsonStart <= 32) {
-      try {
-        const parsed = JSON.parse(rawText.slice(jsonStart));
-        const enrichment = parsed?.announcementsEnrichment?.announcements;
-        if (Array.isArray(enrichment)) {
-          const items = sanitize(enrichment);
-          if (items.length > 0) return items;
-        }
-        const direct = parsed?.announcements;
-        if (Array.isArray(direct)) {
-          const items = sanitize(direct);
-          if (items.length > 0) return items;
-        }
-      } catch {
-        // fall through — raw_text isn't valid JSON after the prefix
-      }
-      // raw_text is JSON-shaped but we couldn't find structured announcements.
-      // Do NOT run the plain-text regex against it — that produces the blob bug.
-      return [];
+  const currentImage = filteredImages[galleryIndex]?.url || AUCTION_DEFAULT;
+
+  const navigateGallery = useCallback((direction: 1 | -1) => {
+    if (filteredImages.length === 0) return;
+    setGalleryIndex((prev) => (prev + direction + filteredImages.length) % filteredImages.length);
+  }, [filteredImages.length]);
+
+  // Keyboard navigation
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "ArrowLeft") navigateGallery(-1);
+      else if (e.key === "ArrowRight") navigateGallery(1);
+      else if (e.key === "Escape" && lightboxOpen) setLightboxOpen(false);
     }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [navigateGallery, lightboxOpen]);
 
-    // Genuine plain-text CR fallback (older scraper format).
-    const annoMatch = rawText.match(/Announcements\s*(.*?)(?:Remarks|Seller Comments|$)/si);
-    if (annoMatch && annoMatch[1]) {
-      const text = annoMatch[1].replace(/No Announcements Present/gi, "").trim();
-      if (text && text !== "No" && text.length <= MAX_ITEM_CHARS) return [text];
-    }
-    return [];
-  }, [report, crMetadata]);
+  // Announcements
+  const announcements = useMemo(() => parseAnnouncements(report, crMetadata), [report, crMetadata]);
+  const remarks = Array.isArray(report.remarks) ? report.remarks.map(String) : [];
 
-  // ── Structured fields from richer report shape ──
+  // Inspection — prefer structured, fall back to legacy
+  const inspection = useMemo((): Inspection | null => {
+    const raw = report.inspection as Inspection | undefined;
+    if (raw && typeof raw === "object" && Object.keys(raw).length > 0) return raw;
+    return buildLegacyInspection(report);
+  }, [report]);
+
+  // Title info
+  const titleStatus = typeof report.title_status === "string" ? report.title_status : null;
+  const titleState = typeof report.title_state === "string" ? report.title_state : null;
+  const titleBranding = typeof report.title_branding === "string" ? report.title_branding : null;
+
+  // AutoCheck
+  const autocheck = useMemo(() => normalizeAutoCheck(report.autocheck), [report]);
+  const autoCheckSummary = useMemo(() => summarizeAutoCheck(autocheck), [autocheck]);
+
+  // Vehicle history
   const vehicleHistory = report.vehicle_history as { engine_starts?: boolean; drivable?: boolean; owners?: number; accidents?: number } | undefined;
+
+  // Damage report
   const damageItems = Array.isArray(report.damage_items) ? (report.damage_items as DamageItem[]) : [];
-  const damageSummary = report.damage_summary as { total_items?: number; by_color?: Record<string, number>; by_section?: Record<string, number>; structural_issue?: boolean } | undefined;
-  const tireDepths = report.tire_depths as Record<string, TireDepth> | undefined;
+  const damageSummary = report.damage_summary as { total_items?: number; by_color?: Record<string, number>; structural_issue?: boolean } | undefined;
+  const severitySummary = typeof report.severity_summary === "string" ? report.severity_summary : null;
+
+  // Equipment
   const equipmentFeatures = useMemo(
     () => (Array.isArray(report.equipment_features) ? report.equipment_features.map(String) : []),
     [report],
@@ -238,69 +287,31 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
     () => (Array.isArray(report.high_value_options) ? (report.high_value_options as EquipmentOption[]) : []),
     [report],
   );
-  const problemHighlights = Array.isArray(report.problem_highlights) ? report.problem_highlights.map(String) : [];
-  const remarks = Array.isArray(report.remarks) ? report.remarks.map(String) : [];
-  const sellerCommentsItems = Array.isArray(report.seller_comments_items) ? report.seller_comments_items.map(String) : [];
-  const severitySummary = typeof report.severity_summary === "string" ? report.severity_summary : null;
-  const aiSummary = typeof report.ai_summary === "string" ? report.ai_summary : null;
-  const titleStatus = typeof report.title_status === "string" ? report.title_status : null;
-  const titleState = typeof report.title_state === "string" ? report.title_state : null;
-  const titleBranding = typeof report.title_branding === "string" ? report.title_branding : null;
-  const overallGrade = typeof report.overall_grade === "string" ? report.overall_grade : null;
-  const tireDisplayItems = useMemo(() => resolveTireDisplayItems(tireDepths), [tireDepths]);
-  const announcementBuckets = useMemo(() => bucketAnnouncements(announcements), [announcements]);
   const equipmentSection = useMemo(
-    () => resolveEquipmentSection({
-      equipmentFeatures,
-      highValueOptions,
-      installedEquipment,
-    }),
+    () => resolveEquipmentSection({ equipmentFeatures, highValueOptions, installedEquipment }),
     [equipmentFeatures, highValueOptions, installedEquipment],
   );
 
-  // Parse key info — prefer structured vehicle_history, fall back to raw text parsing
+  // Seller comments
+  const sellerCommentsItems = Array.isArray(report.seller_comments_items) ? report.seller_comments_items.map(String) : [];
+
+  // Problem highlights
+  const problemHighlights = Array.isArray(report.problem_highlights) ? report.problem_highlights.map(String) : [];
+
+  // Vehicle info
   const vehicleInfo = useMemo(() => {
     if (!vehicle) return {};
     const norm = vehicle.features_normalized || {};
-    const rawText = typeof report.raw_text === "string" ? report.raw_text : "";
-
-    // Prefer structured vehicle_history; fall back to regex for older flat reports
-    let owners: string | null = vehicleHistory?.owners != null ? String(vehicleHistory.owners) : null;
-    let accidents: string | null = vehicleHistory?.accidents != null ? String(vehicleHistory.accidents) : null;
-    if (!owners) {
-      const ownersMatch = rawText.match(/Owners(\d+)/);
-      if (ownersMatch) owners = ownersMatch[1];
-    }
-    if (!accidents) {
-      const accidentsMatch = rawText.match(/AccidentsACDNT(\d+)/i) || rawText.match(/Accidents(\d+)/i);
-      if (accidentsMatch) accidents = accidentsMatch[1];
-    }
-
-    // Title info — prefer structured fields
-    const resolvedTitle = titleStatus || (() => {
-      const titleMatch = rawText.match(/Title Status(.*?)Title State/i);
-      return titleMatch ? titleMatch[1].trim() : null;
-    })();
-
-    // Seller
-    let seller: string | null = null;
-    const sellerMatch = rawText.match(/Contact:\s*(.*?)(?:\d+\.\d+|Contact|$)/i);
-    if (sellerMatch) seller = sellerMatch[1].replace(/View seller.*$/i, "").trim();
-
-    // Use top-level API fields first (already resolved with fallbacks),
-    // then features_normalized, then condition report fields
     const v = vehicle as Record<string, unknown>;
     return {
       exterior_color: String(v.exterior_color || norm.exterior_color || report.exterior_color || ""),
       interior_color: String(v.interior_color || norm.interior_color || report.interior_color || ""),
       engine: String(v.engine_type || norm.engine_type || ""),
       drivetrain: String(v.drivetrain || norm.drivetrain || ""),
-      owners,
-      accidents,
-      titleStatus: resolvedTitle,
-      seller,
+      transmission: String(v.transmission || norm.transmission || ""),
+      seller: String(vehicle.auction_house || ""),
     };
-  }, [vehicle, report, vehicleHistory, titleStatus]);
+  }, [vehicle, report]);
 
   if (loading) {
     return (
@@ -327,243 +338,360 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         {/* ── HEADER ── */}
         <section className="cr-doc-header">
           <div className="cr-doc-header-inner">
-            <div>
-              <h2 className="cr-doc-brand">VCH Condition Report</h2>
-            </div>
+            <h2 className="cr-doc-brand">VCH Condition Report</h2>
             <div className="cr-doc-header-actions">
               <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vehicle.public_slug || vehicle.vin)}` as any}>
                 Back to Vehicle
               </Link>
               {crUrl && (
-                <button className="button" onClick={() => window.open(crUrl, '_blank', 'noopener,noreferrer')}>
+                <button className="button" onClick={() => window.open(crUrl, "_blank", "noopener,noreferrer")}>
                   See Original CR
                 </button>
               )}
-              <button className="button ghost" onClick={() => window.print()}>
-                Print
-              </button>
+              <button className="button ghost" onClick={() => window.print()}>Print</button>
             </div>
           </div>
         </section>
 
-        {/* ── VEHICLE DETAILS (matches sample layout) ── */}
-        <section className="cr-section">
-          <h3 className="cr-section-bar">
-            VEHICLE DETAILS &mdash; {vehicle.year} {vehicle.make} {vehicle.model} {vehicle.trim || ""}
-          </h3>
-          <table className="cr-details-table">
-            <tbody>
-              <tr>
-                <td className="cr-td-label">VIN:</td>
-                <td>{maskVin(vehicle.vin, canRevealVin)}</td>
-                <td className="cr-td-label">Body Style:</td>
-                <td>{vehicle.body_type || "N/A"}</td>
-                <td className="cr-td-label">Odometer:</td>
-                <td>{fmtMiles(vehicle.odometer)}</td>
-              </tr>
-              <tr>
-                <td className="cr-td-label">Ext Color:</td>
-                <td>{vehicleInfo.exterior_color || "N/A"}</td>
-                <td className="cr-td-label">Int Color:</td>
-                <td>{vehicleInfo.interior_color || "N/A"}</td>
-                <td className="cr-td-label">Drivetrain:</td>
-                <td>{vehicleInfo.drivetrain || "N/A"}</td>
-              </tr>
-              <tr>
-                <td className="cr-td-label">Seller:</td>
-                <td>{vehicleInfo.seller || vehicle.auction_house || "N/A"}</td>
-                <td className="cr-td-label">Location:</td>
-                <td>{vehicle.pickup_location || `${vehicle.location_state || ""} ${vehicle.location_zip || ""}`.trim() || "N/A"}</td>
-                <td className="cr-td-label">Engine:</td>
-                <td>{vehicleInfo.engine || "N/A"}</td>
-              </tr>
-            </tbody>
-          </table>
+        {/* ── VEHICLE TITLE BAR ── */}
+        <section className="cr-vehicle-title-bar">
+          <h1 className="cr-vehicle-name">
+            {vehicle.year} {vehicle.make} {vehicle.model} {vehicle.trim ? `${vehicle.body_type || ""} ${vehicle.trim}`.trim() : vehicle.body_type || ""}
+          </h1>
+          <div className="cr-vehicle-specs">
+            <span>{maskVin(vehicle.vin, canRevealVin)}</span>
+            <span className="cr-spec-sep">&middot;</span>
+            <span>Odo {fmtMiles(vehicle.odometer)}</span>
+            {vehicleInfo.exterior_color && (
+              <>
+                <span className="cr-spec-sep">&middot;</span>
+                <span>{vehicleInfo.exterior_color} / {vehicleInfo.interior_color || "N/A"}</span>
+              </>
+            )}
+            {vehicleInfo.engine && (
+              <>
+                <span className="cr-spec-sep">&middot;</span>
+                <span>{vehicleInfo.engine}</span>
+              </>
+            )}
+            {vehicleInfo.transmission && (
+              <>
+                <span className="cr-spec-sep">&middot;</span>
+                <span>{vehicleInfo.transmission}</span>
+              </>
+            )}
+            {vehicleInfo.drivetrain && (
+              <>
+                <span className="cr-spec-sep">&middot;</span>
+                <span>{vehicleInfo.drivetrain}</span>
+              </>
+            )}
+          </div>
+          {/* Seller/auction house name hidden — wholesale contact details must not be exposed */}
         </section>
 
-        {/* ── VEHICLE IMAGES ── */}
-        <section className="cr-section">
-          <h3 className="cr-section-bar">VEHICLE IMAGES</h3>
-          <div className="cr-images-layout">
-            <div className="cr-thumb-col">
-              {allImages.slice(0, 8).map((img, i) => (
-                <div key={i} className="cr-thumb" onClick={() => setLightboxImage(img)}>
-                  <img src={img} alt={`View ${i + 1}`} onError={e => { e.currentTarget.src = FALLBACK_IMAGE; }} />
+        {/* ── GALLERY + SUMMARY PANEL ── */}
+        <section className="cr-hero-layout">
+          {/* Left: Image Gallery */}
+          <div className="cr-gallery">
+            <div className="cr-gallery-stage">
+              <img
+                src={currentImage}
+                alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`}
+                className="cr-gallery-main-img"
+                onClick={() => setLightboxOpen(true)}
+                onError={(e) => { e.currentTarget.src = FALLBACK_IMAGE; }}
+              />
+              {filteredImages.length > 1 && (
+                <>
+                  <button className="cr-gallery-arrow cr-gallery-arrow-left" onClick={() => navigateGallery(-1)} aria-label="Previous image">&lsaquo;</button>
+                  <button className="cr-gallery-arrow cr-gallery-arrow-right" onClick={() => navigateGallery(1)} aria-label="Next image">&rsaquo;</button>
+                </>
+              )}
+              <div className="cr-gallery-counter">
+                {filteredImages.length > 0 ? `${galleryIndex + 1} of ${filteredImages.length}` : "No photos"}
+                <button className="cr-gallery-fullscreen" onClick={() => setLightboxOpen(true)} aria-label="Full screen">&#x26F6;</button>
+              </div>
+            </div>
+            {/* Thumbnail strip */}
+            <div className="cr-gallery-thumbstrip">
+              {filteredImages.slice(0, 20).map((img, i) => (
+                <div
+                  key={i}
+                  className={`cr-gallery-thumb${i === galleryIndex ? " cr-gallery-thumb-active" : ""}`}
+                  onClick={() => setGalleryIndex(i)}
+                >
+                  <img src={img.url} alt={`Thumb ${i + 1}`} onError={(e) => { e.currentTarget.src = FALLBACK_IMAGE; }} />
                 </div>
               ))}
             </div>
-            <div className="cr-hero-col" onClick={() => setLightboxImage(primaryImage)}>
-              <img src={primaryImage} alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`} onError={e => { e.currentTarget.src = FALLBACK_IMAGE; }} />
+            {/* Category tabs */}
+            <div className="cr-gallery-tabs">
+              {IMAGE_CATEGORIES.map((cat) => {
+                const count = categoryCounts[cat.id] || 0;
+                if (cat.id !== "all" && count === 0) return null;
+                return (
+                  <button
+                    key={cat.id}
+                    className={`cr-gallery-tab${activeCategory === cat.id ? " cr-gallery-tab-active" : ""}`}
+                    onClick={() => setActiveCategory(cat.id)}
+                  >
+                    {cat.label}
+                    <span className="cr-gallery-tab-count">{count}</span>
+                  </button>
+                );
+              })}
             </div>
+          </div>
+
+          {/* Right: Summary Panel */}
+          <div className="cr-summary-panel">
+            {/* Grade */}
             {crGrade && (
-              <div className="cr-grade-col">
-                <div className="cr-grade-card">
-                  <span className="cr-grade-label">Grade</span>
-                  <span className="cr-grade-value">{crGrade}</span>
-                  {overallGrade && overallGrade !== crGrade && <span className="cr-grade-desc">{overallGrade}</span>}
+              <div className="cr-grade-block">
+                <div className="cr-grade-circle">
+                  <span className="cr-grade-number">{crGrade}</span>
                 </div>
-                <ul className="cr-grade-checks">
-                  {(report.structural_damage !== undefined || damageSummary?.structural_issue !== undefined) && (
-                    <li>Structural Damage: {damageSummary?.structural_issue ? "Yes" : String(report.structural_damage || "None reported")}</li>
-                  )}
-                  <li>Engine Starts: {vehicleHistory?.engine_starts === false ? "No" : "Yes"}</li>
-                  <li>Drivable: {vehicleHistory?.drivable === false ? "No" : "Yes"}</li>
+                {gradeLabel && <span className="cr-grade-label">{gradeLabel}</span>}
+              </div>
+            )}
+
+            {/* Announcements */}
+            {announcements.length > 0 && (
+              <div className="cr-panel-section">
+                <h4 className="cr-panel-heading">Announcements</h4>
+                <ul className="cr-panel-list">
+                  {announcements.map((a, i) => <li key={i}>{a}</li>)}
                 </ul>
               </div>
             )}
+
+            {/* Remarks / Comments */}
+            {remarks.length > 0 && (
+              <div className="cr-panel-section">
+                <h4 className="cr-panel-heading">Remarks/Comments</h4>
+                <ul className="cr-panel-list">
+                  {remarks.map((r, i) => <li key={i}>{r}</li>)}
+                </ul>
+              </div>
+            )}
+
+            {/* Title */}
+            {(titleStatus || titleState) && (
+              <div className="cr-panel-section">
+                <h4 className="cr-panel-heading">Title</h4>
+                <div className="cr-panel-kv">
+                  <div className="cr-panel-kv-row">
+                    <span className="cr-panel-kv-label">TITLE STATE</span>
+                    <span className="cr-panel-kv-value">{titleState || "--"}</span>
+                  </div>
+                  <div className="cr-panel-kv-row">
+                    <span className="cr-panel-kv-label">TITLE STATUS</span>
+                    <span className="cr-panel-kv-value">{titleStatus || "NOT SPECIFIED"}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Issues Summary */}
+            {inspection && (
+              <div className="cr-panel-section">
+                <h4 className="cr-panel-heading">Issues</h4>
+                <div className="cr-issues-table">
+                  {INSPECTION_SECTION_ORDER.map((sectionId) => {
+                    const section = inspection[sectionId];
+                    if (!section) return null;
+                    const count = section.issue_count;
+                    return (
+                      <div key={sectionId} className="cr-issues-row">
+                        <span className="cr-issues-label">{section.label}</span>
+                        <span className={`cr-issues-count${count > 0 ? " cr-issues-count-alert" : ""}`}>{count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </section>
 
-        {/* ── GRADING / PRICING ── */}
+        {/* ── INSPECTION HEADER BAR ── */}
+        <div className="cr-inspection-banner">INSPECTION</div>
+
+        {/* ── NAAA INSPECTION SECTIONS ── */}
+        {inspection && INSPECTION_SECTION_ORDER.map((sectionId) => {
+          const section = inspection[sectionId];
+          if (!section) return null;
+          const fields = Object.values(section.fields);
+          return (
+            <section key={sectionId} className="cr-section">
+              <h3 className="cr-section-bar">{section.label}</h3>
+              <div className="cr-inspection-grid">
+                {fields.map((field) => {
+                  const isUnavailable = field.value.toLowerCase() === "not available";
+                  const cls = field.has_issue ? " cr-field-issue" : isUnavailable ? " cr-field-unavailable" : "";
+                  return (
+                    <div key={field.label} className={`cr-field-cell${cls}`}>
+                      <span className="cr-field-label">{field.label}</span>
+                      <span className="cr-field-value">{field.value}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })}
+
+        {/* ── TITLE & VEHICLE HISTORY (AutoCheck integrated) ── */}
         <section className="cr-section">
-          <h3 className="cr-section-bar">GRADING &amp; PRICING</h3>
-          <div className="cr-kpi-row">
-            <div className="cr-kpi">
-              <span className="cr-kpi-label">Condition Grade</span>
-              <span className="cr-kpi-value">{crGrade || "Pending"}</span>
+          <h3 className="cr-section-bar">TITLE &amp; VEHICLE HISTORY</h3>
+          <div className="cr-title-history-content">
+            {/* Title info row */}
+            <div className="cr-inspection-grid" style={{ marginBottom: 16 }}>
+              <div className="cr-field-cell">
+                <span className="cr-field-label">Title State</span>
+                <span className="cr-field-value">{titleState || "--"}</span>
+              </div>
+              <div className="cr-field-cell">
+                <span className="cr-field-label">Title Status</span>
+                <span className="cr-field-value">{titleStatus || "Not Specified"}</span>
+              </div>
+              {titleBranding && (
+                <div className="cr-field-cell">
+                  <span className="cr-field-label">Title Branding</span>
+                  <span className="cr-field-value">{titleBranding}</span>
+                </div>
+              )}
+              {vehicleHistory?.owners != null && (
+                <div className="cr-field-cell">
+                  <span className="cr-field-label">Owners</span>
+                  <span className="cr-field-value">{vehicleHistory.owners}</span>
+                </div>
+              )}
+              {vehicleHistory?.accidents != null && (
+                <div className={`cr-field-cell${vehicleHistory.accidents > 0 ? " cr-field-issue" : ""}`}>
+                  <span className="cr-field-label">Accidents</span>
+                  <span className="cr-field-value">{vehicleHistory.accidents}</span>
+                </div>
+              )}
             </div>
-            <div className="cr-kpi">
-              <span className="cr-kpi-label">MMR Value</span>
-              <span className="cr-kpi-value">{fmtMoney(vehicle.mmr)}</span>
-            </div>
-            <div className="cr-kpi">
-              <span className="cr-kpi-label">Asking Price</span>
-              <span className="cr-kpi-value">{fmtMoney(vehicle.price_asking)}</span>
-            </div>
-            {vehicleInfo.owners && (
-              <div className="cr-kpi">
-                <span className="cr-kpi-label">Owners</span>
-                <span className="cr-kpi-value">{vehicleInfo.owners}</span>
+
+            {/* AutoCheck */}
+            {autocheck && autocheck.scrape_status !== "failed" && (
+              <div className="cr-autocheck-wrap">
+                <div className="cr-autocheck-hero">
+                  <article className="cr-autocheck-summary-card">
+                    <div className="cr-autocheck-summary-head">
+                      <span className="cr-autocheck-mini-label">Experian AutoCheck</span>
+                      <span className={`cr-autocheck-status cr-autocheck-status-${autoCheckSummary.statusTone}`}>
+                        {autoCheckSummary.statusLabel}
+                      </span>
+                    </div>
+                    <h4 className="cr-autocheck-title">History snapshot for {vehicle.year} {vehicle.make} {vehicle.model}</h4>
+                    <div className="cr-autocheck-summary-grid">
+                      {renderAutoCheckSummaryValue("Owners", autocheck.owner_count)}
+                      {renderAutoCheckSummaryValue("Accidents", autocheck.accident_count)}
+                      {renderAutoCheckSummaryValue("Title Brand", autocheck.title_brand_check || "N/A")}
+                      {renderAutoCheckSummaryValue("Odometer", autocheck.odometer_check || "N/A")}
+                    </div>
+                    {autocheck.attempted_at && (
+                      <p className="cr-autocheck-meta">Captured {formatTimestamp(autocheck.attempted_at)}</p>
+                    )}
+                  </article>
+
+                  <article className="cr-autocheck-score-card">
+                    <div className="cr-autocheck-score-topline">
+                      <span className="cr-autocheck-mini-label">AutoCheck Score</span>
+                      {autocheck.autocheck_score != null && (
+                        <span className={`cr-autocheck-score-band cr-autocheck-score-band-${autoCheckSummary.scoreTone}`}>
+                          {autoCheckSummary.scoreBand}
+                        </span>
+                      )}
+                    </div>
+                    {autocheck.autocheck_score != null ? (
+                      <>
+                        <div className="cr-autocheck-gauge">
+                          <div
+                            className="cr-autocheck-gauge-arc"
+                            style={{
+                              background: `conic-gradient(from 180deg, ${autoCheckSummary.scoreColor} 0deg ${Math.max(0, Math.min(180, (autocheck.autocheck_score / 100) * 180))}deg, rgba(255,255,255,0.08) ${Math.max(0, Math.min(180, (autocheck.autocheck_score / 100) * 180))}deg 180deg, transparent 180deg 360deg)`,
+                            }}
+                          />
+                          <div className="cr-autocheck-gauge-cutout" />
+                          <div className="cr-autocheck-gauge-center">
+                            <strong>{autocheck.autocheck_score}</strong>
+                            <span>/ 100</span>
+                          </div>
+                        </div>
+                        <div className="cr-autocheck-scale">
+                          <span>0</span><span>50</span><span>100</span>
+                        </div>
+                        <p className="cr-autocheck-score-copy">{autoCheckSummary.scoreDescription}</p>
+                      </>
+                    ) : (
+                      <p className="cr-comments">AutoCheck score not provided for this vehicle.</p>
+                    )}
+                  </article>
+                </div>
+
+                <div className="cr-autocheck-check-grid">
+                  {renderAutoCheckCheck("Major State Title Brand Check", autocheck.title_brand_check)}
+                  {renderAutoCheckCheck("Odometer Check", autocheck.odometer_check)}
+                  {renderAutoCheckCheck("Accident Check", autocheck.accident_check)}
+                  {renderAutoCheckCheck("Damage Check", autocheck.damage_check)}
+                  {renderAutoCheckCheck("Vehicle Usage Check", autocheck.vehicle_use)}
+                  {renderAutoCheckCheck("Buyback Protection", autocheck.buyback_protection)}
+                </div>
+
+                {(autocheck.full_report_text || autocheck.view_report_href) && (
+                  <details className="cr-autocheck-details">
+                    <summary>
+                      <span>Full AutoCheck Report</span>
+                      <span className="cr-autocheck-details-hint">Expand</span>
+                    </summary>
+                    <div className="cr-autocheck-details-body">
+                      {autocheck.view_report_href && (
+                        <div className="cr-autocheck-report-actions">
+                          <button className="button" onClick={() => window.open(autocheck.view_report_href!, "_blank", "noopener,noreferrer")}>
+                            Open AutoCheck Source
+                          </button>
+                        </div>
+                      )}
+                      {autocheck.full_report_text ? (
+                        <pre className="cr-autocheck-report-text">{autocheck.full_report_text}</pre>
+                      ) : (
+                        <p className="cr-comments">No report transcript was provided with this scrape.</p>
+                      )}
+                    </div>
+                  </details>
+                )}
               </div>
             )}
-            {vehicleInfo.accidents && (
-              <div className="cr-kpi">
-                <span className="cr-kpi-label">Accidents</span>
-                <span className="cr-kpi-value">{vehicleInfo.accidents}</span>
+
+            {autocheck?.scrape_status === "failed" && (
+              <div className="cr-autocheck-unavailable">
+                <div>
+                  <strong>AutoCheck data temporarily unavailable</strong>
+                  <p>
+                    {autocheck.failure_message ||
+                      "We could not retrieve the Experian AutoCheck history on this pass. The rest of the condition report is still available."}
+                  </p>
+                </div>
+                {autocheck.attempted_at && (
+                  <span className="cr-autocheck-attempted">Attempted {formatTimestamp(autocheck.attempted_at)}</span>
+                )}
               </div>
             )}
           </div>
         </section>
 
-        {/* ── PROBLEM HIGHLIGHTS (top summary from richer report) ── */}
+        {/* ── PROBLEM HIGHLIGHTS ── */}
         {problemHighlights.length > 0 && (
           <section className="cr-section">
             <h3 className="cr-section-bar">PROBLEM HIGHLIGHTS</h3>
             <ul className="cr-announce-list cr-problem-list">
               {problemHighlights.map((h, i) => <li key={i}>{h}</li>)}
             </ul>
-          </section>
-        )}
-
-        {/* ── AI SUMMARY ── */}
-        {aiSummary && (
-          <section className="cr-section">
-            <h3 className="cr-section-bar">AI CONDITION SUMMARY</h3>
-            <p className="cr-comments">{aiSummary}</p>
-          </section>
-        )}
-
-        {/* ── ANNOUNCEMENTS ── */}
-        {announcements.length > 0 && (
-          <section className="cr-section">
-            <h3 className="cr-section-bar">ANNOUNCEMENTS</h3>
-            <div className="cr-announcements-wrap">
-              {announcementBuckets.auctionLight && (
-                <div className={`cr-auction-light cr-auction-light-${announcementBuckets.auctionLight.color}`}>
-                  {announcementBuckets.auctionLight.value || announcementBuckets.auctionLight.raw}
-                </div>
-              )}
-
-              {announcementBuckets.issues.length > 0 && (
-                <div className="cr-announcement-block">
-                  <h4 className="cr-subsection-title">Attention Items</h4>
-                  <div className="cr-announcement-grid cr-announcement-grid-alert">
-                    {announcementBuckets.issues.map((item) => (
-                      <div key={item.raw} className="cr-announcement-card cr-announcement-card-alert">
-                        <span className="cr-announcement-label">{item.label}</span>
-                        <strong className="cr-announcement-value">{item.value || item.raw}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {announcementBuckets.unknown.length > 0 && (
-                <div className="cr-announcement-block">
-                  <h4 className="cr-subsection-title">Unknown / Needs Verification</h4>
-                  <div className="cr-announcement-grid cr-announcement-grid-unknown">
-                    {announcementBuckets.unknown.map((item) => (
-                      <div key={item.raw} className="cr-announcement-card cr-announcement-card-unknown">
-                        <span className="cr-announcement-label">{item.label}</span>
-                        <strong className="cr-announcement-value">{item.value || item.raw}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {announcementBuckets.informational.length > 0 && (
-                <div className="cr-announcement-block">
-                  <h4 className="cr-subsection-title">Informational</h4>
-                  <div className="cr-announcement-grid">
-                    {announcementBuckets.informational.map((item) => (
-                      <div key={item.raw} className="cr-announcement-card">
-                        <span className="cr-announcement-label">{item.label}</span>
-                        <strong className="cr-announcement-value">{item.value || item.raw}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {announcementBuckets.clean.length > 0 && (
-                <div className="cr-announcement-block">
-                  <h4 className="cr-subsection-title">Clean Disclosure Responses</h4>
-                  <div className="cr-announcement-grid cr-announcement-grid-clean">
-                    {announcementBuckets.clean.map((item) => (
-                      <div key={item.raw} className="cr-announcement-card cr-announcement-card-clean">
-                        <span className="cr-announcement-label">{item.label}</span>
-                        <strong className="cr-announcement-value">{item.value || item.raw}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* ── REMARKS ── */}
-        {remarks.length > 0 && (
-          <section className="cr-section">
-            <h3 className="cr-section-bar">REMARKS</h3>
-            <ul className="cr-announce-list">
-              {remarks.map((r, i) => <li key={i}>{r}</li>)}
-            </ul>
-          </section>
-        )}
-
-        {/* ── SELLER COMMENTS ── */}
-        <section className="cr-section">
-          <h3 className="cr-section-bar">SELLER COMMENTS</h3>
-          {sellerCommentsItems.length > 0 ? (
-            <ul className="cr-announce-list">
-              {sellerCommentsItems.map((c, i) => <li key={i}>{c}</li>)}
-            </ul>
-          ) : (
-            <p className="cr-comments">{vehicle.seller_comments || "No comments provided."}</p>
-          )}
-        </section>
-
-        {/* ── TITLE INFORMATION ── */}
-        {(titleStatus || titleState || titleBranding) && (
-          <section className="cr-section">
-            <h3 className="cr-section-bar">TITLE INFORMATION</h3>
-            <div className="cr-condition-grid">
-              {renderConditionField("Title Status", titleStatus)}
-              {renderConditionField("Title State", titleState)}
-              {renderConditionField("Title Branding", titleBranding)}
-            </div>
           </section>
         )}
 
@@ -586,7 +714,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           </section>
         )}
 
-        {/* ── DAMAGE REPORT (from damage_items) ── */}
+        {/* ── DAMAGE REPORT ── */}
         {damageItems.length > 0 && (
           <section className="cr-section">
             <h3 className="cr-section-bar">
@@ -596,22 +724,17 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
             </h3>
             <table className="cr-damage-table">
               <thead>
-                <tr>
-                  <th>Section</th>
-                  <th>Panel</th>
-                  <th>Condition</th>
-                  <th>Severity</th>
-                </tr>
+                <tr><th>Section</th><th>Panel</th><th>Condition</th><th>Severity</th></tr>
               </thead>
               <tbody>
                 {damageItems.map((d, i) => (
                   <tr key={i}>
-                    <td>{d.section_label || d.section || "—"}</td>
-                    <td>{d.panel || "—"}</td>
-                    <td>{d.condition || "—"}</td>
+                    <td>{d.section_label || d.section || "\u2014"}</td>
+                    <td>{d.panel || "\u2014"}</td>
+                    <td>{d.condition || "\u2014"}</td>
                     <td>
                       <span className={`cr-severity cr-severity-${d.severity_color || "gray"}`}>
-                        {d.reported_severity || d.severity_label || "—"}
+                        {d.reported_severity || d.severity_label || "\u2014"}
                       </span>
                     </td>
                   </tr>
@@ -622,178 +745,245 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           </section>
         )}
 
-        {/* ── TIRE DEPTHS ── */}
-        {tireDisplayItems.length > 0 && (
-          <section className="cr-section">
-            <h3 className="cr-section-bar">TIRE CONDITION</h3>
-            <div className="cr-tire-grid">
-              {tireDisplayItems.map(({ key, tire }) => (
-                <div key={key} className="cr-tire-card">
-                  <span className="cr-tire-pos">{tire.position_label || humanizeKey(key)}</span>
-                  <span className="cr-tire-depth">{tire.tread_depth || "N/A"}</span>
-                  <span className="cr-tire-detail">{[tire.brand, tire.size].filter(Boolean).join(" · ") || ""}</span>
-                  {tire.wheel_type && <span className="cr-tire-detail">{tire.wheel_type}</span>}
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* ── VEHICLE HISTORY ── */}
-        {vehicleHistory && (
-          <section className="cr-section">
-            <h3 className="cr-section-bar">VEHICLE HISTORY</h3>
-            <div className="cr-kpi-row">
-              {vehicleHistory.owners != null && (
-                <div className="cr-kpi">
-                  <span className="cr-kpi-label">Owners</span>
-                  <span className="cr-kpi-value">{vehicleHistory.owners}</span>
-                </div>
-              )}
-              {vehicleHistory.accidents != null && (
-                <div className="cr-kpi">
-                  <span className="cr-kpi-label">Accidents</span>
-                  <span className="cr-kpi-value" style={vehicleHistory.accidents > 0 ? { color: "#e74c3c" } : undefined}>{vehicleHistory.accidents}</span>
-                </div>
-              )}
-              <div className="cr-kpi">
-                <span className="cr-kpi-label">Engine Starts</span>
-                <span className="cr-kpi-value">{vehicleHistory.engine_starts === false ? "No" : "Yes"}</span>
-              </div>
-              <div className="cr-kpi">
-                <span className="cr-kpi-label">Drivable</span>
-                <span className="cr-kpi-value">{vehicleHistory.drivable === false ? "No" : "Yes"}</span>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* ── CONDITION DETAIL (structured fields — fallback for older reports) ── */}
-        {hasStructuredData(report) && (
-          <section className="cr-section">
-            <h3 className="cr-section-bar">CONDITION DETAIL</h3>
-            <div className="cr-condition-grid">
-              {renderConditionField("Overall Grade", report.overall_grade)}
-              {renderConditionField("Structural Damage", report.structural_damage)}
-              {renderConditionField("Paint Condition", report.paint_condition)}
-              {renderConditionField("Interior Condition", report.interior_condition)}
-              {renderConditionField("Tire Condition", report.tire_condition)}
-            </div>
-          </section>
-        )}
+        {/* ── SELLER COMMENTS ── */}
+        <section className="cr-section">
+          <h3 className="cr-section-bar">SELLER COMMENTS</h3>
+          {sellerCommentsItems.length > 0 ? (
+            <ul className="cr-announce-list">
+              {sellerCommentsItems.map((c, i) => <li key={i}>{sanitizePublicText(c)}</li>)}
+            </ul>
+          ) : (
+            <p className="cr-comments">{sanitizePublicText(vehicle.seller_comments || "") || "No comments provided."}</p>
+          )}
+        </section>
 
         {/* ── ADDITIONAL IMAGES ── */}
-        {allImages.length > 8 && (
+        {categorizedImages.length > 20 && (
           <section className="cr-section">
             <h3 className="cr-section-bar">ADDITIONAL IMAGES</h3>
             <div className="cr-image-grid">
-              {allImages.slice(8).map((img, i) => (
-                <div key={i} className="cr-grid-thumb" onClick={() => setLightboxImage(img)}>
-                  <img src={img} alt={`Image ${i + 9}`} onError={e => { e.currentTarget.src = FALLBACK_IMAGE; }} />
+              {categorizedImages.slice(20).map((img, i) => (
+                <div key={i} className="cr-grid-thumb" onClick={() => { setActiveCategory("all"); setGalleryIndex(20 + i); setLightboxOpen(true); }}>
+                  <img src={img.url} alt={`Image ${i + 21}`} onError={(e) => { e.currentTarget.src = FALLBACK_IMAGE; }} />
                 </div>
               ))}
             </div>
           </section>
         )}
 
-        {/* ── ORIGINAL CR BUTTON (bottom) ── */}
+        {/* ── ORIGINAL CR BUTTON ── */}
         {crUrl && (
           <section className="cr-section" style={{ textAlign: "center", padding: "20px 0" }}>
-            <button className="button" onClick={() => window.open(crUrl, '_blank', 'noopener,noreferrer')} style={{ fontSize: 16, padding: "12px 32px" }}>
+            <button className="button" onClick={() => window.open(crUrl, "_blank", "noopener,noreferrer")} style={{ fontSize: 16, padding: "12px 32px" }}>
               See Original Condition Report
             </button>
           </section>
         )}
       </main>
 
-      {/* ── IMAGE LIGHTBOX ── */}
-      {lightboxImage && (
-        <div className="cr-overlay" onClick={() => setLightboxImage(null)}>
-          <button className="cr-overlay-close" onClick={() => setLightboxImage(null)}>×</button>
-          <img src={lightboxImage} alt="Full size" className="cr-overlay-img" onClick={e => e.stopPropagation()} />
+      {/* ── LIGHTBOX MODAL (fullscreen overlay with arrows) ── */}
+      {lightboxOpen && (
+        <div className="cr-overlay" onClick={() => setLightboxOpen(false)}>
+          {/* Close button */}
+          <button className="cr-overlay-close" onClick={() => setLightboxOpen(false)}>&times;</button>
+
+          {/* Counter */}
+          <div className="cr-overlay-counter">
+            {filteredImages.length > 0 ? `${galleryIndex + 1} / ${filteredImages.length}` : ""}
+          </div>
+
+          {/* Left arrow */}
+          {filteredImages.length > 1 && (
+            <button
+              className="cr-overlay-arrow cr-overlay-arrow-left"
+              onClick={(e) => { e.stopPropagation(); navigateGallery(-1); }}
+              aria-label="Previous"
+            >
+              &lsaquo;
+            </button>
+          )}
+
+          {/* Main image */}
+          <img
+            src={currentImage}
+            alt="Full size"
+            className="cr-overlay-img"
+            onClick={(e) => e.stopPropagation()}
+            onError={(e) => { e.currentTarget.src = FALLBACK_IMAGE; }}
+          />
+
+          {/* Right arrow */}
+          {filteredImages.length > 1 && (
+            <button
+              className="cr-overlay-arrow cr-overlay-arrow-right"
+              onClick={(e) => { e.stopPropagation(); navigateGallery(1); }}
+              aria-label="Next"
+            >
+              &rsaquo;
+            </button>
+          )}
+
+          {/* Thumbnail strip at bottom */}
+          <div className="cr-overlay-thumbstrip" onClick={(e) => e.stopPropagation()}>
+            {filteredImages.map((img, i) => (
+              <div
+                key={i}
+                className={`cr-gallery-thumb${i === galleryIndex ? " cr-gallery-thumb-active" : ""}`}
+                onClick={() => setGalleryIndex(i)}
+              >
+                <img src={img.url} alt={`Thumb ${i + 1}`} onError={(e) => { e.currentTarget.src = FALLBACK_IMAGE; }} />
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       <style jsx>{`
         /* ── Layout ── */
         .cr-doc { max-width: 1200px; margin: 0 auto; overflow-wrap: anywhere; word-break: break-word; }
-        .cr-doc table { table-layout: fixed; width: 100%; }
 
         .cr-doc-header { background: var(--card-bg, #1a1a2e); padding: 16px 20px; border-radius: 8px; margin-bottom: 12px; }
         .cr-doc-header-inner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
         .cr-doc-brand { margin: 0; font-size: 20px; }
         .cr-doc-header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-        /* ── Section bars (like sample report) ── */
-        .cr-section { margin-bottom: 16px; }
+        /* ── Vehicle Title Bar ── */
+        .cr-vehicle-title-bar { padding: 16px 20px; border-bottom: 2px solid #c9a44a; margin-bottom: 12px; }
+        .cr-vehicle-name { margin: 0; font-size: 22px; font-weight: 700; color: #e8e8e8; }
+        .cr-vehicle-specs { display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; color: #aaa; margin-top: 4px; }
+        .cr-spec-sep { color: #666; }
+        .cr-vehicle-seller { font-size: 13px; font-weight: 600; text-transform: uppercase; color: #bbb; margin-top: 4px; }
+
+        /* ── Hero Layout: Gallery + Summary Panel ── */
+        .cr-hero-layout { display: grid; grid-template-columns: 1fr 340px; gap: 0; margin-bottom: 12px; border: 1px solid #333; border-radius: 8px; overflow: hidden; }
+
+        /* ── Gallery ── */
+        .cr-gallery { background: #111; }
+        .cr-gallery-stage { position: relative; min-height: 380px; display: flex; align-items: center; justify-content: center; background: #0a0a0a; cursor: pointer; }
+        .cr-gallery-main-img { max-width: 100%; max-height: 420px; object-fit: contain; display: block; }
+        .cr-gallery-arrow {
+          position: absolute; top: 50%; transform: translateY(-50%);
+          background: rgba(255,255,255,0.7); border: none; color: #222;
+          width: 40px; height: 40px; border-radius: 50%;
+          font-size: 24px; font-weight: 700; cursor: pointer;
+          display: flex; align-items: center; justify-content: center;
+          z-index: 2; transition: background 0.15s;
+        }
+        .cr-gallery-arrow:hover { background: rgba(255,255,255,0.95); }
+        .cr-gallery-arrow-left { left: 10px; }
+        .cr-gallery-arrow-right { right: 10px; }
+        .cr-gallery-counter {
+          position: absolute; bottom: 10px; left: 14px;
+          font-size: 13px; color: #ccc; background: rgba(0,0,0,0.55);
+          padding: 4px 10px; border-radius: 4px;
+          display: flex; align-items: center; gap: 8px;
+        }
+        .cr-gallery-fullscreen { background: none; border: none; color: #ccc; font-size: 16px; cursor: pointer; padding: 0; }
+        .cr-gallery-fullscreen:hover { color: #fff; }
+        .cr-gallery-thumbstrip {
+          display: flex; gap: 4px; padding: 6px 8px;
+          overflow-x: auto; scrollbar-width: thin; background: #111;
+        }
+        .cr-gallery-thumb {
+          flex-shrink: 0; width: 64px; height: 48px;
+          border: 2px solid transparent; border-radius: 3px;
+          overflow: hidden; cursor: pointer; opacity: 0.7;
+          transition: opacity 0.15s, border-color 0.15s;
+        }
+        .cr-gallery-thumb:hover { opacity: 1; }
+        .cr-gallery-thumb-active { border-color: #c9a44a; opacity: 1; }
+        .cr-gallery-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .cr-gallery-tabs {
+          display: flex; gap: 0; border-top: 1px solid #333; background: #181818;
+        }
+        .cr-gallery-tab {
+          flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px;
+          padding: 8px 6px; background: none; border: none; border-bottom: 2px solid transparent;
+          color: #aaa; font-size: 12px; font-weight: 700; cursor: pointer;
+          text-transform: uppercase; letter-spacing: 0.5px; transition: color 0.15s, border-color 0.15s;
+        }
+        .cr-gallery-tab:hover { color: #fff; }
+        .cr-gallery-tab-active { color: #c9a44a; border-bottom-color: #c9a44a; }
+        .cr-gallery-tab-count {
+          background: #333; padding: 1px 6px; border-radius: 8px;
+          font-size: 10px; font-weight: 600; color: #ccc;
+        }
+        .cr-gallery-tab-active .cr-gallery-tab-count { background: rgba(201,164,74,0.25); color: #c9a44a; }
+
+        /* ── Summary Panel ── */
+        .cr-summary-panel {
+          padding: 20px; background: var(--card-bg, #1a1a2e);
+          display: flex; flex-direction: column; gap: 18px;
+          overflow-y: auto; max-height: 600px;
+        }
+        .cr-grade-block { text-align: center; padding-bottom: 14px; border-bottom: 1px solid #333; }
+        .cr-grade-circle {
+          display: inline-flex; align-items: center; justify-content: center;
+          width: 80px; height: 80px; border-radius: 50%;
+          border: 3px solid #4a7c59; background: rgba(74,124,89,0.12);
+        }
+        .cr-grade-number { font-size: 32px; font-weight: 800; color: #4a7c59; }
+        .cr-grade-label { display: block; font-size: 14px; font-weight: 700; color: #4a7c59; margin-top: 6px; }
+        .cr-panel-section { }
+        .cr-panel-heading { margin: 0 0 6px; font-size: 14px; font-weight: 700; color: #e0e0e0; }
+        .cr-panel-list { margin: 0; padding: 0 0 0 18px; font-size: 13px; color: #ccc; }
+        .cr-panel-list li { margin-bottom: 3px; }
+        .cr-panel-kv { display: grid; gap: 6px; }
+        .cr-panel-kv-row { display: flex; justify-content: space-between; font-size: 13px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+        .cr-panel-kv-label { font-size: 11px; font-weight: 600; text-transform: uppercase; color: #999; letter-spacing: 0.3px; }
+        .cr-panel-kv-value { font-weight: 600; color: #e0e0e0; }
+
+        /* ── Issues Table ── */
+        .cr-issues-table { display: grid; gap: 4px; }
+        .cr-issues-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; padding: 4px 0; border-bottom: 1px solid #333; }
+        .cr-issues-label { color: #ccc; }
+        .cr-issues-count { font-weight: 700; color: #ccc; min-width: 28px; text-align: center; padding: 2px 6px; border-radius: 3px; }
+        .cr-issues-count-alert { background: #e74c3c; color: #fff; }
+
+        /* ── Inspection Banner ── */
+        .cr-inspection-banner {
+          background: #1a2744; color: #fff;
+          padding: 10px 20px; font-size: 15px; font-weight: 800;
+          text-transform: uppercase; letter-spacing: 1px;
+          margin-bottom: 0;
+        }
+
+        /* ── Section bars ── */
+        .cr-section { margin-bottom: 0; }
         .cr-section-bar {
-          background: #2a2a3e;
-          color: #e0e0e0;
-          padding: 8px 14px;
-          margin: 0 0 0 0;
-          font-size: 14px;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
+          background: #2a2a3e; color: #e0e0e0;
+          padding: 8px 14px; margin: 0;
+          font-size: 14px; font-weight: 700;
+          text-transform: uppercase; letter-spacing: 0.5px;
           border-left: 4px solid #c9a44a;
         }
 
-        /* ── Details table (matches sample) ── */
-        .cr-details-table { width: 100%; border-collapse: collapse; padding: 12px; }
-        .cr-details-table td { padding: 6px 10px; font-size: 13px; }
-        .cr-td-label { font-weight: 700; white-space: nowrap; color: #aaa; width: 100px; }
+        /* ── Inspection Grid (3-col) ── */
+        .cr-inspection-grid {
+          display: grid; grid-template-columns: repeat(3, 1fr);
+          gap: 0; padding: 0;
+        }
+        .cr-field-cell {
+          padding: 10px 14px;
+          border-bottom: 1px solid #333;
+          border-right: 1px solid #333;
+        }
+        .cr-field-cell:nth-child(3n) { border-right: none; }
+        .cr-field-label {
+          display: block; font-size: 11px; font-weight: 700;
+          text-transform: uppercase; letter-spacing: 0.3px;
+          color: #aaa; margin-bottom: 2px;
+        }
+        .cr-field-value { display: block; font-size: 14px; color: #e0e0e0; font-weight: 500; }
+        .cr-field-issue .cr-field-label { color: #e74c3c; }
+        .cr-field-issue .cr-field-value { color: #e74c3c; font-weight: 700; }
+        .cr-field-unavailable .cr-field-label { color: #666; }
+        .cr-field-unavailable .cr-field-value { color: #666; font-style: italic; }
 
-        /* ── Images layout (thumb column + hero + grade) ── */
-        .cr-images-layout { display: flex; gap: 16px; padding: 14px; }
-        .cr-thumb-col { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; width: 180px; flex-shrink: 0; }
-        .cr-thumb { border: 1px solid #444; cursor: pointer; border-radius: 3px; overflow: hidden; }
-        .cr-thumb:hover { border-color: #c9a44a; }
-        .cr-thumb img { width: 100%; height: 55px; object-fit: cover; display: block; }
-        .cr-hero-col { flex: 1; cursor: pointer; border: 1px solid #444; border-radius: 4px; overflow: hidden; }
-        .cr-hero-col img { width: 100%; height: auto; max-height: 420px; object-fit: contain; display: block; }
-        .cr-grade-col { width: 180px; flex-shrink: 0; display: flex; flex-direction: column; gap: 12px; }
-        .cr-grade-card { text-align: center; border: 2px solid #c9a44a; border-radius: 8px; padding: 16px 10px; }
-        .cr-grade-label { display: block; font-size: 12px; color: #aaa; text-transform: uppercase; }
-        .cr-grade-value { display: block; font-size: 36px; font-weight: 800; color: #c9a44a; margin: 4px 0; }
-        .cr-grade-desc { display: block; font-size: 14px; color: #ccc; }
-        .cr-grade-checks { list-style: disc; padding-left: 18px; font-size: 13px; margin: 0; }
-        .cr-grade-checks li { margin-bottom: 4px; }
-
-        /* ── KPI row ── */
-        .cr-kpi-row { display: flex; gap: 12px; padding: 14px; flex-wrap: wrap; }
-        .cr-kpi { flex: 1; min-width: 140px; border: 1px solid #444; border-radius: 6px; padding: 14px; text-align: center; }
-        .cr-kpi-label { display: block; font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-        .cr-kpi-value { display: block; font-size: 22px; font-weight: 700; }
-
-        /* ── Announcements ── */
+        /* ── Announcements / Comments ── */
         .cr-announce-list { padding: 12px 12px 12px 30px; margin: 0; }
-        .cr-empty { padding: 12px 14px; color: #7c7; margin: 0; }
-        .cr-announcements-wrap { padding: 14px; display: grid; gap: 14px; }
-        .cr-announcement-block { display: grid; gap: 8px; }
-        .cr-subsection-title { margin: 0; font-size: 12px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; }
-        .cr-auction-light { display: inline-flex; align-items: center; width: fit-content; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-        .cr-auction-light-green { background: #1f4d2f; color: #8de0a5; border: 1px solid #2f7a4c; }
-        .cr-auction-light-yellow { background: #544106; color: #f0ca62; border: 1px solid #b28d1f; }
-        .cr-auction-light-red { background: #5a1f1f; color: #f28b82; border: 1px solid #b74f4f; }
-        .cr-announcement-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-        .cr-announcement-grid-clean { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-        .cr-announcement-card { border: 1px solid #3d3d52; border-radius: 6px; padding: 10px 12px; display: grid; gap: 4px; background: rgba(255,255,255,0.02); }
-        .cr-announcement-card-alert { border-color: #7a3535; background: rgba(183, 79, 79, 0.08); }
-        .cr-announcement-card-unknown { border-color: #7a6a35; background: rgba(201, 164, 74, 0.08); }
-        .cr-announcement-card-clean { border-color: #31573a; background: rgba(77, 134, 94, 0.06); }
-        .cr-announcement-label { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.4px; }
-        .cr-announcement-value { font-size: 13px; color: #e7e7e7; }
-
-        /* ── Comments ── */
-        .cr-comments { padding: 12px 14px; margin: 0; }
-
-        /* ── Problem highlights ── */
         .cr-problem-list li { color: #e7a33e; }
-
-        /* ── Condition grid ── */
-        .cr-condition-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 14px; }
-        .cr-cond-item { display: flex; gap: 8px; }
-        .cr-cond-label { font-weight: 700; color: #aaa; min-width: 140px; }
+        .cr-comments { padding: 12px 14px; margin: 0; }
 
         /* ── Damage table ── */
         .cr-damage-count { font-weight: 400; font-size: 12px; color: #aaa; }
@@ -815,48 +1005,176 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         .cr-equipment-meta { font-size: 11px; color: #c9a44a; text-transform: uppercase; letter-spacing: 0.4px; }
         .cr-equipment-detail { font-size: 12px; color: #aaa; }
 
-        /* ── Tire grid ── */
-        .cr-tire-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 14px; }
-        .cr-tire-card { border: 1px solid #444; border-radius: 6px; padding: 12px; text-align: center; }
-        .cr-tire-pos { display: block; font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-        .cr-tire-depth { display: block; font-size: 22px; font-weight: 700; color: #c9a44a; }
-        .cr-tire-detail { display: block; font-size: 11px; color: #888; margin-top: 2px; }
-
         /* ── Image grid ── */
         .cr-image-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 14px; }
         .cr-grid-thumb { border: 1px solid #444; border-radius: 3px; overflow: hidden; cursor: pointer; }
         .cr-grid-thumb:hover { border-color: #c9a44a; }
         .cr-grid-thumb img { width: 100%; height: 120px; object-fit: cover; display: block; }
 
-        /* ── Lightbox overlay ── */
+        /* ── Title & History content ── */
+        .cr-title-history-content { padding: 14px; }
+
+        /* ── AutoCheck ── */
+        .cr-autocheck-wrap { display: grid; gap: 14px; }
+        .cr-autocheck-hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr); gap: 14px; }
+        .cr-autocheck-summary-card,
+        .cr-autocheck-score-card,
+        .cr-autocheck-check-card,
+        .cr-autocheck-unavailable,
+        .cr-autocheck-details {
+          border: 1px solid #3d3d52; border-radius: 10px;
+          background: rgba(255,255,255,0.025);
+        }
+        .cr-autocheck-summary-card,
+        .cr-autocheck-score-card { padding: 16px; }
+        .cr-autocheck-summary-head,
+        .cr-autocheck-score-topline {
+          display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+        }
+        .cr-autocheck-mini-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: #9da8c3; font-weight: 700; }
+        .cr-autocheck-status,
+        .cr-autocheck-score-band {
+          display: inline-flex; align-items: center; justify-content: center;
+          padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700;
+          text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .cr-autocheck-status-good,
+        .cr-autocheck-score-band-strong { background: rgba(69,138,92,0.2); color: #8fe0a6; border: 1px solid rgba(69,138,92,0.45); }
+        .cr-autocheck-status-warning,
+        .cr-autocheck-score-band-watch { background: rgba(201,164,74,0.16); color: #f1cb76; border: 1px solid rgba(201,164,74,0.38); }
+        .cr-autocheck-status-muted,
+        .cr-autocheck-score-band-muted { background: rgba(113,126,152,0.14); color: #c6cfdf; border: 1px solid rgba(113,126,152,0.32); }
+        .cr-autocheck-title { margin: 12px 0 14px; font-size: 20px; line-height: 1.15; }
+        .cr-autocheck-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .cr-autocheck-summary-stat {
+          border: 1px solid #33384c; border-radius: 8px; padding: 12px;
+          background: rgba(15,20,32,0.55); display: grid; gap: 6px;
+        }
+        .cr-autocheck-summary-stat span { font-size: 11px; color: #a9b2c1; text-transform: uppercase; letter-spacing: 0.5px; }
+        .cr-autocheck-summary-stat strong { font-size: 20px; color: #f4f6fa; }
+        .cr-autocheck-meta { margin: 12px 0 0; color: #9fa8bb; font-size: 12px; }
+        .cr-autocheck-gauge {
+          position: relative; width: 100%; max-width: 260px;
+          aspect-ratio: 1.8 / 1.1; margin: 14px auto 6px;
+        }
+        .cr-autocheck-gauge-arc {
+          position: absolute; inset: 0;
+          border-radius: 260px 260px 0 0; clip-path: inset(0 0 50% 0);
+        }
+        .cr-autocheck-gauge-cutout {
+          position: absolute; inset: 20px 20px 0 20px;
+          border-radius: 220px 220px 0 0; background: #151b29;
+          clip-path: inset(0 0 50% 0);
+        }
+        .cr-autocheck-gauge-center {
+          position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
+          display: grid; justify-items: center; gap: 2px;
+        }
+        .cr-autocheck-gauge-center strong { font-size: 48px; line-height: 1; color: #f3f6fd; }
+        .cr-autocheck-gauge-center span { font-size: 12px; color: #a7b2c7; letter-spacing: 0.5px; text-transform: uppercase; }
+        .cr-autocheck-scale { display: flex; justify-content: space-between; gap: 12px; color: #96a1b7; font-size: 12px; }
+        .cr-autocheck-score-copy { margin: 12px 0 0; color: #d9e1f2; line-height: 1.6; }
+        .cr-autocheck-check-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .cr-autocheck-check-card { padding: 14px; display: grid; gap: 10px; }
+        .cr-autocheck-check-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .cr-autocheck-check-label { font-size: 13px; color: #dce3f1; font-weight: 700; }
+        .cr-autocheck-check-value { color: #c1cbde; font-size: 13px; line-height: 1.5; }
+        .cr-autocheck-chip {
+          display: inline-flex; align-items: center; justify-content: center;
+          min-width: 94px; padding: 4px 10px; border-radius: 999px;
+          font-size: 11px; font-weight: 700; text-transform: uppercase;
+          letter-spacing: 0.5px; white-space: nowrap;
+        }
+        .cr-autocheck-chip-ok { background: rgba(69,138,92,0.2); color: #92e2a9; border: 1px solid rgba(69,138,92,0.45); }
+        .cr-autocheck-chip-issue { background: rgba(194,100,88,0.18); color: #f4a095; border: 1px solid rgba(194,100,88,0.38); }
+        .cr-autocheck-chip-info { background: rgba(90,119,177,0.18); color: #9cc5ff; border: 1px solid rgba(90,119,177,0.38); }
+        .cr-autocheck-chip-muted { background: rgba(113,126,152,0.14); color: #c6cfdf; border: 1px solid rgba(113,126,152,0.32); }
+        .cr-autocheck-unavailable {
+          padding: 16px; display: flex; justify-content: space-between;
+          align-items: flex-start; gap: 14px;
+          background: rgba(194,100,88,0.08); border-color: rgba(194,100,88,0.28);
+        }
+        .cr-autocheck-unavailable strong { display: block; margin-bottom: 6px; color: #f1f5ff; }
+        .cr-autocheck-unavailable p { margin: 0; color: #d1d7e4; line-height: 1.6; }
+        .cr-autocheck-attempted { color: #9da8c3; font-size: 12px; white-space: nowrap; }
+        .cr-autocheck-details { overflow: hidden; }
+        .cr-autocheck-details summary {
+          list-style: none; cursor: pointer;
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 12px; padding: 14px 16px; font-weight: 700; color: #eef2fb;
+        }
+        .cr-autocheck-details summary::-webkit-details-marker { display: none; }
+        .cr-autocheck-details-hint { font-size: 12px; color: #97a3ba; text-transform: uppercase; letter-spacing: 0.5px; }
+        .cr-autocheck-details[open] .cr-autocheck-details-hint { color: #c9a44a; }
+        .cr-autocheck-details-body { border-top: 1px solid #33384c; padding: 16px; display: grid; gap: 12px; }
+        .cr-autocheck-report-actions { display: flex; justify-content: flex-start; }
+        .cr-autocheck-report-text {
+          margin: 0; padding: 14px; border-radius: 8px;
+          background: rgba(10,14,24,0.7); border: 1px solid #2f3446;
+          color: #d5dceb; font-size: 12px; line-height: 1.65;
+          white-space: pre-wrap;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        }
+
+        /* ── Fullscreen Lightbox Overlay ── */
         .cr-overlay {
           position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-          background: rgba(0,0,0,0.92);
+          background: rgba(0,0,0,0.95);
           display: flex; align-items: center; justify-content: center;
           z-index: 10000;
         }
         .cr-overlay-close {
           position: fixed; top: 16px; right: 24px;
           background: none; border: none; color: #fff;
-          font-size: 40px; cursor: pointer; z-index: 10001;
-          line-height: 1; padding: 0;
+          font-size: 44px; cursor: pointer; z-index: 10001;
+          line-height: 1; padding: 0; opacity: 0.8;
         }
-        .cr-overlay-close:hover { color: #c9a44a; }
-        .cr-overlay-img { max-width: 92vw; max-height: 90vh; object-fit: contain; }
+        .cr-overlay-close:hover { opacity: 1; color: #c9a44a; }
+        .cr-overlay-counter {
+          position: fixed; top: 20px; left: 50%;
+          transform: translateX(-50%);
+          color: #ccc; font-size: 14px; font-weight: 600;
+          z-index: 10001;
+        }
+        .cr-overlay-img { max-width: 88vw; max-height: 82vh; object-fit: contain; }
+        .cr-overlay-arrow {
+          position: fixed; top: 50%; transform: translateY(-50%);
+          background: rgba(255,255,255,0.12); border: none; color: #fff;
+          width: 52px; height: 52px; border-radius: 50%;
+          font-size: 32px; font-weight: 700; cursor: pointer;
+          display: flex; align-items: center; justify-content: center;
+          z-index: 10001; transition: background 0.15s;
+        }
+        .cr-overlay-arrow:hover { background: rgba(255,255,255,0.25); }
+        .cr-overlay-arrow-left { left: 20px; }
+        .cr-overlay-arrow-right { right: 20px; }
+        .cr-overlay-thumbstrip {
+          position: fixed; bottom: 0; left: 0; right: 0;
+          display: flex; gap: 4px; padding: 10px 16px;
+          overflow-x: auto; scrollbar-width: thin;
+          background: rgba(0,0,0,0.85); z-index: 10001;
+          justify-content: center;
+        }
 
         @media print {
-          .cr-doc-header-actions, .cr-overlay, .cr-iframe-overlay { display: none !important; }
+          .cr-doc-header-actions, .cr-overlay, .cr-gallery-tabs, .cr-gallery-arrow { display: none !important; }
+          .cr-hero-layout { grid-template-columns: 1fr 280px; }
+          .cr-gallery-stage { min-height: auto; }
+          .cr-inspection-grid { break-inside: avoid; }
         }
 
         @media (max-width: 768px) {
-          .cr-images-layout { flex-direction: column; }
-          .cr-thumb-col { width: 100%; grid-template-columns: repeat(4, 1fr); }
-          .cr-grade-col { width: 100%; flex-direction: row; }
-          .cr-kpi-row { flex-direction: column; }
+          .cr-hero-layout { grid-template-columns: 1fr; }
+          .cr-summary-panel { max-height: none; }
+          .cr-inspection-grid { grid-template-columns: 1fr; }
           .cr-image-grid { grid-template-columns: repeat(2, 1fr); }
-          .cr-tire-grid { grid-template-columns: repeat(2, 1fr); }
-          .cr-announcement-grid, .cr-announcement-grid-clean, .cr-equipment-grid { grid-template-columns: 1fr; }
-          .cr-damage-table { font-size: 12px; }
+          .cr-equipment-grid { grid-template-columns: 1fr; }
+          .cr-autocheck-hero, .cr-autocheck-check-grid, .cr-autocheck-summary-grid { grid-template-columns: 1fr; }
+          .cr-autocheck-unavailable { flex-direction: column; }
+          .cr-field-cell { border-right: none; }
+          .cr-overlay-arrow { width: 40px; height: 40px; font-size: 24px; }
+          .cr-overlay-arrow-left { left: 8px; }
+          .cr-overlay-arrow-right { right: 8px; }
         }
       `}</style>
     </>
@@ -865,29 +1183,27 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
 
 /* ── Helpers ── */
 
-function renderConditionField(label: string, value: unknown) {
-  if (value === null || value === undefined) return null;
+function renderAutoCheckSummaryValue(label: string, value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") return null;
   return (
-    <div className="cr-cond-item">
-      <span className="cr-cond-label">{label}:</span>
-      <span>{String(value)}</span>
+    <div className="cr-autocheck-summary-stat">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }
 
-function hasStructuredData(report: Record<string, unknown>): boolean {
-  const fields = ["overall_grade", "structural_damage", "paint_condition", "interior_condition", "tire_condition"];
-  return fields.some(f => report[f] !== null && report[f] !== undefined);
-}
-
-function resolveHeroImage(vehicle: VehicleDetail | null): string | null {
-  if (!vehicle) return null;
+function renderAutoCheckCheck(label: string, value: string | null | undefined) {
+  if (!value) return null;
+  const tone = classifyAutoCheckValue(value);
   return (
-    vehicle.hero_image ||
-    vehicle.display_context?.hero_image ||
-    (vehicle.display_images && vehicle.display_images[0]) ||
-    (vehicle.images && vehicle.images[0]) ||
-    null
+    <article className="cr-autocheck-check-card">
+      <div className="cr-autocheck-check-head">
+        <span className="cr-autocheck-check-label">{label}</span>
+        <span className={`cr-autocheck-chip cr-autocheck-chip-${tone}`}>{autoCheckToneLabel(tone)}</span>
+      </div>
+      <div className="cr-autocheck-check-value">{value}</div>
+    </article>
   );
 }
 
@@ -895,7 +1211,6 @@ function stripSizeParam(url: string): string {
   try {
     const u = new URL(url);
     u.searchParams.delete("size");
-    // Also strip ?size= variants without proper key-value (e.g., ?size=w86h64)
     const cleaned = u.toString().replace(/\?size=[^&]*&?/, "?").replace(/\?$/, "");
     return cleaned;
   } catch {
@@ -903,143 +1218,391 @@ function stripSizeParam(url: string): string {
   }
 }
 
-function resolveReportImages(vehicle: VehicleDetail | null): string[] {
+function categorizeImage(url: string, role?: string): string {
+  if (role === "disclosure") return "dmg";
+  const lower = (url || "").toLowerCase();
+  if (/interior|dash|cargo|seat|console|steering/i.test(lower)) return "int";
+  if (/damage|scratch|dent|crack|chip/i.test(lower)) return "dmg";
+  if (/front|rear|driver|passenger|wheel|bumper|fender|hood|trunk|roof|exterior/i.test(lower)) return "ext";
+  if (/odo|vin|sticker|plate|engine.*bay/i.test(lower)) return "misc";
+  return "ext"; // default to exterior for uncategorized CR photos
+}
+
+function resolveCategorizedImages(vehicle: VehicleDetail | null): CategorizedImage[] {
   if (!vehicle) return [];
 
-  // Prefer OVE detail images (actual CR photos, not Imagin Studio marketing)
   const oveImages = vehicle.ove_detail?.images || [];
   if (oveImages.length > 0) {
     const seen = new Set<string>();
-    const result: string[] = [];
+    const result: CategorizedImage[] = [];
     for (const entry of oveImages) {
-      // images_json items are objects { url, role, ... } or plain strings
-      const raw = typeof entry === "string" ? entry : (entry as { url?: string }).url;
+      const isObj = typeof entry !== "string";
+      const raw = isObj ? (entry as { url?: string }).url : entry;
       if (!raw || typeof raw !== "string") continue;
-      // Skip non-photo assets (SVGs, logos, gifs, known non-vehicle images)
       const lower = raw.toLowerCase();
       if (lower.includes(".svg") || lower.includes(".gif")) continue;
       if (lower.includes("ready_logistics.png")) continue;
       const clean = stripSizeParam(raw);
-      // Deduplicate by base URL (after stripping size)
       if (seen.has(clean)) continue;
       seen.add(clean);
-      result.push(clean);
+
+      const category = isObj && (entry as { category?: string }).category
+        ? (entry as { category: string }).category
+        : categorizeImage(clean, isObj ? (entry as { role?: string }).role : undefined);
+
+      result.push({ url: clean, category, role: isObj ? (entry as { role?: string }).role : undefined });
     }
     if (result.length > 0) return result;
   }
 
-  // Fallback: gallery or raw images list
-  return (
+  // Fallback
+  const fallback =
     vehicle.display_context?.gallery_images ||
     vehicle.display_images ||
     vehicle.images ||
-    []
-  );
+    [];
+  return fallback.map((url) => ({ url, category: categorizeImage(url) }));
 }
 
-function humanizeKey(value: string): string {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
+function parseAnnouncements(report: Record<string, unknown>, crMetadata: Record<string, unknown>): string[] {
+  const MAX_ITEM_CHARS = 400;
+  const sanitize = (items: unknown[]): string[] =>
+    items
+      .map((item) => (typeof item === "string" ? item.trim() : ""))
+      .filter((item) => item.length > 0 && item.length <= MAX_ITEM_CHARS);
+
+  const fromField = Array.isArray(report.announcements) ? sanitize(report.announcements as unknown[]) : [];
+  if (fromField.length > 0) return fromField;
+
+  const metaEnrichment = (crMetadata.announcementsEnrichment as Record<string, unknown> | undefined)?.announcements;
+  if (Array.isArray(metaEnrichment)) {
+    const items = sanitize(metaEnrichment);
+    if (items.length > 0) return items;
+  }
+
+  const rawText = typeof report.raw_text === "string" ? report.raw_text : "";
+  if (!rawText) return [];
+
+  const jsonStart = rawText.indexOf("{");
+  if (jsonStart >= 0 && jsonStart <= 32) {
+    try {
+      const parsed = JSON.parse(rawText.slice(jsonStart));
+      const enrichment = parsed?.announcementsEnrichment?.announcements;
+      if (Array.isArray(enrichment)) {
+        const items = sanitize(enrichment);
+        if (items.length > 0) return items;
+      }
+      const direct = parsed?.announcements;
+      if (Array.isArray(direct)) {
+        const items = sanitize(direct);
+        if (items.length > 0) return items;
+      }
+    } catch {
+      // fall through
+    }
+    return [];
+  }
+
+  const annoMatch = rawText.match(/Announcements\s*(.*?)(?:Remarks|Seller Comments|$)/si);
+  if (annoMatch && annoMatch[1]) {
+    const text = annoMatch[1].replace(/No Announcements Present/gi, "").trim();
+    if (text && text !== "No" && text.length <= MAX_ITEM_CHARS) return [text];
+  }
+  return [];
 }
 
-type ParsedAnnouncement = {
-  raw: string;
-  label: string;
-  value: string | null;
-  category: "issue" | "unknown" | "clean" | "informational" | "auction_light";
-  color?: "green" | "yellow" | "red";
-};
+function buildLegacyInspection(report: Record<string, unknown>): Inspection | null {
+  const CLEAN_VALUES = new Set([
+    "no issues", "none", "no damage", "not inspected", "not specified",
+    "fully functional", "no oil sludge", "factory equipment installed",
+    "not applicable", "n/a", "", "not available",
+    "yes - starts", "yes - drives", "yes",
+    "no codes found", "no codes",
+  ]);
 
-function parseAnnouncement(raw: string): ParsedAnnouncement {
-  const text = raw.trim();
-  const lightMatch = text.match(/^(Green|Yellow|Red)\s+Light$/i);
-  if (lightMatch) {
-    return {
-      raw: text,
-      label: "Auction Light",
-      value: `${lightMatch[1][0].toUpperCase()}${lightMatch[1].slice(1).toLowerCase()} Light`,
-      category: "auction_light",
-      color: lightMatch[1].toLowerCase() as "green" | "yellow" | "red",
-    };
+  function isIssue(value: string): boolean {
+    const normalized = value.trim().toLowerCase();
+    if (CLEAN_VALUES.has(normalized)) return false;
+    // Numeric key counts (e.g. "1", "2", "0") are informational
+    if (/^\d+$/.test(normalized)) return false;
+    // Tire depth readings like '6/32" or Above' are not issues
+    if (normalized.includes("/32")) return false;
+    return true;
   }
 
-  const colonIndex = text.indexOf(":");
-  if (colonIndex < 0) {
-    return { raw: text, label: text, value: null, category: "informational" };
+  function makeField(label: string, value: string): InspectionField {
+    return { label, value, has_issue: isIssue(value) };
   }
 
-  const label = text.slice(0, colonIndex).trim();
-  const value = text.slice(colonIndex + 1).trim();
-  const valueLower = value.toLowerCase();
-  const labelLower = label.toLowerCase();
+  const TEMPLATE: Record<string, { label: string; fields: Record<string, string> }> = {
+    drivability: {
+      label: "Drivability, Keys, & History",
+      fields: {
+        smart_keys: "Smart Keys", other_keys: "Other Keys",
+        odor_bio: "Odor/Bio/Environmental/History",
+        vehicle_starts: "Vehicle Starts", vehicle_drives: "Vehicle Drives",
+      },
+    },
+    exterior: {
+      label: "Exterior",
+      fields: {
+        front_exterior: "Front Exterior", driver_exterior: "Driver Exterior",
+        roof_exterior: "Roof - Exterior", passenger_exterior: "Passenger Exterior",
+        rear_exterior: "Rear Exterior", further_disclosures: "Further Disclosures",
+      },
+    },
+    interior: {
+      label: "Interior",
+      fields: {
+        airbags: "Airbags", climate_control: "Climate Control",
+        electrical_accessory: "Electrical Accessory", infotainment_radio: "Infotainment/Radio",
+        sunroof_operation: "Sunroof Operation", interior_cosmetic: "Interior Cosmetic Damage",
+      },
+    },
+    mechanical: {
+      label: "Mechanical & Diagnostic Trouble Codes",
+      fields: {
+        diagnostic_trouble_codes: "Diagnostic Trouble Codes",
+        emissions_catalytic: "Emissions/Catalytic/Exhaust",
+        engine_noise: "Engine Noise",
+        warning_lights: "Warning Lights & Gauge Cluster",
+        active_visible_leaks: "Active Visible Leaks From Engine Or Undercarriage Area",
+        engine_oil_sludge: "Engine Oil Sludge",
+        vehicle_smoke: "Vehicle Smoke",
+        other_mechanical: "Other Mechanical Comments",
+      },
+    },
+    tires: {
+      label: "Tires & Wheels",
+      fields: {
+        driver_front_tire_depth: "Driver Front Tire Depth",
+        driver_front_tire_issue: "Driver Front Tire & Wheel Issue",
+        driver_rear_tire_depth: "Driver Rear Tire Depth",
+        driver_rear_tire_issue: "Driver Rear Tire & Wheel Issue",
+        passenger_front_tire_depth: "Passenger Front Tire Depth",
+        passenger_front_tire_issue: "Passenger Front Tire & Wheel Issue",
+        passenger_rear_tire_depth: "Passenger Rear Tire Depth",
+        passenger_rear_tire_issue: "Passenger Rear Tire & Wheel Issue",
+      },
+    },
+  };
 
-  const safeYesLabels = new Set(["driveable"]);
-  const cleanValues = new Set(["no", "none", "no issues", "title present"]);
+  // -- Map NAAA labels (as in body_text) to (sectionId, fieldId) --
+  const BODY_TEXT_MAP: Record<string, [string, string]> = {
+    "SMART KEYS": ["drivability", "smart_keys"],
+    "OTHER KEYS": ["drivability", "other_keys"],
+    "ODOR/BIO/ENVIRONMENTAL/HISTORY": ["drivability", "odor_bio"],
+    "VEHICLE STARTS": ["drivability", "vehicle_starts"],
+    "VEHICLE DRIVES": ["drivability", "vehicle_drives"],
+    "FRONT EXTERIOR": ["exterior", "front_exterior"],
+    "DRIVER EXTERIOR": ["exterior", "driver_exterior"],
+    "ROOF - EXTERIOR": ["exterior", "roof_exterior"],
+    "PASSENGER EXTERIOR": ["exterior", "passenger_exterior"],
+    "REAR EXTERIOR": ["exterior", "rear_exterior"],
+    "FURTHER DISCLOSURES": ["exterior", "further_disclosures"],
+    "AIRBAGS": ["interior", "airbags"],
+    "CLIMATE CONTROL": ["interior", "climate_control"],
+    "ELECTRICAL ACCESSORY": ["interior", "electrical_accessory"],
+    "INFOTAINMENT/RADIO": ["interior", "infotainment_radio"],
+    "SUNROOF OPERATION": ["interior", "sunroof_operation"],
+    "INTERIOR COSMETIC DAMAGE": ["interior", "interior_cosmetic"],
+    "DIAGNOSTIC TROUBLE CODES": ["mechanical", "diagnostic_trouble_codes"],
+    "EMISSIONS/CATALYTIC/EXHAUST": ["mechanical", "emissions_catalytic"],
+    "ENGINE NOISE": ["mechanical", "engine_noise"],
+    "WARNING LIGHTS & GAUGE CLUSTER": ["mechanical", "warning_lights"],
+    "ACTIVE VISIBLE LEAKS FROM ENGINE OR UNDERCARRIAGE AREA": ["mechanical", "active_visible_leaks"],
+    "ENGINE OIL SLUDGE": ["mechanical", "engine_oil_sludge"],
+    "VEHICLE SMOKE": ["mechanical", "vehicle_smoke"],
+    "OTHER MECHANICAL COMMENTS": ["mechanical", "other_mechanical"],
+    "DRIVER FRONT TIRE DEPTH": ["tires", "driver_front_tire_depth"],
+    "DRIVER FRONT TIRE & WHEEL ISSUE": ["tires", "driver_front_tire_issue"],
+    "DRIVER REAR TIRE DEPTH": ["tires", "driver_rear_tire_depth"],
+    "DRIVER REAR TIRE & WHEEL ISSUE": ["tires", "driver_rear_tire_issue"],
+    "PASSENGER FRONT TIRE DEPTH": ["tires", "passenger_front_tire_depth"],
+    "PASSENGER FRONT TIRE & WHEEL ISSUE": ["tires", "passenger_front_tire_issue"],
+    "PASSENGER REAR TIRE DEPTH": ["tires", "passenger_rear_tire_depth"],
+    "PASSENGER REAR TIRE & WHEEL ISSUE": ["tires", "passenger_rear_tire_issue"],
+  };
 
-  let category: ParsedAnnouncement["category"] = "informational";
-  if (valueLower.includes("unknown")) {
-    category = "unknown";
-  } else if (cleanValues.has(valueLower)) {
-    category = "clean";
-  } else if (valueLower === "yes") {
-    category = safeYesLabels.has(labelLower) ? "clean" : "issue";
-  } else if (/^\d+$/.test(valueLower)) {
-    category = "informational";
-  } else if (valueLower.length > 0) {
-    category = "informational";
+  // --- Try parsing body_text first (covers all 32 NAAA fields) ---
+  const bodyText = ((report.metadata as Record<string, unknown>)?.report_page as Record<string, unknown>)?.body_text;
+  let legacy: Record<string, Record<string, string>> = {};
+
+  if (typeof bodyText === "string" && bodyText.length > 50) {
+    const lines = bodyText.split("\n").map((l) => l.trim());
+    for (let i = 0; i < lines.length - 1; i++) {
+      const label = lines[i].toUpperCase().trim();
+      const mapping = BODY_TEXT_MAP[label];
+      if (mapping) {
+        const value = lines[i + 1].trim();
+        if (value && !BODY_TEXT_MAP[value.toUpperCase()]) {
+          const [sectionId, fieldId] = mapping;
+          legacy[sectionId] = legacy[sectionId] || {};
+          legacy[sectionId][fieldId] = value;
+          i++; // skip value line
+        }
+      }
+    }
   }
 
-  return { raw: text, label, value, category };
+  // --- Fallback: build from structured fields if body_text yielded nothing ---
+  if (Object.keys(legacy).length === 0) {
+    const vh = report.vehicle_history as { engine_starts?: boolean; drivable?: boolean } | undefined;
+    if (vh) {
+      const drv: Record<string, string> = {};
+      if (vh.engine_starts !== undefined) drv.vehicle_starts = vh.engine_starts ? "Yes - Starts" : "Does Not Start";
+      if (vh.drivable !== undefined) drv.vehicle_drives = vh.drivable ? "Yes - Drives" : "Does Not Drive";
+      if (Object.keys(drv).length) legacy.drivability = drv;
+    }
+
+    const td = report.tire_depths as Record<string, { tread_depth?: string; issue?: string }> | undefined;
+    if (td) {
+      const tireMap: Record<string, string> = {
+        lf: "driver_front", left_front: "driver_front", driver_front: "driver_front",
+        rf: "passenger_front", right_front: "passenger_front", passenger_front: "passenger_front",
+        lr: "driver_rear", left_rear: "driver_rear", driver_rear: "driver_rear",
+        rr: "passenger_rear", right_rear: "passenger_rear", passenger_rear: "passenger_rear",
+      };
+      const tires: Record<string, string> = {};
+      for (const [key, data] of Object.entries(td)) {
+        if (!data || typeof data !== "object") continue;
+        const dest = tireMap[key.toLowerCase()];
+        if (!dest) continue;
+        if (data.tread_depth) tires[`${dest}_tire_depth`] = data.tread_depth;
+        tires[`${dest}_tire_issue`] = data.issue || "No Issues";
+      }
+      if (Object.keys(tires).length) legacy.tires = tires;
+    }
+
+    if (report.paint_condition) legacy.exterior = { ...legacy.exterior, front_exterior: String(report.paint_condition) };
+    if (report.structural_damage) legacy.exterior = { ...legacy.exterior, further_disclosures: `Structural: ${report.structural_damage}` };
+    if (report.interior_condition) legacy.interior = { ...legacy.interior, interior_cosmetic: String(report.interior_condition) };
+  }
+
+  // Build result — merge legacy values into the NAAA template
+  const result: Inspection = {};
+  for (const [sectionId, sectionDef] of Object.entries(TEMPLATE)) {
+    const incoming = legacy[sectionId] || {};
+    const fields: Record<string, InspectionField> = {};
+    let issueCount = 0;
+    for (const [fieldId, fieldLabel] of Object.entries(sectionDef.fields)) {
+      const value = incoming[fieldId] || "Not Inspected";
+      const field = makeField(fieldLabel, value);
+      if (field.has_issue) issueCount++;
+      fields[fieldId] = field;
+    }
+    result[sectionId] = { label: sectionDef.label, fields, issue_count: issueCount };
+  }
+  return result;
 }
 
-function bucketAnnouncements(items: string[]) {
-  const parsed = items.map(parseAnnouncement);
+function normalizeAutoCheck(value: unknown): AutoCheckReport | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const scrapeStatus = normalizeAutoCheckStatus(raw.scrape_status);
   return {
-    auctionLight: parsed.find((item) => item.category === "auction_light") || null,
-    issues: parsed.filter((item) => item.category === "issue"),
-    unknown: parsed.filter((item) => item.category === "unknown"),
-    informational: parsed.filter((item) => item.category === "informational"),
-    clean: parsed.filter((item) => item.category === "clean"),
+    scrape_status: scrapeStatus,
+    attempted_at: typeof raw.attempted_at === "string" ? raw.attempted_at : null,
+    autocheck_score: toFiniteInt(raw.autocheck_score),
+    owner_count: toFiniteInt(raw.owner_count),
+    accident_count: toFiniteInt(raw.accident_count),
+    title_brand_check: normalizeString(raw.title_brand_check),
+    odometer_check: normalizeString(raw.odometer_check),
+    accident_check: normalizeString(raw.accident_check),
+    damage_check: normalizeString(raw.damage_check),
+    vehicle_use: normalizeString(raw.vehicle_use),
+    buyback_protection: normalizeString(raw.buyback_protection),
+    full_report_text: normalizeString(raw.full_report_text),
+    view_report_href: normalizeString(raw.view_report_href),
+    failure_category: normalizeString(raw.failure_category),
+    failure_message: normalizeString(raw.failure_message),
   };
 }
 
-type EquipmentSectionItem = {
-  key: string;
-  title: string;
-  meta?: string | null;
-  detail?: string | null;
-};
+function normalizeAutoCheckStatus(value: unknown): AutoCheckReport["scrape_status"] {
+  if (typeof value !== "string") return "not_attempted";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "success" || normalized === "partial" || normalized === "failed" || normalized === "not_attempted") {
+    return normalized;
+  }
+  return "not_attempted";
+}
+
+function normalizeString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function toFiniteInt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return Math.round(parsed);
+  }
+  return null;
+}
+
+function summarizeAutoCheck(autocheck: AutoCheckReport | null) {
+  if (!autocheck) {
+    return { statusLabel: "Unavailable", statusTone: "muted", scoreBand: "Unavailable", scoreTone: "muted", scoreColor: "#7f8aa3", scoreDescription: "AutoCheck score data is not available for this vehicle." } as const;
+  }
+  const statusTone = autocheck.scrape_status === "success" ? "good" : autocheck.scrape_status === "partial" ? "warning" : "muted";
+  const score = autocheck.autocheck_score;
+  if (score == null) {
+    return { statusLabel: autocheck.scrape_status.replaceAll("_", " "), statusTone, scoreBand: "Unavailable", scoreTone: "muted", scoreColor: "#7f8aa3", scoreDescription: "AutoCheck score was not included in this report payload." } as const;
+  }
+  if (score >= 85) {
+    return { statusLabel: autocheck.scrape_status.replaceAll("_", " "), statusTone, scoreBand: "Strong", scoreTone: "strong", scoreColor: "#6d85ff", scoreDescription: "This score sits in the stronger end of AutoCheck's 0-100 scale." } as const;
+  }
+  if (score >= 70) {
+    return { statusLabel: autocheck.scrape_status.replaceAll("_", " "), statusTone, scoreBand: "Watch", scoreTone: "watch", scoreColor: "#d5a54b", scoreDescription: "This score is worth a closer look alongside the check results below." } as const;
+  }
+  return { statusLabel: autocheck.scrape_status.replaceAll("_", " "), statusTone, scoreBand: "Watch", scoreTone: "watch", scoreColor: "#d96b63", scoreDescription: "This score falls on the lower end of AutoCheck's 0-100 scale and should be reviewed carefully." } as const;
+}
+
+function classifyAutoCheckValue(value: string): "ok" | "issue" | "info" | "muted" {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return "muted";
+  if (normalized === "ok" || normalized.includes("no accidents reported") || normalized.includes("no damage reported") || normalized.includes("no problem") || normalized.includes("no issues") || normalized.includes("clear") || normalized.includes("eligible")) return "ok";
+  if (normalized.includes("problem reported") || normalized.includes("information reported") || normalized.includes("reported") || normalized.includes("other use") || normalized.includes("accident") || normalized.includes("damage") || normalized.includes("brand") || normalized.includes("not eligible")) return "issue";
+  if (normalized.includes("unknown") || normalized.includes("not attempted")) return "muted";
+  return "info";
+}
+
+function autoCheckToneLabel(tone: "ok" | "issue" | "info" | "muted"): string {
+  switch (tone) {
+    case "ok": return "OK";
+    case "issue": return "Reported";
+    case "info": return "Info";
+    default: return "Unknown";
+  }
+}
+
+function formatTimestamp(value: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+type EquipmentSectionItem = { key: string; title: string; meta?: string | null; detail?: string | null; };
 
 function resolveEquipmentSection({
-  equipmentFeatures,
-  highValueOptions,
-  installedEquipment,
+  equipmentFeatures, highValueOptions, installedEquipment,
 }: {
-  equipmentFeatures: string[];
-  highValueOptions: EquipmentOption[];
-  installedEquipment: EquipmentOption[];
-}): {
-  title: string;
-  subtitle: string | null;
-  items: EquipmentSectionItem[];
-} {
+  equipmentFeatures: string[]; highValueOptions: EquipmentOption[]; installedEquipment: EquipmentOption[];
+}): { title: string; subtitle: string | null; items: EquipmentSectionItem[] } {
   if (equipmentFeatures.length > 0) {
     return {
       title: "EQUIPMENT & FEATURES",
-      subtitle: "Vehicle feature list extracted from the Liquid Motors condition report.",
-      items: equipmentFeatures.map((feature) => ({
-        key: feature.toLowerCase(),
-        title: feature,
-      })),
+      subtitle: "Vehicle feature list extracted from the condition report.",
+      items: equipmentFeatures.map((feature) => ({ key: feature.toLowerCase(), title: feature })),
     };
   }
-
   const source = highValueOptions.length > 0 ? highValueOptions : installedEquipment;
   const subtitle = highValueOptions.length > 0
-    ? "High value OEM options from the OVE listing build data."
-    : installedEquipment.length > 0
-      ? "Installed equipment from the OVE listing build data."
-      : null;
-
+    ? "High value OEM options from the listing build data."
+    : installedEquipment.length > 0 ? "Installed equipment from the listing build data." : null;
   return {
     title: highValueOptions.length > 0 ? "HIGH VALUE OPTIONS" : "INSTALLED EQUIPMENT",
     subtitle,
@@ -1047,51 +1610,27 @@ function resolveEquipmentSection({
       .map((item, index) => {
         const title = item.primary_description || item.extended_description;
         if (!title) return null;
-        const generics = Array.isArray(item.generics)
-          ? item.generics.map((generic) => generic?.name).filter(Boolean).join(", ")
-          : "";
-        const metaParts = [
-          item.classification,
-          item.installed_reason,
-          item.oem_option_code ? `Code ${item.oem_option_code}` : null,
-          typeof item.msrp === "number" ? `MSRP ${fmtMoney(item.msrp)}` : null,
-        ].filter(Boolean);
-        return {
-          key: `${index}-${title}`.toLowerCase(),
-          title,
-          meta: metaParts.join(" · ") || null,
-          detail: item.extended_description || generics || null,
-        };
+        const generics = Array.isArray(item.generics) ? item.generics.map((g) => g?.name).filter(Boolean).join(", ") : "";
+        const metaParts = [item.classification, item.installed_reason, item.oem_option_code ? `Code ${item.oem_option_code}` : null, typeof item.msrp === "number" ? `MSRP ${fmtMoney(item.msrp)}` : null].filter(Boolean);
+        return { key: `${index}-${title}`.toLowerCase(), title, meta: metaParts.join(" \u00b7 ") || null, detail: item.extended_description || generics || null };
       })
       .filter(Boolean) as EquipmentSectionItem[],
   };
 }
 
-function resolveTireDisplayItems(tireDepths: Record<string, TireDepth> | undefined): Array<{ key: string; tire: TireDepth }> {
-  if (!tireDepths) return [];
-  const positionGroups = [
-    ["lf", "left_front", "driver_front"],
-    ["rf", "right_front", "passenger_front"],
-    ["lr", "left_rear", "driver_rear"],
-    ["rr", "right_rear", "passenger_rear"],
-    ["spare"],
-  ];
-
-  const items: Array<{ key: string; tire: TireDepth }> = [];
-  for (const aliases of positionGroups) {
-    const key = aliases.find((alias) => tireDepths[alias]);
-    if (!key) continue;
-    items.push({ key, tire: tireDepths[key] });
-  }
-  return items;
+function sanitizePublicText(text: string): string {
+  let cleaned = text;
+  cleaned = cleaned.replace(/(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g, "");
+  cleaned = cleaned.replace(/[\w.+-]+@[\w.-]+\.\w{2,}/g, "");
+  cleaned = cleaned.replace(/https?:\/\/[^\s,)]+/gi, "");
+  cleaned = cleaned.replace(/www\.[^\s,)]+/gi, "");
+  cleaned = cleaned.replace(/\b(Manheim|ADESA|TradeRev|SmartAuction|Smart Auction|Ally\s+Smart\s*Auction|OPENLANE|OVE\.com|ACV\s+Auctions|ACV|BacklotCars|Backlot\s+Cars)\b/gi, "");
+  return cleaned.replace(/\s{2,}/g, " ").trim();
 }
 
 function fmtMoney(value: number | null | undefined): string {
   if (!value) return "N/A";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD",
-    minimumFractionDigits: 0, maximumFractionDigits: 0,
-  }).format(value);
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(value);
 }
 
 function fmtMiles(value: number | null | undefined): string {
