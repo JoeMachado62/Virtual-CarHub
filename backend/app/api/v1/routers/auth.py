@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -73,12 +73,13 @@ def _create_ghl_contact(user: User) -> str | None:
 
 @router.post("/register")
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
-    existing = db.scalar(select(User).where(User.email == payload.email))
+    normalized_email = payload.email.strip().lower()
+    existing = db.scalar(select(User).where(func.lower(User.email) == normalized_email))
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
     user = User(
-        email=payload.email,
+        email=normalized_email,
         password_hash=hash_password(payload.password),
         first_name=payload.first_name,
         last_name=payload.last_name,
@@ -109,7 +110,8 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> dict:
 
 @router.post("/login")
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict:
-    user = db.scalar(select(User).where(User.email == payload.email))
+    normalized_email = payload.email.strip().lower()
+    user = db.scalar(select(User).where(func.lower(User.email) == normalized_email))
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
@@ -210,7 +212,8 @@ def _send_reset_email(to_email: str, reset_url: str, first_name: str | None) -> 
 @router.post("/forgot-password")
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)) -> dict:
     # Always return success to avoid email enumeration
-    user = db.scalar(select(User).where(User.email == payload.email))
+    normalized_email = payload.email.strip().lower()
+    user = db.scalar(select(User).where(func.lower(User.email) == normalized_email))
     if user:
         token = create_reset_token(user.id)
         reset_url = f"{settings.public_web_base_url}/reset-password?token={token}"

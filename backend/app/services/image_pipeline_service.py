@@ -26,8 +26,9 @@ from app.models.entities import (
     VehicleInspectionReport,
 )
 from app.core.config import settings
+from app.services.chromedata_service import CHROMEDATA_SOURCE_KIND
 from app.services.evox_service import EVOX_SOURCE_KIND
-from app.services.imagin_service import IMAGIN_SOURCE_KIND, build_imagin_manifest
+from app.services.imagin_service import IMAGIN_SOURCE_KIND
 from app.services.object_storage import resolve_storage_url
 
 
@@ -56,7 +57,7 @@ class VehicleCardMedia:
     has_inspection_report: bool
     dealer_photos_gated: bool = False
     gated_photo_count: int = 0
-    evox_pending: bool = False
+    reference_pending: bool = False
 
 
 def sync_marketcheck_source_assets(
@@ -260,7 +261,7 @@ def resolve_vehicle_card_media(
         has_inspection_report=bool(context.get("has_inspection_report")),
         dealer_photos_gated=bool(context.get("dealer_photos_gated")),
         gated_photo_count=int(context.get("gated_photo_count", 0)),
-        evox_pending=bool(context.get("evox_pending")),
+        reference_pending=bool(context.get("reference_pending")),
     )
 
 
@@ -338,13 +339,26 @@ def resolve_vehicle_display_context(
     tier3_gallery = [_asset_url(asset) for asset in tier3_assets if _asset_url(asset)]
     is_auction_source = bool(vehicle.source_type and vehicle.source_type.lower() in {"ove", "auction"})
 
-    # Partition source cache assets by provider: EVOX > Imagin > source
+    # Partition source cache assets by provider: ChromeData > EVOX > Imagin > source
+    chromedata_assets = [asset for asset in source_cache_assets if asset.source_kind == CHROMEDATA_SOURCE_KIND]
     evox_assets = [asset for asset in source_cache_assets if asset.source_kind == EVOX_SOURCE_KIND]
     imagin_assets = [asset for asset in source_cache_assets if asset.source_kind == IMAGIN_SOURCE_KIND]
     source_assets = [
         asset for asset in source_cache_assets
-        if asset.source_kind not in {IMAGIN_SOURCE_KIND, EVOX_SOURCE_KIND}
+        if asset.source_kind not in {CHROMEDATA_SOURCE_KIND, IMAGIN_SOURCE_KIND, EVOX_SOURCE_KIND}
     ]
+
+    chromedata_card_gallery = [
+        _asset_url(asset)
+        for asset in chromedata_assets
+        if _asset_url(asset) and asset.role in ("hero", "gallery")
+    ]
+    chromedata_detail_images = [
+        _asset_url(asset)
+        for asset in chromedata_assets
+        if _asset_url(asset) and asset.role == "detail"
+    ]
+    chromedata_meta = (chromedata_assets[0].metadata_json or {}) if chromedata_assets else {}
 
     # EVOX asset categories
     evox_card_gallery = [_asset_url(a) for a in evox_assets if _asset_url(a) and a.role in ("hero", "gallery")]
@@ -367,32 +381,26 @@ def resolve_vehicle_display_context(
         vehicle.source_type and vehicle.source_type.lower() in {"marketcheck", "dealer_wholesale"}
     )
 
-    # EVOX lazy-fetch: if no cached EVOX assets, signal frontend to trigger batch fetch
-    evox_pending = not evox_card_gallery and settings.has_evox
+    reference_pending = (
+        not chromedata_card_gallery
+        and settings.has_chromedata_media
+        and bool(vehicle.vin or (vehicle.year and vehicle.make and vehicle.model))
+    )
 
-    # Generate Imagin manifest as fallback if no cached Imagin (always available as instant base)
-    manifest = None
-    if not imagin_gallery:
-        manifest = build_imagin_manifest(vehicle)
-        if manifest:
-            imagin_gallery = manifest.gallery_urls
-            spin_gallery = manifest.spin_urls
-
-    # Reference gallery: EVOX (color-accurate) > Imagin (approximation)
-    reference_gallery = evox_card_gallery or imagin_gallery
+    # Reference gallery: ChromeData > EVOX > Imagin
+    reference_gallery = chromedata_card_gallery or evox_card_gallery or imagin_gallery
     reference_hero = reference_gallery[0] if reference_gallery else None
-    uses_evox = bool(evox_card_gallery)
-    uses_imagin_for_ref = bool(imagin_gallery) and not uses_evox
+    uses_chromedata = bool(chromedata_card_gallery)
+    uses_evox = bool(evox_card_gallery) and not uses_chromedata
+    uses_imagin_for_ref = bool(imagin_gallery) and not uses_chromedata and not uses_evox
 
     # Merge EVOX spin with Imagin spin fallback
     reference_spin = evox_spin or spin_gallery
 
-    imagin_hero = imagin_gallery[0] if imagin_gallery else (manifest.hero_url if manifest else None)
-
     protected_photo_access = bool(allow_protected_photos)
     protected_photo_gallery = _merge_unique(source_gallery, fallback_gallery)
 
-    # Public VDPs should only show EVOX/Imagin/generated imagery.
+    # Public VDPs should only show safe reference/generated imagery.
     dealer_photos_gated = False
     if is_marketcheck_source:
         if protected_photo_access:
@@ -408,6 +416,9 @@ def resolve_vehicle_display_context(
             dealer_photos_gated = bool(protected_photo_gallery)
     else:
         marketing_gallery = tier3_gallery or source_gallery or fallback_gallery
+
+    if not marketing_gallery:
+        marketing_gallery = source_gallery or fallback_gallery
 
     if tier3_gallery:
         marketing_gallery = tier3_gallery
@@ -469,11 +480,12 @@ def resolve_vehicle_display_context(
     is_inspection_ready_visible = is_inspection_ready and protected_photo_access
     is_inspection_stage = bool(deal_stage and deal_stage in INSPECTION_DRIVEN_STATES)
     is_inspection_pending = is_inspection_stage and not is_inspection_ready
-    uses_imagin_stock = bool(imagin_gallery)
-    uses_reference_stock = uses_evox or uses_imagin_for_ref
+    uses_imagin_stock = bool(imagin_gallery) and not uses_chromedata and not uses_evox
+    uses_reference_stock = uses_chromedata or uses_evox or uses_imagin_for_ref
+    reference_detail_images = chromedata_detail_images or _merge_unique(evox_ext_stills, evox_int_stills, evox_int_pano)
 
-    # Preferred hero: EVOX > Imagin > processed hero > first marketing image
-    preferred_hero = hero_url or reference_hero or imagin_hero or (marketing_gallery[0] if marketing_gallery else None)
+    # Preferred hero: generated > reference provider > first marketing image
+    preferred_hero = hero_url or reference_hero or (marketing_gallery[0] if marketing_gallery else None)
 
     if is_inspection_ready_visible:
         mode = ImageDisplayMode.INSPECTION_REPORT
@@ -505,8 +517,16 @@ def resolve_vehicle_display_context(
         "Reference photos may not reflect exact current condition. "
         "Use the inspection report for verified condition details."
     )
-    if uses_evox:
-        evox_meta = evox_assets[0].metadata_json if evox_assets else {}
+    if uses_chromedata:
+        disclaimer = "ChromeData factory reference images matched to the vehicle configuration."
+        if chromedata_meta.get("match_level") == "ymmt":
+            disclaimer += " Some trim-specific details may vary when VIN-precise style matching is unavailable."
+        if not chromedata_meta.get("color_match_exact"):
+            disclaimer += " Exterior color may be approximate when the factory-installed paint code is not available."
+        if chromedata_meta.get("flags", {}).get("carry_over"):
+            disclaimer += " Some imagery may be carried over from an equivalent factory style."
+    elif uses_evox:
+        evox_meta = (evox_assets[0].metadata_json or {}) if evox_assets else {}
         disclaimer = "EVOX factory reference images based on the vehicle's build specification."
         if evox_meta.get("match_level") == "model":
             disclaimer += " Trim-level details may vary from the actual vehicle."
@@ -517,17 +537,22 @@ def resolve_vehicle_display_context(
             "IMAGIN studio reference images are generated from the auction listing spec. "
             "Inspection photos are appended after the condition report is ingested."
         )
-        if manifest and not manifest.metadata.get("has_exact_exterior_color"):
-            disclaimer += " Exterior color may be approximate until exact option codes are available."
-        if manifest and not manifest.metadata.get("has_exact_interior_color"):
-            disclaimer += " Interior trim and color may be approximate until exact option codes are available."
+        disclaimer += " Exterior and interior colors may be approximate."
 
-    # Determine EVOX color match exactness
+    reference_color_exact = False
     evox_color_exact = False
+    chromedata_color_exact = False
+    if chromedata_assets:
+        chromedata_color_exact = any(
+            asset.metadata_json and asset.metadata_json.get("color_match_exact") for asset in chromedata_assets
+        )
+        reference_color_exact = chromedata_color_exact
     if evox_assets:
         evox_color_exact = any(
             a.metadata_json and a.metadata_json.get("color_match_exact") for a in evox_assets
         )
+        if not reference_color_exact:
+            reference_color_exact = evox_color_exact
 
     # Count real dealer photos that are hidden behind Garage auth
     gated_photo_count = 0
@@ -535,7 +560,9 @@ def resolve_vehicle_display_context(
         gated_photo_count = len(source_gallery) + len(fallback_gallery) + len(inspection_images_all) + len(disclosure_images_all)
 
     # Reference photos label
-    if uses_evox:
+    if uses_chromedata:
+        ref_label = "ChromeData Factory Reference Images"
+    elif uses_evox:
         ref_label = "EVOX Factory Reference Images"
     elif uses_imagin_stock:
         ref_label = "IMAGIN Studio Reference Images"
@@ -548,6 +575,18 @@ def resolve_vehicle_display_context(
         "hero_image": hero_image,
         "gallery_images": gallery_images,
         "marketing_images": marketing_gallery,
+        "reference_images": reference_gallery,
+        "reference_detail_images": reference_detail_images,
+        "reference_provider": (
+            CHROMEDATA_SOURCE_KIND if uses_chromedata else EVOX_SOURCE_KIND if uses_evox else IMAGIN_SOURCE_KIND if uses_imagin_stock else None
+        ),
+        "has_reference_stock": uses_reference_stock,
+        "reference_pending": reference_pending,
+        "reference_color_exact": reference_color_exact,
+        "chromedata_images": chromedata_card_gallery,
+        "chromedata_detail_images": chromedata_detail_images,
+        "has_chromedata_stock": uses_chromedata,
+        "chromedata_color_exact": chromedata_color_exact,
         "imagin_images": imagin_gallery,
         "spin_images": reference_spin,
         "source_images": source_gallery if protected_photo_access else [],
@@ -559,7 +598,7 @@ def resolve_vehicle_display_context(
         "evox_spin_images": evox_spin,
         "evox_interior_pano": evox_int_pano,
         "has_evox_stock": uses_evox,
-        "evox_pending": evox_pending,
+        "evox_pending": reference_pending,
         "evox_color_exact": evox_color_exact,
         # Existing flags
         "has_tier2_hero": bool(hero_assets),

@@ -29,6 +29,11 @@ class GHLClient(ExternalServiceClient):
             return {"contact": {"id": "stub-contact", **payload}, "source": "stub"}
         return self._request("POST", "/contacts/", json=payload)
 
+    def get_contact(self, contact_id: str) -> dict:
+        if not self.live:
+            return {"contact": {"id": contact_id}, "source": "stub"}
+        return self._request("GET", f"/contacts/{contact_id}")
+
     def search_contacts(self, *, location_id: str, query: str) -> dict:
         if not self.live:
             return {"contacts": [], "source": "stub"}

@@ -8,7 +8,7 @@ import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { AuthModal } from "@/components/AuthModal";
 import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
-import { AuthState, clearAuthState, loadValidAuthState } from "@/lib/auth";
+import { AuthState, clearAuthState, isAdminUser, loadValidAuthState } from "@/lib/auth";
 import { normalizeSourceFilterValue, toPublicSourceLabel } from "@/lib/sourceLabels";
 import { maskVin } from "@/lib/vin";
 import {
@@ -522,7 +522,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     vehicle.fuel_type ? { label: vehicle.fuel_type } : null,
     vehicle.exterior_color ? { label: `${vehicle.exterior_color} Exterior`, color: colorToHex(vehicle.exterior_color) } : null,
     vehicle.interior_color ? { label: `${vehicle.interior_color} Interior`, color: colorToHex(vehicle.interior_color) } : null,
-    { label: `VIN ${maskVin(vehicle.vin, isPreapproved && inGarage)}` },
+    { label: `VIN ${maskVin(vehicle.vin, isAdminUser(auth) || (isPreapproved && inGarage))}` },
   ].filter(Boolean) as Array<{ label: string; color?: string }>;
   const galleryMain = displayImages[galleryIndex] || resolveHeroImage(vehicle) || FALLBACK_IMAGE;
   const previewIndices = getPreviewIndices(displayImages.length, galleryIndex);
@@ -840,17 +840,17 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                   {actionLoading === "acquire" ? "Starting..." : "Start Acquisition"}
                 </button>
 
-                {!vehicle.has_inspection_report && reportStatus !== "pending" ? (
+                {isAdminUser(auth) && !vehicle.has_inspection_report && reportStatus !== "pending" ? (
                   <button className="vdp-action-btn vdp-action-accent" onClick={() => requestConditionReport()} disabled={actionLoading !== null}>
                     {actionLoading === "condition-report" ? "Requesting..." : "Order CR"}
                   </button>
                 ) : null}
 
-                {reportStatus === "pending" ? (
+                {isAdminUser(auth) && reportStatus === "pending" ? (
                   <button className="vdp-action-btn vdp-action-outline" disabled>CR Pending</button>
                 ) : null}
 
-                {(vehicle.has_inspection_report || reportStatus === "available") ? (
+                {isAdminUser(auth) && (vehicle.has_inspection_report || reportStatus === "available") ? (
                   <Link className="vdp-action-btn vdp-action-outline" href={`/vinventory/${encodeURIComponent(vehicle.public_slug || vehicle.vin)}/condition-report` as any}>
                     View Condition Report
                   </Link>

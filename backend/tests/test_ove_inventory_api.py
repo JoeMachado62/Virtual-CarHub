@@ -36,6 +36,7 @@ from app.db.init_db import init_db
 from app.db.session import SessionLocal
 from app.models.entities import OveDetailRequest, OveVehicleDetail, Vehicle
 from app.schemas.ove_inventory import (
+    NAAA_INSPECTION_TEMPLATE,
     OveBulkIngestRequest,
     OveDetailClaimRequest,
     OveDetailCompleteRequest,
@@ -47,6 +48,8 @@ from app.schemas.ove_inventory import (
     OveImagePayload,
     OveListingSnapshot,
     OveVehicleIngestItem,
+    _is_issue_value,
+    _normalize_inspection,
 )
 from app.services import ove_inventory_service
 
@@ -317,6 +320,60 @@ def test_ove_detail_push_request_accepts_liquid_motors_equipment_and_empty_mirro
     ]
     assert payload.condition_report["metadata"]["announcementsEnrichment"]["announcements"] == []
     assert payload.condition_report["announcements"] == []
+
+
+def test_ove_detail_push_request_accepts_nested_autocheck_payload() -> None:
+    payload = OveDetailPushRequest(
+        images=[
+            OveImagePayload(
+                url="https://assets.cai-media-management.com/example-photo-1.jpg",
+                role="hero",
+                display_order=0,
+                is_primary=True,
+            ),
+        ],
+        condition_report={
+            "overall_grade": "4.3",
+            "announcements": ["Title Status: Title Present"],
+            "metadata": {
+                "report_link": {"href": "http://content.liquidmotors.com/IR/15614/38020973.html"},
+                "announcementsEnrichment": {"announcements": ["Title Status: Title Present"]},
+            },
+            "vehicle_history": {
+                "owners": 1,
+                "accidents": 0,
+                "drivable": True,
+                "engine_starts": True,
+            },
+            "damage_items": [],
+            "tire_depths": {
+                "lf": {"position_label": "LF", "tread_depth": "7/32"},
+                "rf": {"position_label": "RF", "tread_depth": "7/32"},
+                "lr": {"position_label": "LR", "tread_depth": "6/32"},
+                "rr": {"position_label": "RR", "tread_depth": "6/32"},
+            },
+            "autocheck": {
+                "scrape_status": "success",
+                "attempted_at": "2026-04-16T14:32:55Z",
+                "autocheck_score": 94,
+                "owner_count": 1,
+                "accident_count": 0,
+                "title_brand_check": "OK",
+                "odometer_check": "OK",
+                "accident_check": "No accidents reported",
+                "damage_check": "OK",
+                "vehicle_use": "Personal Use Only",
+                "buyback_protection": "Eligible",
+                "full_report_text": "Sample Experian AutoCheck report body",
+                "view_report_href": "https://www.autocheck.com/report/sample",
+            },
+        },
+    )
+
+    autocheck = payload.condition_report["autocheck"]
+    assert autocheck["scrape_status"] == "success"
+    assert autocheck["autocheck_score"] == 94
+    assert autocheck["title_brand_check"] == "OK"
 
 
 def test_ove_detail_request_deduplicates_pending_rows() -> None:
@@ -727,3 +784,154 @@ def test_detail_push_clears_lease_and_completes_claimed_request() -> None:
         assert row.leased_to is None
         assert row.lease_expires_at is None
         assert row.completed_at is not None
+
+
+# ---------------------------------------------------------------------------
+# NAAA inspection normalization tests
+# ---------------------------------------------------------------------------
+
+
+class TestNaaaInspection:
+    """Tests for the NAAA inspection normalization logic."""
+
+    def test_empty_input_fills_all_defaults(self) -> None:
+        """When scraper sends no inspection data, every NAAA field gets the template default."""
+        result = _normalize_inspection(None, {})
+        for section_id, section_def in NAAA_INSPECTION_TEMPLATE.items():
+            assert section_id in result, f"Missing section {section_id}"
+            section = result[section_id]
+            assert section["label"] == section_def["label"]
+            assert section["issue_count"] == 0
+            for field_id, field_def in section_def["fields"].items():
+                field = section["fields"][field_id]
+                assert field["label"] == field_def["label"]
+                assert field["value"] == field_def["default"]
+                assert field["has_issue"] is False
+
+    def test_scraper_values_preserved(self) -> None:
+        """Values sent by the scraper are used instead of defaults."""
+        inspection_input = {
+            "drivability": {
+                "smart_keys": "2",
+                "vehicle_starts": "Yes - Starts",
+            },
+            "mechanical": {
+                "engine_noise": "Ticking Sound",
+            },
+        }
+        result = _normalize_inspection(inspection_input, {})
+
+        assert result["drivability"]["fields"]["smart_keys"]["value"] == "2"
+        assert result["drivability"]["fields"]["smart_keys"]["has_issue"] is False
+        assert result["drivability"]["fields"]["vehicle_starts"]["value"] == "Yes - Starts"
+        assert result["drivability"]["fields"]["vehicle_starts"]["has_issue"] is False
+        # Unfilled fields still get defaults
+        assert result["drivability"]["fields"]["odor_bio"]["value"] == "Not Inspected"
+
+        assert result["mechanical"]["fields"]["engine_noise"]["value"] == "Ticking Sound"
+        assert result["mechanical"]["fields"]["engine_noise"]["has_issue"] is True
+
+    def test_no_issues_values_are_not_filtered_out(self) -> None:
+        """Fields with 'No Issues' MUST be preserved — this is the core fix."""
+        inspection_input = {
+            "mechanical": {
+                "engine_noise": "No Issues",
+                "engine_oil_sludge": "No Oil Sludge",
+                "vehicle_smoke": "No Issues",
+                "emissions_catalytic": "Factory Equipment Installed",
+            },
+        }
+        result = _normalize_inspection(inspection_input, {})
+        mech = result["mechanical"]["fields"]
+        assert mech["engine_noise"]["value"] == "No Issues"
+        assert mech["engine_noise"]["has_issue"] is False
+        assert mech["engine_oil_sludge"]["value"] == "No Oil Sludge"
+        assert mech["engine_oil_sludge"]["has_issue"] is False
+        assert mech["vehicle_smoke"]["value"] == "No Issues"
+        assert mech["emissions_catalytic"]["value"] == "Factory Equipment Installed"
+        assert result["mechanical"]["issue_count"] == 0
+
+    def test_issue_count_computed_correctly(self) -> None:
+        """issue_count should count only fields that have real issues."""
+        inspection_input = {
+            "exterior": {
+                "front_exterior": "No Damage",
+                "driver_exterior": "Scratch on fender",
+                "rear_exterior": "Dent near bumper",
+            },
+        }
+        result = _normalize_inspection(inspection_input, {})
+        assert result["exterior"]["issue_count"] == 2
+        assert result["exterior"]["fields"]["front_exterior"]["has_issue"] is False
+        assert result["exterior"]["fields"]["driver_exterior"]["has_issue"] is True
+        assert result["exterior"]["fields"]["rear_exterior"]["has_issue"] is True
+
+    def test_legacy_vehicle_history_maps_to_drivability(self) -> None:
+        """Legacy vehicle_history fields should map to drivability section."""
+        report = {
+            "vehicle_history": {
+                "engine_starts": True,
+                "drivable": False,
+            },
+        }
+        result = _normalize_inspection(None, report)
+        drv = result["drivability"]["fields"]
+        assert drv["vehicle_starts"]["value"] == "Yes - Starts"
+        assert drv["vehicle_drives"]["value"] == "Does Not Drive"
+        assert drv["vehicle_drives"]["has_issue"] is True
+
+    def test_legacy_tire_depths_map_to_tires_section(self) -> None:
+        """Legacy tire_depths should populate the tires section."""
+        report = {
+            "tire_depths": {
+                "lf": {"tread_depth": "6/32\" or Above", "issue": "No Issues"},
+                "rf": {"tread_depth": "5/32\"", "issue": "Wheel Cosmetic Damage"},
+                "lr": {"tread_depth": "7/32\"", "issue": ""},
+                "rr": {"tread_depth": "6/32\""},
+            },
+        }
+        result = _normalize_inspection(None, report)
+        tires = result["tires"]["fields"]
+        assert tires["driver_front_tire_depth"]["value"] == "6/32\" or Above"
+        assert tires["driver_front_tire_issue"]["value"] == "No Issues"
+        assert tires["driver_front_tire_issue"]["has_issue"] is False
+        assert tires["passenger_front_tire_issue"]["value"] == "Wheel Cosmetic Damage"
+        assert tires["passenger_front_tire_issue"]["has_issue"] is True
+
+    def test_is_issue_value_classification(self) -> None:
+        """Verify clean vs issue classification."""
+        assert _is_issue_value("No Issues") is False
+        assert _is_issue_value("None") is False
+        assert _is_issue_value("Fully Functional") is False
+        assert _is_issue_value("No Oil Sludge") is False
+        assert _is_issue_value("Not Inspected") is False
+        assert _is_issue_value("Not Specified") is False
+        assert _is_issue_value("Factory Equipment Installed") is False
+
+        assert _is_issue_value("Ticking Sound") is True
+        assert _is_issue_value("Wheel Cosmetic Damage") is True
+        assert _is_issue_value("Scratch on fender") is True
+        assert _is_issue_value("Scan Not Available") is True
+
+        # Numeric key counts and positive-state values are NOT issues
+        assert _is_issue_value("2") is False
+        assert _is_issue_value("0") is False
+        assert _is_issue_value("Yes - Starts") is False
+        assert _is_issue_value("Yes - Drives") is False
+        assert _is_issue_value('6/32" or Above') is False
+
+    def test_all_template_sections_present_in_output(self) -> None:
+        """Output must always contain all 5 NAAA sections."""
+        result = _normalize_inspection({}, {})
+        assert set(result.keys()) == {"drivability", "exterior", "interior", "mechanical", "tires"}
+        for section in result.values():
+            assert "label" in section
+            assert "fields" in section
+            assert "issue_count" in section
+
+    def test_image_payload_accepts_category(self) -> None:
+        """OveImagePayload should accept the category field."""
+        img = OveImagePayload(url="https://example.com/img.jpg", category="ext")
+        assert img.category == "ext"
+        img_default = OveImagePayload(url="https://example.com/img.jpg")
+        assert img_default.category == "all"

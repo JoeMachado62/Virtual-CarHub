@@ -27,7 +27,7 @@ from app.services.image_pipeline_service import (
     resolve_vehicle_display_context,
     sync_marketcheck_source_assets,
 )
-from app.services.imagin_service import sync_imagin_source_assets
+from app.services.chromedata_service import CHROMEDATA_SOURCE_KIND
 
 
 def _make_vehicle(vin: str) -> Vehicle:
@@ -254,7 +254,7 @@ def test_image_jobs_are_deduped_by_fingerprint() -> None:
     assert len(jobs) == 2
 
 
-def test_auction_context_uses_imagin_as_primary_and_appends_inspection_images(monkeypatch) -> None:
+def test_auction_context_uses_chromedata_as_primary_and_appends_inspection_images(monkeypatch) -> None:
     init_db()
     vin = "1FTFW1E80MFA12345"
     with SessionLocal() as db:
@@ -265,9 +265,9 @@ def test_auction_context_uses_imagin_as_primary_and_appends_inspection_images(mo
         db.execute(delete(Vehicle).where(Vehicle.vin == vin))
         db.commit()
 
-        monkeypatch.setattr(settings, "imagin_enabled", True)
-        monkeypatch.setattr(settings, "imagin_customer_id", "test-customer")
-        monkeypatch.setattr(settings, "imagin_spin_enabled", False)
+        monkeypatch.setattr(settings, "chromedata_enabled", True)
+        monkeypatch.setattr(settings, "chromedata_media_username", "user")
+        monkeypatch.setattr(settings, "chromedata_media_password", "pass")
 
         vehicle = Vehicle(
             vin=vin,
@@ -290,11 +290,37 @@ def test_auction_context_uses_imagin_as_primary_and_appends_inspection_images(mo
         db.add(vehicle)
         db.flush()
 
-        sync_imagin_source_assets(
-            db,
-            vehicle=vehicle,
-            listing_id=vehicle.listing_id,
-            source_platform=AuctionPlatform.MANHEIM,
+        db.add(
+            VehicleImageAsset(
+                vin=vin,
+                tier=ImageTier.SOURCE_CACHE,
+                context=ImageContext.MARKETING,
+                role="hero",
+                source_kind=CHROMEDATA_SOURCE_KIND,
+                source_platform=AuctionPlatform.MANHEIM,
+                source_listing_id=vehicle.listing_id,
+                external_url=f"https://media.example/{vin}/01.jpg",
+                display_order=0,
+                is_primary=True,
+                metadata_json={"provider": CHROMEDATA_SOURCE_KIND, "color_match_exact": True},
+                active=True,
+            )
+        )
+        db.add(
+            VehicleImageAsset(
+                vin=vin,
+                tier=ImageTier.SOURCE_CACHE,
+                context=ImageContext.MARKETING,
+                role="gallery",
+                source_kind=CHROMEDATA_SOURCE_KIND,
+                source_platform=AuctionPlatform.MANHEIM,
+                source_listing_id=vehicle.listing_id,
+                external_url=f"https://media.example/{vin}/02.jpg",
+                display_order=1,
+                is_primary=False,
+                metadata_json={"provider": CHROMEDATA_SOURCE_KIND, "color_match_exact": True},
+                active=True,
+            )
         )
 
         report = VehicleInspectionReport(
@@ -326,13 +352,12 @@ def test_auction_context_uses_imagin_as_primary_and_appends_inspection_images(mo
         )
 
     assert context["mode"] == ImageDisplayMode.INSPECTION_REPORT.value
-    assert context["has_imagin_stock"] is True
-    assert context["hero_image"].startswith("https://cdn.imagin.studio/getImage?")
-    assert "customer=test-customer" in context["hero_image"]
+    assert context["has_chromedata_stock"] is True
+    assert context["hero_image"] == f"https://media.example/{vin}/01.jpg"
     assert context["inspection_images"] == [f"https://inspect.example/{vin}/inspection_001.jpg"]
-    assert context["gallery_images"][0].startswith("https://cdn.imagin.studio/getImage?")
+    assert context["gallery_images"][0] == f"https://media.example/{vin}/01.jpg"
     assert context["gallery_images"][-1] == f"https://inspect.example/{vin}/inspection_001.jpg"
-    assert "IMAGIN studio reference images" in context["disclaimer"]
+    assert "ChromeData factory reference images" in context["disclaimer"]
 
 
 def test_auction_context_exposes_ove_role_images_without_internal_inspection_report(monkeypatch) -> None:

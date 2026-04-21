@@ -116,9 +116,9 @@ export function ConditionReportCard({
       {inspectionSections.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4, marginBottom: 12, fontSize: 11 }}>
           {inspectionSections.map((s) => (
-            <div key={s.label} style={{ textAlign: "center", padding: "4px 2px", background: s.issue_count > 0 ? "rgba(231,76,60,0.15)" : "rgba(255,255,255,0.03)", borderRadius: 4, border: `1px solid ${s.issue_count > 0 ? "rgba(231,76,60,0.4)" : "#333"}` }}>
-              <div style={{ fontWeight: 700, color: s.issue_count > 0 ? "#e74c3c" : "#7c7", fontSize: 16 }}>{s.issue_count}</div>
-              <div style={{ color: "#aaa", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.3px", lineHeight: 1.2 }}>
+            <div key={s.label} style={{ textAlign: "center", padding: "4px 2px", background: s.issue_count > 0 ? "rgba(231,76,60,0.15)" : "var(--surface-soft)", borderRadius: 4, border: `1px solid ${s.issue_count > 0 ? "rgba(231,76,60,0.4)" : "var(--line)"}` }}>
+              <div style={{ fontWeight: 700, color: s.issue_count > 0 ? "var(--danger)" : "var(--mint)", fontSize: 16 }}>{s.issue_count}</div>
+              <div style={{ color: "var(--muted)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.3px", lineHeight: 1.2 }}>
                 {s.label.replace("Mechanical & Diagnostic Trouble Codes", "Mechanical").replace("Drivability, Keys, & History", "Drivability").replace("Tires & Wheels", "Tires")}
               </div>
             </div>
@@ -137,7 +137,7 @@ export function ConditionReportCard({
       )}
 
       {/* AI summary */}
-      {aiSummary && <p style={{ marginTop: 0, fontSize: 13, color: "#ccc" }}>{aiSummary}</p>}
+      {aiSummary && <p style={{ marginTop: 0, fontSize: 13, color: "var(--muted)" }}>{aiSummary}</p>}
 
       {sanitizedSellerComments ? <p style={{ marginTop: 0 }}>Seller Comments: {sanitizedSellerComments}</p> : null}
 
@@ -170,14 +170,14 @@ export function ConditionReportCard({
           <h4 style={{ marginBottom: 8 }}>Damage ({damageSummary?.total_items ?? damageItems.length} items)</h4>
           <div style={{ fontSize: 13 }}>
             {damageItems.slice(0, 5).map((d, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #333" }}>
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid var(--line)" }}>
                 <span>{d.panel || d.section_label || d.section || "—"}</span>
                 <span style={{ color: severityColor(d.severity_color), fontWeight: 600, fontSize: 12 }}>
                   {d.severity_label || d.reported_severity || "—"}
                 </span>
               </div>
             ))}
-            {damageItems.length > 5 && <p style={{ fontSize: 12, color: "#888", margin: "4px 0 0" }}>+{damageItems.length - 5} more items</p>}
+            {damageItems.length > 5 && <p style={{ fontSize: 12, color: "var(--muted)", margin: "4px 0 0" }}>+{damageItems.length - 5} more items</p>}
           </div>
         </>
       )}
@@ -195,7 +195,7 @@ export function ConditionReportCard({
         <>
           <h4 style={{ marginBottom: 8 }}>AutoCheck History</h4>
           {autoCheck.scrape_status === "failed" ? (
-            <p style={{ marginTop: 0, color: "#b7c2d9" }}>AutoCheck data is temporarily unavailable.</p>
+            <p style={{ marginTop: 0, color: "var(--muted)" }}>AutoCheck data is temporarily unavailable.</p>
           ) : (
             <>
               <div className="inventory-feature-grid" style={{ gap: 6 }}>

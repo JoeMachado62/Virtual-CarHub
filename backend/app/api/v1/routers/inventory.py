@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import Integer, asc, case, desc, false, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_optional_user, require_service_token, require_wordpress_export_auth
+from app.api.deps import get_optional_user, is_admin_user, require_service_token, require_wordpress_export_auth
 from app.core.config import settings
 from app.core.constants import ImageTier, InventorySourceType
 from app.core.responses import ok
@@ -1681,7 +1681,8 @@ def search_inventory(
                 "source_filter_value": _public_source_value(row.source_type),
                 "source_label": _public_source_label(row.source_type),
                 "thumbnail": media.thumbnail,
-                "evox_pending": media.evox_pending,
+                "reference_pending": media.reference_pending,
+                "evox_pending": media.reference_pending,
                 "dealer_photos_gated": media.dealer_photos_gated,
                 "gated_photo_count": media.gated_photo_count,
                 "images_count": len(row.images or []),
@@ -1952,42 +1953,47 @@ def wordpress_inventory_export(
     )
 
 
-class EvoxBatchRequest(BaseModel):
+class ReferenceBatchRequest(BaseModel):
     vins: list[str]
 
 
+@router.post("/reference-images/batch")
 @router.post("/evox-batch")
-def batch_fetch_evox_images(
-    body: EvoxBatchRequest,
+def batch_fetch_reference_images(
+    body: ReferenceBatchRequest,
     db: Session = Depends(get_db),
 ) -> dict:
-    """Batch-fetch EVOX card images for up to 10 VINs.
+    """Batch-fetch ChromeData reference images for up to 10 VINs.
 
     Called by the frontend after search results load when vehicles have
-    evox_pending=true. Fetches color-accurate card images from EVOX,
-    caches them, and returns updated image URLs per VIN.
+    reference_pending=true. Fetches factory reference images from
+    ChromeData, caches them, and returns updated image URLs per VIN.
     """
-    from app.services.evox_service import batch_build_evox_manifests, sync_evox_source_assets, EVOX_SOURCE_KIND
+    from app.services.chromedata_service import (
+        CHROMEDATA_SOURCE_KIND,
+        batch_build_chromedata_manifests,
+        sync_chromedata_source_assets,
+    )
 
-    if not settings.has_evox:
+    if not settings.has_chromedata_media:
         return ok({"results": {}})
 
     vins = [v.strip().upper() for v in body.vins[:10] if v.strip()]
     if not vins:
         return ok({"results": {}})
 
-    # Load vehicles and filter to those without cached EVOX card assets
+    # Load vehicles and filter to those without cached ChromeData card assets
     vehicles: list[Vehicle] = []
     for vin in vins:
         vehicle = db.get(Vehicle, vin)
         if not vehicle:
             continue
-        # Check if EVOX card assets already exist
+        # Check if ChromeData card assets already exist
         existing = db.scalar(
             select(VehicleImageAsset.id).where(
                 VehicleImageAsset.vin == vin,
                 VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
-                VehicleImageAsset.source_kind == EVOX_SOURCE_KIND,
+                VehicleImageAsset.source_kind == CHROMEDATA_SOURCE_KIND,
                 VehicleImageAsset.role.in_(["hero", "gallery"]),
                 VehicleImageAsset.active.is_(True),
             ).limit(1)
@@ -1998,24 +2004,22 @@ def batch_fetch_evox_images(
     if not vehicles:
         return ok({"results": {}})
 
-    # Batch query EVOX (up to 10 VINs per API call)
-    manifests = batch_build_evox_manifests(vehicles, detail_level="card")
+    manifests = batch_build_chromedata_manifests(vehicles, detail_level="card")
 
-    # Sync results to database
     results: dict[str, dict[str, Any]] = {}
     for vehicle in vehicles:
         manifest = manifests.get(vehicle.vin)
         if not manifest:
             continue
-        sync_evox_source_assets(db, vehicle=vehicle, manifest=manifest)
+        sync_chromedata_source_assets(db, vehicle=vehicle, manifest=manifest)
         results[vehicle.vin] = {
             "hero_url": manifest.hero_url,
-            "gallery_urls": manifest.card_gallery_urls,
+            "gallery_urls": manifest.gallery_urls,
             "match_level": manifest.match_level,
             "color_info": {
                 "color_code": manifest.color_info.color_code,
-                "color_title": manifest.color_info.color_title,
-                "color_simpletitle": manifest.color_info.color_simpletitle,
+                "color_title": manifest.color_info.description,
+                "color_simpletitle": manifest.color_info.generic_desc,
                 "is_exact_match": manifest.color_info.is_exact_match,
             } if manifest.color_info else None,
         }
@@ -2064,16 +2068,17 @@ def get_inventory_vehicle(
         allow_protected_photos=can_view_protected_photos,
     )
 
-    # Lazy-load full EVOX assets (stills, spin, interior pano) on detail view if not already synced
-    has_evox_card = display_context.get("has_evox_stock")
-    has_evox_detail = bool(display_context.get("evox_exterior_stills"))
-    should_fetch_evox_detail = settings.has_evox and not has_evox_detail
-    if should_fetch_evox_detail:
+    # Lazy-load full ChromeData reference assets when detail imagery is not cached yet.
+    has_chromedata_card = display_context.get("has_chromedata_stock")
+    has_chromedata_detail = bool(display_context.get("chromedata_detail_images"))
+    should_fetch_chromedata_detail = settings.has_chromedata_media and (not has_chromedata_card or not has_chromedata_detail)
+    if should_fetch_chromedata_detail:
         try:
-            from app.services.evox_service import build_evox_manifest, sync_evox_source_assets
-            full_manifest = build_evox_manifest(vehicle, detail_level="full")
+            from app.services.chromedata_service import build_chromedata_manifest, sync_chromedata_source_assets
+
+            full_manifest = build_chromedata_manifest(vehicle, detail_level="full")
             if full_manifest:
-                sync_evox_source_assets(db, vehicle=vehicle, manifest=full_manifest)
+                sync_chromedata_source_assets(db, vehicle=vehicle, manifest=full_manifest)
                 db.commit()
                 display_context = resolve_vehicle_display_context(
                     db,
@@ -2082,7 +2087,7 @@ def get_inventory_vehicle(
                     allow_protected_photos=can_view_protected_photos,
                 )
         except Exception:
-            logger.warning("EVOX detail fetch failed for vin=%s", vehicle.vin, exc_info=True)
+            logger.warning("ChromeData detail fetch failed for vin=%s", vehicle.vin, exc_info=True)
 
     resolved_images = display_context.get("gallery_images") or (vehicle.images or [])
     hero_image = display_context.get("hero_image") or (resolved_images[0] if resolved_images else None)
@@ -2144,12 +2149,13 @@ def get_inventory_vehicle(
     pricing = _pricing_breakdown(vehicle.price_asking)
     ove_detail = db.get(OveVehicleDetail, vehicle.vin)
     ove_payload = None
+    _is_admin = current_user and is_admin_user(current_user)
     if ove_detail:
         ove_payload = {
             "source_platform": ove_detail.source_platform.value,
             "seller_comments": ove_detail.seller_comments,
             "images": ove_detail.images_json or [],
-            "condition_report": ove_detail.condition_report_json or {},
+            "condition_report": (ove_detail.condition_report_json or {}) if _is_admin else {},
             "listing_snapshot": ove_detail.listing_snapshot_json or {},
             "sync_metadata": ove_detail.sync_metadata_json or {},
             "page_url": ove_detail.page_url,
@@ -2298,8 +2304,8 @@ def get_inventory_vehicle(
             "city": listing_meta.get("city") or normalized.get("city"),
             "features_normalized": normalized,
             "seller_comments": seller_comments,
-            "condition_report": ove_detail.condition_report_json if ove_detail else {},
-            "condition_report_url": _extract_cr_url(ove_detail),
+            "condition_report": (ove_detail.condition_report_json if ove_detail else {}) if _is_admin else {},
+            "condition_report_url": _extract_cr_url(ove_detail) if _is_admin else None,
             "listing_snapshot": ove_detail.listing_snapshot_json if ove_detail else {},
             "ove_detail": ove_payload,
             "history_enrichment": {

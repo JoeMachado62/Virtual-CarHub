@@ -95,6 +95,12 @@ export async function refreshAuthState(auth: AuthState): Promise<AuthState | nul
   return nextAuth;
 }
 
+export function isAdminUser(auth: AuthState | null): boolean {
+  if (!auth?.email) return false;
+  const domain = auth.email.split("@")[1]?.toLowerCase();
+  return domain === "virtualcarhub.com";
+}
+
 export async function loadValidAuthState(): Promise<AuthState | null> {
   const auth = loadAuthState();
   if (!auth) return null;

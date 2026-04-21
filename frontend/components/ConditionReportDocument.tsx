@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
-import { loadValidAuthState } from "@/lib/auth";
+import { isAdminUser, loadValidAuthState } from "@/lib/auth";
 import { maskVin } from "@/lib/vin";
 
 type VehicleDetail = {
@@ -153,6 +153,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [canRevealVin, setCanRevealVin] = useState(false);
+  const [authorized, setAuthorized] = useState<boolean | null>(null);
 
   // Gallery state
   const [galleryIndex, setGalleryIndex] = useState(0);
@@ -181,9 +182,13 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
     async function checkReveal() {
       const auth = await loadValidAuthState();
       if (!auth?.accessToken) {
-        if (!cancelled) setCanRevealVin(false);
+        if (!cancelled) {
+          setCanRevealVin(false);
+          setAuthorized(false);
+        }
         return;
       }
+      if (!cancelled) setAuthorized(isAdminUser(auth));
       const [statusRes, garageRes] = await Promise.all([
         apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken),
         apiFetch<Array<{ vin: string }>>("/me/garage", {}, auth.accessToken),
@@ -313,10 +318,21 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
     };
   }, [vehicle, report]);
 
-  if (loading) {
+  if (loading || authorized === null) {
     return (
       <main className="page-stack">
         <section className="card">Loading condition report...</section>
+      </main>
+    );
+  }
+
+  if (!authorized) {
+    return (
+      <main className="page-stack">
+        <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vin)}` as any}>
+          Back to Vehicle
+        </Link>
+        <section className="card">Condition reports are only available to administrative users.</section>
       </main>
     );
   }
@@ -359,7 +375,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
             {vehicle.year} {vehicle.make} {vehicle.model} {vehicle.trim ? `${vehicle.body_type || ""} ${vehicle.trim}`.trim() : vehicle.body_type || ""}
           </h1>
           <div className="cr-vehicle-specs">
-            <span>{maskVin(vehicle.vin, canRevealVin)}</span>
+            <span>{maskVin(vehicle.vin, authorized || canRevealVin)}</span>
             <span className="cr-spec-sep">&middot;</span>
             <span>Odo {fmtMiles(vehicle.odometer)}</span>
             {vehicleInfo.exterior_color && (
@@ -741,7 +757,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
                 ))}
               </tbody>
             </table>
-            {severitySummary && <p className="cr-comments" style={{ fontSize: 13, color: "#aaa" }}>{severitySummary}</p>}
+            {severitySummary && <p className="cr-comments" style={{ fontSize: 13, color: "var(--muted)" }}>{severitySummary}</p>}
           </section>
         )}
 
@@ -1176,6 +1192,79 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           .cr-overlay-arrow-left { left: 8px; }
           .cr-overlay-arrow-right { right: 8px; }
         }
+
+        /* ── Light Mode Overrides ── */
+        :global(:root[data-theme="light"]) .cr-doc-header { background: var(--surface-strong); }
+        :global(:root[data-theme="light"]) .cr-vehicle-name { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-vehicle-specs { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-spec-sep { color: #bbb; }
+        :global(:root[data-theme="light"]) .cr-vehicle-seller { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-hero-layout { border-color: var(--line); }
+        :global(:root[data-theme="light"]) .cr-gallery { background: #f5f7fa; }
+        :global(:root[data-theme="light"]) .cr-gallery-stage { background: #edf0f5; }
+        :global(:root[data-theme="light"]) .cr-gallery-counter { color: #333; background: rgba(255,255,255,0.8); }
+        :global(:root[data-theme="light"]) .cr-gallery-fullscreen { color: #555; }
+        :global(:root[data-theme="light"]) .cr-gallery-fullscreen:hover { color: #111; }
+        :global(:root[data-theme="light"]) .cr-gallery-thumbstrip { background: #f5f7fa; }
+        :global(:root[data-theme="light"]) .cr-gallery-tabs { border-top-color: var(--line); background: #f9fafb; }
+        :global(:root[data-theme="light"]) .cr-gallery-tab { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-gallery-tab:hover { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-gallery-tab-count { background: #e2e6ec; color: #4a5568; }
+        :global(:root[data-theme="light"]) .cr-gallery-tab-active .cr-gallery-tab-count { background: rgba(201,164,74,0.2); color: #8b6914; }
+        :global(:root[data-theme="light"]) .cr-summary-panel { background: var(--surface-strong); }
+        :global(:root[data-theme="light"]) .cr-grade-block { border-bottom-color: var(--line); }
+        :global(:root[data-theme="light"]) .cr-panel-heading { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-panel-list { color: #334155; }
+        :global(:root[data-theme="light"]) .cr-panel-kv-row { border-bottom-color: var(--line); }
+        :global(:root[data-theme="light"]) .cr-panel-kv-label { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-panel-kv-value { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-issues-row { border-bottom-color: var(--line); }
+        :global(:root[data-theme="light"]) .cr-issues-label { color: #334155; }
+        :global(:root[data-theme="light"]) .cr-issues-count { color: #334155; }
+        :global(:root[data-theme="light"]) .cr-inspection-banner { background: #e8edf5; color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-section-bar { background: #edf0f5; color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-field-cell { border-bottom-color: var(--line); border-right-color: var(--line); }
+        :global(:root[data-theme="light"]) .cr-field-label { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-field-value { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-field-unavailable .cr-field-label { color: #aab; }
+        :global(:root[data-theme="light"]) .cr-field-unavailable .cr-field-value { color: #aab; }
+        :global(:root[data-theme="light"]) .cr-comments { color: #334155; }
+        :global(:root[data-theme="light"]) .cr-damage-count { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-damage-table th { border-bottom-color: #ccc; color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-damage-table td { border-bottom-color: var(--line); color: #334155; }
+        :global(:root[data-theme="light"]) .cr-severity-green { background: #e6f5ec; color: #276738; }
+        :global(:root[data-theme="light"]) .cr-severity-yellow { background: #fef4e1; color: #7a5c10; }
+        :global(:root[data-theme="light"]) .cr-severity-red { background: #fde8e8; color: #b91c1c; }
+        :global(:root[data-theme="light"]) .cr-severity-gray { background: #edf0f5; color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-equipment-card { border-color: var(--line); background: var(--surface-soft); }
+        :global(:root[data-theme="light"]) .cr-equipment-title { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-equipment-detail { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-grid-thumb { border-color: #ccc; }
+        :global(:root[data-theme="light"]) .cr-autocheck-summary-card,
+        :global(:root[data-theme="light"]) .cr-autocheck-score-card,
+        :global(:root[data-theme="light"]) .cr-autocheck-check-card,
+        :global(:root[data-theme="light"]) .cr-autocheck-unavailable,
+        :global(:root[data-theme="light"]) .cr-autocheck-details { border-color: var(--line); background: var(--surface-soft); }
+        :global(:root[data-theme="light"]) .cr-autocheck-mini-label { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-autocheck-title { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-autocheck-summary-stat { border-color: var(--line); background: var(--surface-strong); }
+        :global(:root[data-theme="light"]) .cr-autocheck-summary-stat span { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-autocheck-summary-stat strong { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-autocheck-meta { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-autocheck-gauge-cutout { background: #fff; }
+        :global(:root[data-theme="light"]) .cr-autocheck-gauge-center strong { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-autocheck-gauge-center span { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-autocheck-scale { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-autocheck-score-copy { color: #334155; }
+        :global(:root[data-theme="light"]) .cr-autocheck-check-label { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-autocheck-check-value { color: #334155; }
+        :global(:root[data-theme="light"]) .cr-autocheck-attempted { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-autocheck-details summary { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-autocheck-details-hint { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-autocheck-details-body { border-top-color: var(--line); }
+        :global(:root[data-theme="light"]) .cr-autocheck-report-text { background: #f5f7fa; border-color: var(--line); color: #334155; }
+        :global(:root[data-theme="light"]) .cr-autocheck-unavailable strong { color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-autocheck-unavailable p { color: #334155; }
       `}</style>
     </>
   );

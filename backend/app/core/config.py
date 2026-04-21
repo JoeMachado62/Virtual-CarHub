@@ -71,6 +71,22 @@ class Settings(BaseSettings):
     imagin_spin_start_angle: int = Field(default=200, alias="IMAGIN_SPIN_START_ANGLE")
     imagin_spin_frame_count: int = Field(default=32, alias="IMAGIN_SPIN_FRAME_COUNT")
 
+    # ChromeData / J.D. Power vehicle identity + media services
+    chromedata_enabled: bool = Field(default=False, alias="CHROMEDATA_ENABLED")
+    chromedata_locale: str = Field(default="en_US", alias="CHROMEDATA_LOCALE")
+    chromedata_country: str = Field(default="US", alias="CHROMEDATA_COUNTRY")
+    chromedata_profile_key: str = Field(default="", alias="CHROMEDATA_PROFILE_KEY")
+    chromedata_api_key: str = Field(default="", alias="CHROMEDATA_API_KEY")
+    chromedata_api_secret: str = Field(default="", alias="CHROMEDATA_API_SECRET")
+    chromedata_cvd_base_url: str = Field(default="", alias="CHROMEDATA_CVD_BASE_URL")
+    chromedata_vss_base_url: str = Field(default="", alias="CHROMEDATA_VSS_BASE_URL")
+    chromedata_media_base_url: str = Field(
+        default="https://media.chromedata.com/MediaGallery/service",
+        alias="CHROMEDATA_MEDIA_BASE_URL",
+    )
+    chromedata_media_username: str = Field(default="", alias="CHROMEDATA_MEDIA_USERNAME")
+    chromedata_media_password: str = Field(default="", alias="CHROMEDATA_MEDIA_PASSWORD")
+
     # EVOX Images API
     evox_enabled: bool = Field(default=False, alias="EVOX_ENABLED")
     evox_api_key: str = Field(default="", alias="EVOX_API_KEY")
@@ -253,6 +269,33 @@ class Settings(BaseSettings):
     @property
     def has_imagin(self) -> bool:
         return self.imagin_enabled and bool(self.imagin_customer_id)
+
+    @property
+    def has_chromedata_vin(self) -> bool:
+        return (
+            self.chromedata_enabled
+            and bool(self.chromedata_cvd_base_url)
+            and bool(self.chromedata_api_key)
+            and bool(self.chromedata_api_secret)
+        )
+
+    @property
+    def has_chromedata_vss(self) -> bool:
+        return (
+            self.chromedata_enabled
+            and bool(self.chromedata_vss_base_url)
+            and bool(self.chromedata_api_key)
+            and bool(self.chromedata_api_secret)
+        )
+
+    @property
+    def has_chromedata_media(self) -> bool:
+        return (
+            self.chromedata_enabled
+            and bool(self.chromedata_media_base_url)
+            and bool(self.chromedata_media_username)
+            and bool(self.chromedata_media_password)
+        )
 
     @property
     def has_evox(self) -> bool:

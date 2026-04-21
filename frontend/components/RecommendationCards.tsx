@@ -24,11 +24,13 @@ export type Recommendation = {
 export function RecommendationCards({
   data,
   onSelect,
-  onFavorite
+  onFavorite,
+  isAdmin = false
 }: {
   data: Recommendation[];
   onSelect: (vin: string) => Promise<void>;
   onFavorite: (vin: string) => Promise<void>;
+  isAdmin?: boolean;
 }) {
   if (!data.length) {
     return <div className="card">No recommendations yet. Complete Quick Match first.</div>;
@@ -49,7 +51,7 @@ export function RecommendationCards({
             Price ${item.vehicle.price?.toLocaleString()} | OTD ${item.estimated_otd?.toLocaleString()} | Danny
             Savings ${item.danny_savings?.toLocaleString()}
           </p>
-          <p>VIN: {maskVin(item.vin)}</p>
+          <p>VIN: {maskVin(item.vin, isAdmin)}</p>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="button" onClick={() => onSelect(item.vin)}>
               Select Vehicle

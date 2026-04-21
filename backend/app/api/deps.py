@@ -101,9 +101,15 @@ async def require_ghl_webhook_auth(
     x_service_token: str | None = Header(default=None),
     x_ghl_signature: str | None = Header(default=None),
     x_webhook_signature: str | None = Header(default=None),
+    x_ghl_webhook_secret: str | None = Header(default=None, alias="GHL_WEBHOOK_SECRET"),
 ) -> None:
     secret = settings.ghl_webhook_secret
     if secret:
+        # 1. Accept raw shared secret (for GHL workflow webhooks that can't compute HMAC)
+        if x_ghl_webhook_secret and hmac.compare_digest(secret, x_ghl_webhook_secret):
+            return
+
+        # 2. Accept HMAC signature (for programmatic callers)
         signature = x_ghl_signature or x_webhook_signature
         if not signature:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing webhook signature")

@@ -9,7 +9,7 @@ import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { AuthModal } from "@/components/AuthModal";
 import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
-import { AuthState, clearAuthState, loadValidAuthState } from "@/lib/auth";
+import { AuthState, clearAuthState, isAdminUser, loadValidAuthState } from "@/lib/auth";
 import { normalizeSourceFilterValue, toPublicSourceLabel } from "@/lib/sourceLabels";
 import { maskVin } from "@/lib/vin";
 
@@ -1330,13 +1330,13 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                     <p style={{ margin: 0 }}>
                       {item.trim || "Base"} | {item.drivetrain || "N/A"} | {item.exterior_color || "N/A"}
                     </p>
-                    <p style={{ margin: 0, fontSize: 12, color: "#999" }}>
+                    <p style={{ margin: 0, fontSize: 12, color: "var(--muted)" }}>
                       {[item.engine_type, item.transmission, item.fuel_type].filter(Boolean).join(" | ") || "Specs pending"}
                     </p>
                     <p style={{ margin: 0 }}>
                       {formatMiles(item.odometer)} {item.odometer_units || "mi"} | {item.location_state || "NA"} {item.location_zip || ""}
                     </p>
-                    <p style={{ margin: 0 }}>VIN: {maskVin(item.vin, isPreapproved && garageVins.has(item.vin))}</p>
+                    <p style={{ margin: 0 }}>VIN: {maskVin(item.vin, isAdminUser(auth) || (isPreapproved && garageVins.has(item.vin)))}</p>
                     <p className="inventory-description">
                       {item.features_preview?.length
                         ? item.features_preview.join(" • ")
@@ -1460,7 +1460,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                     </div>
                   )}
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-                    <span className="badge">VIN {maskVin(selectedVehicle.vin, isPreapproved && garageVins.has(selectedVehicle.vin))}</span>
+                    <span className="badge">VIN {maskVin(selectedVehicle.vin, isAdminUser(auth) || (isPreapproved && garageVins.has(selectedVehicle.vin)))}</span>
                     <span className="badge">{toPublicSourceLabel(selectedVehicle.source_label, selectedVehicle.source_type)}</span>
                     <span className="badge">Condition: {selectedVehicle.condition_grade || "N/A"}</span>
                     <span className="badge">
@@ -1540,7 +1540,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                           ? "In Garage"
                           : "Add to My Garage"}
                     </button>
-                    {(selectedVehicle.source_type === "ove" || selectedVehicle.source_type === "auction") && !selectedVehicle.has_inspection_report ? (
+                    {isAdminUser(auth) && (selectedVehicle.source_type === "ove" || selectedVehicle.source_type === "auction") && !selectedVehicle.has_inspection_report ? (
                       <button
                         className="button ghost"
                         onClick={() => requestConditionReport(selectedVehicle.vin)}
@@ -1549,7 +1549,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                         {garageActionVin === selectedVehicle.vin ? "Requesting..." : "Request Condition Report"}
                       </button>
                     ) : null}
-                    {selectedVehicle.has_inspection_report ? (
+                    {isAdminUser(auth) && selectedVehicle.has_inspection_report ? (
                       <Link
                         className="button ghost"
                         href={`/vinventory/${encodeURIComponent(publicIdentifier(selectedVehicle))}/condition-report` as any}

@@ -16,6 +16,8 @@ from app.schemas.ove_inventory import (
     OveDetailPushRequest,
     OveDetailRequestEnqueueRequest,
 )
+from app.services.chromedata_service import build_chromedata_manifest, sync_chromedata_source_assets
+from app.services.image_pipeline_service import ensure_tier2_hero_job, sync_source_assets
 
 
 # Statuses that represent active in-flight work that should not be re-claimed
@@ -44,8 +46,6 @@ class OveDetailRequestOwnershipError(PermissionError):
 
 class OveDetailRequestStateError(ValueError):
     """Raised when a request is in a state incompatible with the requested op."""
-from app.services.imagin_service import sync_imagin_source_assets  # used by upsert_ove_vehicle_detail
-from app.services.image_pipeline_service import ensure_tier2_hero_job, sync_source_assets  # used by upsert_ove_vehicle_detail
 
 logger = logging.getLogger(__name__)
 
@@ -527,12 +527,15 @@ def upsert_ove_vehicle_detail(
         source_kind=InventorySourceType.OVE.value,
         source_platform=payload.source_platform,
     )
-    sync_imagin_source_assets(
-        db,
-        vehicle=vehicle,
-        listing_id=vehicle.listing_id,
-        source_platform=payload.source_platform,
-    )
+    chromedata_manifest = build_chromedata_manifest(vehicle, detail_level="card")
+    if chromedata_manifest:
+        sync_chromedata_source_assets(
+            db,
+            vehicle=vehicle,
+            manifest=chromedata_manifest,
+            listing_id=vehicle.listing_id,
+            source_platform=payload.source_platform,
+        )
     hero_job = ensure_tier2_hero_job(
         db,
         vin=normalized_vin,

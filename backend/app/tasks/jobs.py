@@ -1,13 +1,18 @@
+import logging
+import time
+
 from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.integrations.marketcheck_client import MarketCheckClient
-from app.models.entities import BuyerProfile, Deal
+from app.models.entities import BuyerProfile, Deal, User
 from app.services.inventory_service import ingest_marketcheck_inventory, seed_inventory
 from app.services.marketcheck_history_enrichment_service import run_history_enrichment_batch
 from app.services.matching_service import run_matching
 from app.tasks.celery_app import celery_app
+
+logger = logging.getLogger("vch.tasks")
 
 
 @celery_app.task(name="inventory.nightly_ingest")
@@ -47,9 +52,40 @@ def rerun_all_matching() -> dict:
 
 @celery_app.task(name="sync.ghl_reconcile")
 def ghl_reconcile() -> dict:
+    """Pull current contact state from GHL for every linked user and apply to VCH."""
+    from app.services.ghl_lifecycle_service import GHLLifecycleService
+
+    if not settings.has_ghl:
+        return {"status": "skipped", "reason": "ghl_disabled"}
+
+    lifecycle = GHLLifecycleService()
+    results: list[dict] = []
+    errors: list[dict] = []
+
+    with SessionLocal() as db:
+        users = db.scalars(
+            select(User).where(User.ghl_contact_id.isnot(None))
+        ).all()
+
+        for user in users:
+            try:
+                result = lifecycle.reconcile_contact_from_ghl(db, user=user)
+                if result.get("updated"):
+                    results.append(result)
+            except Exception as exc:
+                logger.warning("ghl_reconcile failed for user %s: %s", user.id, exc)
+                errors.append({"user_id": user.id, "error": str(exc)})
+            time.sleep(0.6)  # stay under GHL 100 req/min rate limit
+
+        db.commit()
+
     return {
-        "status": "queued",
-        "note": "Stub reconciliation job. Replace with GHL API pull in production.",
+        "status": "completed",
+        "users_checked": len(users),
+        "users_updated": len(results),
+        "errors": len(errors),
+        "updates": results[:20],
+        "error_details": errors[:10],
     }
 
 

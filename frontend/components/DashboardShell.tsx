@@ -10,7 +10,7 @@ import { DealTracker } from "@/components/DealTracker";
 import { QuickMatchForm } from "@/components/QuickMatchForm";
 import { Recommendation, RecommendationCards } from "@/components/RecommendationCards";
 import { apiFetch } from "@/lib/api";
-import { AuthState, clearAuthState, loadValidAuthState, saveAuthState } from "@/lib/auth";
+import { AuthState, clearAuthState, isAdminUser, loadValidAuthState, saveAuthState } from "@/lib/auth";
 import { toPublicSourceLabel } from "@/lib/sourceLabels";
 import { maskVin } from "@/lib/vin";
 
@@ -821,7 +821,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
         ) : null}
         {normalizedRequestedVin && !garageItems.some((item) => item.vin === normalizedRequestedVin) ? (
           <p className="dashboard-warning">
-            Requested VIN {maskVin(normalizedRequestedVin, isPreapproved)} is not currently in My Garage. Showing the latest saved vehicle instead.
+            Requested VIN {maskVin(normalizedRequestedVin, isAdminUser(auth) || isPreapproved)} is not currently in My Garage. Showing the latest saved vehicle instead.
           </p>
         ) : null}
       </section>
@@ -878,7 +878,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                       <p className="dashboard-garage-price">
                         {formatMoney(item.vehicle.price_asking)} | {garageLocation(item)}
                       </p>
-                      <p className="dashboard-garage-meta">VIN: {maskVin(item.vin, isPreapproved)}</p>
+                      <p className="dashboard-garage-meta">VIN: {maskVin(item.vin, isAdminUser(auth) || isPreapproved)}</p>
                       <p className="dashboard-garage-meta">
                         {displayModeLabel(item.display_mode)} | {inspectionStatusLabel(item.inspection_status)}
                       </p>
@@ -895,18 +895,18 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                       <Link className="button secondary" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}`}>
                         View Details
                       </Link>
-                      {item.has_inspection_report ? (
+                      {isAdminUser(auth) && item.has_inspection_report ? (
                         <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}/condition-report`}>
                           CR Available
                         </Link>
                       ) : null}
-                      {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
+                      {isAdminUser(auth) && (item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
                       !item.has_inspection_report && pendingReportVins.has(item.vin) ? (
                         <button className="button ghost-mint" disabled>
                           CR Pending
                         </button>
                       ) : null}
-                      {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
+                      {isAdminUser(auth) && (item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
                       !item.has_inspection_report && !pendingReportVins.has(item.vin) ? (
                         <button
                           className="button ghost-mint"
@@ -975,7 +975,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
               </div>
               <div className="dashboard-spotlight-copy">
                 <p className="dashboard-spotlight-summary">
-                  {garageLocation(spotlightItem)} | VIN {maskVin(spotlightItem.vin, isPreapproved)}
+                  {garageLocation(spotlightItem)} | VIN {maskVin(spotlightItem.vin, isAdminUser(auth) || isPreapproved)}
                 </p>
                 <p className="dashboard-muted-note">
                   Added {formatDate(spotlightItem.added_at)}
@@ -988,7 +988,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                 <Link className="button secondary" href={`/vinventory/${encodeURIComponent(spotlightItem.public_slug || spotlightItem.vin)}`}>
                   View Details
                 </Link>
-                {spotlightItem.has_inspection_report ? (
+                {isAdminUser(auth) && spotlightItem.has_inspection_report ? (
                   <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(spotlightItem.public_slug || spotlightItem.vin)}/condition-report`}>
                     CR Available
                   </Link>
@@ -1019,7 +1019,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
 
       <section>
         <h2>Top Recommendations</h2>
-        <RecommendationCards data={recommendations} onSelect={selectVehicle} onFavorite={favoriteVehicle} />
+        <RecommendationCards data={recommendations} onSelect={selectVehicle} onFavorite={favoriteVehicle} isAdmin={isAdminUser(auth)} />
       </section>
 
       <section className="grid two">

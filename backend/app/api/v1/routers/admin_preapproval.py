@@ -11,6 +11,7 @@ from app.models.entities import User, Deal
 from app.core.constants import FundingState
 from app.api.deps import get_current_user, is_admin_user
 from app.services.external_sync_service import get_external_sync_service
+from app.services.ghl_lifecycle_service import GHLLifecycleService
 
 
 router = APIRouter()
@@ -199,3 +200,27 @@ def get_pending_preapprovals(
             for deal in pending_deals
         ],
     }
+
+
+@router.post("/users/{user_id}/ghl-sync")
+def sync_user_from_ghl(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Pull current GHL contact state and apply to VCH user."""
+    if not is_admin_user(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if not user.ghl_contact_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="User has no linked GHL contact ID",
+        )
+
+    result = GHLLifecycleService().reconcile_contact_from_ghl(db, user=user)
+    db.commit()
+    return result

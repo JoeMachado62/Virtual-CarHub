@@ -124,6 +124,50 @@ class GHLLifecycleService:
         self.ghl.update_contact(contact_id, payload)
         return payload
 
+    def reconcile_contact_from_ghl(self, db: Session, *, user: User) -> dict:
+        """Pull current contact state from GHL and apply to VCH (GHL wins)."""
+        contact_id = user.ghl_contact_id
+        if not settings.has_ghl or not contact_id:
+            return {"skipped": True, "reason": "no_ghl_contact_id"}
+
+        response = self.ghl.get_contact(contact_id)
+        contact = response.get("contact", response)
+
+        # Reshape GHL GET response into webhook-compatible payload
+        payload: dict[str, Any] = {
+            "type": "ghl_reconcile",
+            "contactId": contact_id,
+            "firstName": contact.get("firstName"),
+            "lastName": contact.get("lastName"),
+            "email": contact.get("email"),
+            "phone": contact.get("phone"),
+            "customFields": contact.get("customFields", []),
+        }
+
+        deal = self._resolve_deal(
+            db, payload=payload, opportunity_id=None,
+            contact_id=contact_id, user=user,
+        )
+
+        updated_fields: list[str] = []
+        updated_fields.extend(
+            self._apply_user_updates(db, payload=payload, user=user, deal=deal, contact_id=contact_id)
+        )
+        if deal:
+            updated_fields.extend(
+                self._apply_deal_updates(
+                    db, payload=payload, deal=deal, user=user,
+                    opportunity_id=None, contact_id=contact_id,
+                )
+            )
+
+        return {
+            "user_id": user.id,
+            "contact_id": contact_id,
+            "updated_fields": updated_fields,
+            "updated": bool(updated_fields),
+        }
+
     def _update_contact_custom_fields(self, contact_id: str, fields: list[dict[str, Any]]) -> None:
         if not settings.has_ghl or not contact_id or not fields:
             return
@@ -523,6 +567,26 @@ class GHLLifecycleService:
                     return value
         return None
 
+    # Map from GHL custom field display name → settings attribute holding the field ID.
+    # Used to resolve flat key-value payloads from GHL workflow webhooks.
+    _FIELD_NAME_TO_SETTING: dict[str, str] = {
+        "VCH User ID": "ghl_contact_cf_vch_user_id",
+        "VCH Deal ID": "ghl_contact_cf_vch_deal_id",
+        "VCH Deal Stage": "ghl_contact_cf_vch_deal_stage",
+        "VCH Funding State": "ghl_contact_cf_vch_funding_state",
+        "VCH Selected VIN": "ghl_contact_cf_vch_selected_vin",
+        "VCH Profile Tier": "ghl_contact_cf_vch_profile_tier",
+        "VCH Profile Completion %": "ghl_contact_cf_vch_profile_completion_pct",
+        "VCH Preapproved": "ghl_contact_cf_vch_preapproved",
+        "VCH Preapproval Amount": "ghl_contact_cf_vch_preapproval_amount",
+        "VCH Preapproval Until": "ghl_contact_cf_vch_preapproval_until",
+        "VCH CR Last Requested At": "ghl_contact_cf_vch_cr_last_requested_at",
+        "VCH CR Last Completed At": "ghl_contact_cf_vch_cr_last_completed_at",
+        "VCH CR Last URL": "ghl_contact_cf_vch_cr_last_url",
+        "RouteOne Application ID": "ghl_contact_cf_routeone_app_id",
+        "VCH Lender Name": "ghl_contact_cf_vch_lender_name",
+    }
+
     def _iter_custom_fields(self, payload: dict) -> list[dict]:
         entries: list[dict] = []
         for candidate in (
@@ -539,6 +603,19 @@ class GHLLifecycleService:
         ):
             if isinstance(candidate, list):
                 entries.extend([item for item in candidate if isinstance(item, dict)])
+
+        # GHL workflow webhooks send custom fields as flat top-level keys by
+        # display name (e.g. "VCH Preapproved": "Yes") instead of the
+        # customFields array. Synthesize entries so downstream matching by
+        # field ID works unchanged.
+        if not entries:
+            for name, setting_attr in self._FIELD_NAME_TO_SETTING.items():
+                value = payload.get(name)
+                if not _is_blank(value):
+                    field_id = getattr(settings, setting_attr, "")
+                    if field_id:
+                        entries.append({"id": field_id, "value": value})
+
         return entries
 
     def _event_name(self, payload: dict) -> str:
@@ -551,6 +628,7 @@ class GHLLifecycleService:
     def _contact_id_from_payload(self, payload: dict, event_name: str) -> str | None:
         candidates = (
             "contactId",
+            "contact_id",
             "contact.id",
             "objectData.contactId",
             "opportunity.contactId",

@@ -9,4 +9,10 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    beat_schedule={
+        "ghl-reconcile-every-15m": {
+            "task": "sync.ghl_reconcile",
+            "schedule": 900.0,
+        },
+    },
 )
