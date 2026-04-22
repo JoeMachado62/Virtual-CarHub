@@ -101,7 +101,7 @@ def test_get_vin_description_prefers_guide_endpoint(monkeypatch) -> None:
     assert calls == [
         (
             "GET",
-            "/vindescription/en_US/1FD8W3H69LEC38010",
+            "/vin/1FD8W3H69LEC38010",
             {
                 "params": {
                     "profileKey": "profile-123",
@@ -109,6 +109,7 @@ def test_get_vin_description_prefers_guide_endpoint(monkeypatch) -> None:
                     "incRgbHex": "true",
                     "includeAltModel": "true",
                     "includeVehicleIndicator": "true",
+                    "language_Locale": "en_US",
                 }
             },
         )
@@ -138,8 +139,8 @@ def test_get_vin_description_falls_back_when_guide_path_404(monkeypatch) -> None
 
     assert response["result"]["ok"] is True
     assert [path for _method, path, _kwargs in calls] == [
+        "/vin/1FD8W3H69LEC38010",
         "/vindescription/en_US/1FD8W3H69LEC38010",
-        "/vindescription",
     ]
 
 

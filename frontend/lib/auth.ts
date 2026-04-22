@@ -95,10 +95,12 @@ export async function refreshAuthState(auth: AuthState): Promise<AuthState | nul
   return nextAuth;
 }
 
+const ADMIN_DOMAINS = new Set(["virtualcarhub.com", "admin.virtualcarhub.com"]);
+
 export function isAdminUser(auth: AuthState | null): boolean {
   if (!auth?.email) return false;
   const domain = auth.email.split("@")[1]?.toLowerCase();
-  return domain === "virtualcarhub.com";
+  return ADMIN_DOMAINS.has(domain ?? "");
 }
 
 export async function loadValidAuthState(): Promise<AuthState | null> {

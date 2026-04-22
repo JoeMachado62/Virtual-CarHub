@@ -597,8 +597,6 @@ def request_vehicle_condition_report(
     current_user: User = Depends(get_current_user),
     current_deal=Depends(get_current_deal),
 ) -> dict:
-    if not is_admin_user(current_user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Condition reports are restricted to administrative users.")
     eligible, reason = _condition_report_eligibility(current_deal, current_user)
     if not eligible:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)

@@ -320,10 +320,62 @@ const EMPTY_SYNC: SyncMeta = {
   error: null,
 };
 
-const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
+const FALLBACK_IMAGE = "/assets/images/portfolio/VCH Auction default image.webp";
 const SEARCH_CONTEXT_KEY = "vch:inventory:search-context";
 const SEARCH_FILTERS_KEY = "vch:inventory:filters";
 const LIVE_SYNC_FALLBACK_MESSAGE = "Live wholesale sync is temporarily unavailable. Showing saved inventory results.";
+
+const PROGRESS_MESSAGES = [
+  "Checking surplus inventory listings\u2026",
+  "Contacting wholesale sources\u2026",
+  "Scanning dealer networks\u2026",
+  "Vetting inventory quality\u2026",
+  "Verifying vehicle history\u2026",
+  "Matching factory specifications\u2026",
+  "Preparing color-matched images\u2026",
+  "Validating pricing information\u2026",
+  "Cross-referencing market data\u2026",
+  "Finalizing listing details\u2026",
+];
+
+function SearchProgressOverlay() {
+  const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setStep((prev) => (prev < PROGRESS_MESSAGES.length - 1 ? prev + 1 : prev));
+    }, 2200);
+    return () => clearInterval(interval);
+  }, []);
+
+  const pct = Math.min(((step + 1) / PROGRESS_MESSAGES.length) * 100, 95);
+
+  return (
+    <div className="card" style={{ textAlign: "center", padding: "3rem 2rem" }}>
+      <div style={{ marginBottom: "1.5rem" }}>
+        <svg width="48" height="48" viewBox="0 0 48 48" style={{ animation: "spin 1.2s linear infinite" }}>
+          <circle cx="24" cy="24" r="20" fill="none" stroke="var(--accent, #3b82f6)" strokeWidth="4" strokeDasharray="90 40" strokeLinecap="round" />
+        </svg>
+      </div>
+      <h3 style={{ margin: "0 0 0.75rem", fontSize: "1.15rem" }}>Searching Wholesale Inventory</h3>
+      <p style={{ margin: "0 0 1.5rem", opacity: 0.8, minHeight: "1.4em", transition: "opacity 0.3s" }}>
+        {PROGRESS_MESSAGES[step]}
+      </p>
+      <div style={{ background: "rgba(255,255,255,0.1)", borderRadius: 8, height: 6, overflow: "hidden", maxWidth: 320, margin: "0 auto" }}>
+        <div
+          style={{
+            height: "100%",
+            width: `${pct}%`,
+            background: "var(--accent, #3b82f6)",
+            borderRadius: 8,
+            transition: "width 0.8s ease",
+          }}
+        />
+      </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
 
 function sanitizeSyncWarning(message?: string | null): string | null {
   if (!message) return null;
@@ -1287,7 +1339,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
 
           {syncWarning && rows.length === 0 ? <div className="card">{syncWarning}</div> : null}
           {error ? <div className="card">{error}</div> : null}
-          {!error && loading ? <div className="card">Loading inventory...</div> : null}
+          {!error && loading ? <SearchProgressOverlay /> : null}
           {!loading && !error && rows.length === 0 ? (
             <div className="card">No vehicles match your current filters.</div>
           ) : null}
@@ -1298,14 +1350,21 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                 <article className="card inventory-card" key={item.vin}>
                   <Link className="inventory-media-button" href={`/vinventory/${encodeURIComponent(publicIdentifier(item))}` as any}>
                     <div className="inventory-media">
-                      {item.thumbnail ? (
+                      {item.reference_pending ? (
+                        <>
+                          <img src={FALLBACK_IMAGE} alt={`${item.year} ${item.make} ${item.model}`} loading="lazy" style={{ opacity: 0.45 }} />
+                          <div className="gated-photos-overlay" style={{ background: "rgba(0,0,0,0.55)" }}>
+                            <span style={{ fontSize: "0.8rem" }}>Fetching Wholesale Images&hellip;</span>
+                          </div>
+                        </>
+                      ) : item.thumbnail ? (
                         <img src={item.thumbnail} alt={`${item.year} ${item.make} ${item.model}`} loading="lazy" />
                       ) : (
                         <img src={FALLBACK_IMAGE} alt={`${item.year} ${item.make} ${item.model}`} loading="lazy" />
                       )}
-                      {item.dealer_photos_gated && !garageVins.has(item.vin) ? (
+                      {!item.reference_pending && item.dealer_photos_gated && !garageVins.has(item.vin) ? (
                         <div className="gated-photos-overlay">
-                          <span>Additional Vehicle Photos Available</span>
+                          <span>More Images Available</span>
                         </div>
                       ) : null}
                     </div>

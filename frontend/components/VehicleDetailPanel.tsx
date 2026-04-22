@@ -840,17 +840,17 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                   {actionLoading === "acquire" ? "Starting..." : "Start Acquisition"}
                 </button>
 
-                {isAdminUser(auth) && !vehicle.has_inspection_report && reportStatus !== "pending" ? (
+                {auth && !vehicle.has_inspection_report && reportStatus !== "pending" ? (
                   <button className="vdp-action-btn vdp-action-accent" onClick={() => requestConditionReport()} disabled={actionLoading !== null}>
                     {actionLoading === "condition-report" ? "Requesting..." : "Order CR"}
                   </button>
                 ) : null}
 
-                {isAdminUser(auth) && reportStatus === "pending" ? (
+                {auth && reportStatus === "pending" ? (
                   <button className="vdp-action-btn vdp-action-outline" disabled>CR Pending</button>
                 ) : null}
 
-                {isAdminUser(auth) && (vehicle.has_inspection_report || reportStatus === "available") ? (
+                {auth && (vehicle.has_inspection_report || reportStatus === "available") ? (
                   <Link className="vdp-action-btn vdp-action-outline" href={`/vinventory/${encodeURIComponent(vehicle.public_slug || vehicle.vin)}/condition-report` as any}>
                     View Condition Report
                   </Link>
@@ -920,16 +920,21 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
 
             {vehicle.display_context?.dealer_photos_gated ? (
               <section className="card vdp-gated-card">
-                <h3>Additional Vehicle Photos Available</h3>
-                <p>{vehicle.protected_photo_access_message || "Sign in and complete buyer pre-qualification to unlock actual vehicle photos."}</p>
+                <h3>More Images Available</h3>
                 {!auth?.accessToken ? (
-                  <button className="vdp-action-btn vdp-action-primary" onClick={() => addToGarage()} disabled={actionLoading !== null}>
-                    {actionLoading === "garage" ? "Saving..." : "Save to My Garage"}
-                  </button>
-                ) : !vehicle.can_view_protected_photos ? (
-                  <button className="vdp-action-btn vdp-action-dark" onClick={() => startAcquisition()} disabled={actionLoading !== null}>
-                    {actionLoading === "acquire" ? "Starting..." : "Continue Qualification"}
-                  </button>
+                  <>
+                    <p>Sign in and add this vehicle to your garage to view additional photos.</p>
+                    <button className="vdp-action-btn vdp-action-primary" onClick={() => setShowAuthModal(true)}>
+                      Sign In to View
+                    </button>
+                  </>
+                ) : !vehicle.is_in_garage ? (
+                  <>
+                    <p>Add this vehicle to My Garage to unlock additional dealer photos.</p>
+                    <button className="vdp-action-btn vdp-action-primary" onClick={() => addToGarage()} disabled={actionLoading !== null}>
+                      {actionLoading === "garage" ? "Adding..." : "Add to My Garage"}
+                    </button>
+                  </>
                 ) : null}
               </section>
             ) : null}

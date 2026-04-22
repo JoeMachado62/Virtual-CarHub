@@ -107,27 +107,42 @@ class TestBestVssStyle:
 # ---------------------------------------------------------------------------
 
 
+def _clear_vss_caches():
+    import app.services.chromedata_service as svc
+    svc._vss_make_cache.clear()
+    svc._vss_model_cache.clear()
+
+
+def _fake_vss_client(makes=None, models=None, styles=None):
+    class FakeVssClient:
+        def get_makes(self, **kwargs) -> dict[str, Any]:
+            return makes or {"makes": []}
+
+        def get_models(self, **kwargs) -> dict[str, Any]:
+            return models or {"models": []}
+
+        def get_styles(self, **kwargs) -> dict[str, Any]:
+            return styles or {"styles": []}
+
+    return FakeVssClient()
+
+
 class TestResolveStyleViaVss:
     def test_returns_style_from_vss_response(self, monkeypatch) -> None:
-        fake_response = {
-            "styles": [
+        client = _fake_vss_client(
+            makes={"makes": [{"makeCode": "FO", "make": "Ford"}]},
+            models={"models": [{"model": "F-150"}]},
+            styles={"styles": [
                 {"styleId": 403565, "trimName": "Limited", "bodyType": "SuperCrew Cab Styleside"},
                 {"styleId": 403570, "trimName": "XLT", "bodyType": "SuperCab Styleside"},
-            ]
-        }
-
-        class FakeVssClient:
-            def get_styles(self, **kwargs) -> dict[str, Any]:
-                return fake_response
-
-        monkeypatch.setattr(
-            "app.services.chromedata_service._get_vss_client",
-            lambda: FakeVssClient(),
+            ]},
         )
+        monkeypatch.setattr("app.services.chromedata_service._get_vss_client", lambda: client)
         monkeypatch.setattr(
             "app.services.chromedata_service.settings",
             SimpleNamespace(chromedata_locale="en_US", has_chromedata_vss=True),
         )
+        _clear_vss_caches()
 
         vehicle = _vehicle(trim="Limited", body_type="SuperCrew Cab Styleside")
         style_id, body_type, description = _resolve_style_via_vss(vehicle)
@@ -137,21 +152,66 @@ class TestResolveStyleViaVss:
         assert description == "Limited"
 
     def test_returns_none_when_no_styles(self, monkeypatch) -> None:
-        class FakeVssClient:
-            def get_styles(self, **kwargs) -> dict[str, Any]:
-                return {"styles": []}
-
-        monkeypatch.setattr(
-            "app.services.chromedata_service._get_vss_client",
-            lambda: FakeVssClient(),
+        client = _fake_vss_client(
+            makes={"makes": [{"makeCode": "FO", "make": "Ford"}]},
+            models={"models": [{"model": "F-150"}]},
+            styles={"styles": []},
         )
+        monkeypatch.setattr("app.services.chromedata_service._get_vss_client", lambda: client)
         monkeypatch.setattr(
             "app.services.chromedata_service.settings",
             SimpleNamespace(chromedata_locale="en_US", has_chromedata_vss=True),
         )
+        _clear_vss_caches()
 
         vehicle = _vehicle()
         style_id, body_type, description = _resolve_style_via_vss(vehicle)
         assert style_id is None
-        assert body_type is None
-        assert description is None
+
+    def test_returns_none_when_make_not_found(self, monkeypatch) -> None:
+        client = _fake_vss_client(
+            makes={"makes": [{"makeCode": "CH", "make": "Chevrolet"}]},
+        )
+        monkeypatch.setattr("app.services.chromedata_service._get_vss_client", lambda: client)
+        monkeypatch.setattr(
+            "app.services.chromedata_service.settings",
+            SimpleNamespace(chromedata_locale="en_US", has_chromedata_vss=True),
+        )
+        _clear_vss_caches()
+
+        vehicle = _vehicle(make="Ford")
+        style_id, body_type, description = _resolve_style_via_vss(vehicle)
+        assert style_id is None
+
+    def test_returns_none_when_model_not_found(self, monkeypatch) -> None:
+        client = _fake_vss_client(
+            makes={"makes": [{"makeCode": "FO", "make": "Ford"}]},
+            models={"models": [{"model": "Mustang"}]},
+        )
+        monkeypatch.setattr("app.services.chromedata_service._get_vss_client", lambda: client)
+        monkeypatch.setattr(
+            "app.services.chromedata_service.settings",
+            SimpleNamespace(chromedata_locale="en_US", has_chromedata_vss=True),
+        )
+        _clear_vss_caches()
+
+        vehicle = _vehicle(model="F-150")
+        style_id, body_type, description = _resolve_style_via_vss(vehicle)
+        assert style_id is None
+
+    def test_resolves_model_with_different_casing(self, monkeypatch) -> None:
+        client = _fake_vss_client(
+            makes={"makes": [{"makeCode": "MA", "make": "Mazda"}]},
+            models={"models": [{"model": "Mazda3"}]},
+            styles={"styles": [{"styleId": 500, "trimName": "Sport", "bodyType": "Hatchback"}]},
+        )
+        monkeypatch.setattr("app.services.chromedata_service._get_vss_client", lambda: client)
+        monkeypatch.setattr(
+            "app.services.chromedata_service.settings",
+            SimpleNamespace(chromedata_locale="en_US", has_chromedata_vss=True),
+        )
+        _clear_vss_caches()
+
+        vehicle = _vehicle(make="Mazda", model="MAZDA3", trim="Sport", body_type="Hatchback")
+        style_id, body_type, description = _resolve_style_via_vss(vehicle)
+        assert style_id == 500

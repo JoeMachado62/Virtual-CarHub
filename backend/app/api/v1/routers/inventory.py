@@ -1652,6 +1652,59 @@ def search_inventory(
 
     total_pages = max(1, (total + per_page - 1) // per_page) if total else 0
 
+    # Sync ChromeData images for page-1 rows that need them, so the first
+    # page renders with color-matched factory photos immediately.
+    if settings.has_chromedata_media:
+        from app.services.chromedata_service import build_chromedata_manifest, sync_chromedata_source_assets
+
+        backfill_vins: list[str] = []
+        for row in rows:
+            if not row.vin:
+                continue
+            has_cd = (row.features_normalized or {}).get("chromedata_style_id")
+            if has_cd:
+                continue
+            # Check if chromedata assets already cached
+            existing_cd = db.scalar(
+                select(VehicleImageAsset.id).where(
+                    VehicleImageAsset.vin == row.vin,
+                    VehicleImageAsset.source_kind == "chromedata",
+                    VehicleImageAsset.active == True,
+                ).limit(1)
+            )
+            if existing_cd:
+                continue
+            backfill_vins.append(row.vin)
+
+        # Fetch synchronously for this page (fast — results visible immediately)
+        for vin in backfill_vins:
+            try:
+                vehicle_rec = db.get(Vehicle, vin)
+                if vehicle_rec:
+                    manifest = build_chromedata_manifest(vehicle_rec, detail_level="card")
+                    if manifest:
+                        sync_chromedata_source_assets(db, vehicle=vehicle_rec, manifest=manifest)
+            except Exception:
+                logger.debug("ChromeData sync failed for vin=%s", vin, exc_info=True)
+        if backfill_vins:
+            db.commit()
+
+        # Dispatch background Celery task for remaining pages' VINs
+        if total and total > per_page:
+            remaining_vins: list[str] = []
+            remaining_rows = db.scalars(
+                stmt.order_by(*order_by).offset(offset + per_page).limit(min(total - per_page, 200))
+            ).all()
+            for r in remaining_rows:
+                if r.vin and not (r.features_normalized or {}).get("chromedata_style_id"):
+                    remaining_vins.append(r.vin)
+            if remaining_vins:
+                try:
+                    from app.tasks.jobs import chromedata_backfill
+                    chromedata_backfill.delay(remaining_vins)
+                except Exception:
+                    pass  # Celery not available — will fetch on demand
+
     items: list[dict[str, Any]] = []
     for row in rows:
         media = resolve_vehicle_card_media(db, vehicle=row)
@@ -2060,12 +2113,14 @@ def get_inventory_vehicle(
             )
             is_in_garage = garage_item is not None
 
-    can_view_protected_photos = can_view_protected_vehicle_photos(user=current_user, deal=active_deal)
+    # Dealer photos are gated behind garage membership — the user must add
+    # the vehicle to their garage before dealer images are unlocked.
+    allow_protected = is_in_garage
     display_context = resolve_vehicle_display_context(
         db,
         vehicle=vehicle,
         is_garage_view=is_in_garage,
-        allow_protected_photos=can_view_protected_photos,
+        allow_protected_photos=allow_protected,
     )
 
     # Lazy-load full ChromeData reference assets when detail imagery is not cached yet.
@@ -2084,7 +2139,7 @@ def get_inventory_vehicle(
                     db,
                     vehicle=vehicle,
                     is_garage_view=is_in_garage,
-                    allow_protected_photos=can_view_protected_photos,
+                    allow_protected_photos=allow_protected,
                 )
         except Exception:
             logger.warning("ChromeData detail fetch failed for vin=%s", vehicle.vin, exc_info=True)
@@ -2239,7 +2294,8 @@ def get_inventory_vehicle(
             "display_mode": display_context.get("mode"),
             "inspection_status": display_context.get("inspection_status"),
             "has_inspection_report": bool(display_context.get("has_inspection_report")),
-            "can_view_protected_photos": can_view_protected_photos,
+            "is_in_garage": is_in_garage,
+            "can_view_protected_photos": allow_protected,
             "protected_photo_access_message": protected_photo_access_message(user=current_user, deal=active_deal),
             "features_raw": merged_features,
             "features_full": merged_features,
@@ -2250,9 +2306,9 @@ def get_inventory_vehicle(
             "option_details": listing_meta.get("option_details") or [],
             "option_packages": listing_meta.get("option_packages") or [],
             "option_package_details": listing_meta.get("option_package_details") or [],
-            "photo_links": (listing_meta.get("photo_links") or []) if can_view_protected_photos else [],
-            "photo_links_cached": (listing_meta.get("photo_links_cached") or []) if can_view_protected_photos else [],
-            "supplemental_photo_links": (listing_meta.get("supplemental_photo_links") or []) if can_view_protected_photos else [],
+            "photo_links": (listing_meta.get("photo_links") or []) if allow_protected else [],
+            "photo_links_cached": (listing_meta.get("photo_links_cached") or []) if allow_protected else [],
+            "supplemental_photo_links": (listing_meta.get("supplemental_photo_links") or []) if allow_protected else [],
             "description": listing_meta.get("description"),
             "exterior_color": normalized.get("exterior_color") or listing_meta.get("exterior_color") or None,
             "interior_color": normalized.get("interior_color") or listing_meta.get("interior_color") or None,
@@ -2398,8 +2454,8 @@ def get_similar_vehicles(
 
     results = []
     for row in rows:
-        card_media = resolve_vehicle_card_media(db, row)
-        hero = card_media.get("hero") or (row.images[0] if row.images else None)
+        card_media = resolve_vehicle_card_media(db, vehicle=row)
+        hero = card_media.thumbnail or (row.images[0] if row.images else None)
         normalized = row.features_normalized or {}
         results.append({
             "vin": row.vin,

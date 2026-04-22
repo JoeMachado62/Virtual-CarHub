@@ -128,9 +128,9 @@ class ChromeDataCvdClient(ChromeDataHmacClient):
         return self._request_fallback(
             "GET",
             [
+                (f"/vin/{_encode_segment(vin)}", {**params, "language_Locale": locale}),
                 (f"/vindescription/{_encode_segment(locale)}/{_encode_segment(vin)}", params),
                 ("/vindescription", {**params, "vin": vin, "language_Locale": locale}),
-                ("/vin", {**params, "vin": vin, "language_Locale": locale}),
             ],
         )
 

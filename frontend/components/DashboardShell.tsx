@@ -895,18 +895,18 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                       <Link className="button secondary" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}`}>
                         View Details
                       </Link>
-                      {isAdminUser(auth) && item.has_inspection_report ? (
+                      {item.has_inspection_report ? (
                         <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}/condition-report`}>
                           CR Available
                         </Link>
                       ) : null}
-                      {isAdminUser(auth) && (item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
+                      {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
                       !item.has_inspection_report && pendingReportVins.has(item.vin) ? (
                         <button className="button ghost-mint" disabled>
                           CR Pending
                         </button>
                       ) : null}
-                      {isAdminUser(auth) && (item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
+                      {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
                       !item.has_inspection_report && !pendingReportVins.has(item.vin) ? (
                         <button
                           className="button ghost-mint"

@@ -417,7 +417,7 @@ def resolve_vehicle_display_context(
     else:
         marketing_gallery = tier3_gallery or source_gallery or fallback_gallery
 
-    if not marketing_gallery:
+    if not marketing_gallery and not dealer_photos_gated:
         marketing_gallery = source_gallery or fallback_gallery
 
     if tier3_gallery:

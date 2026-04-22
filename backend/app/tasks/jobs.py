@@ -89,6 +89,38 @@ def ghl_reconcile() -> dict:
     }
 
 
+@celery_app.task(name="inventory.chromedata_backfill")
+def chromedata_backfill(vins: list[str]) -> dict:
+    """Fetch ChromeData factory images for a batch of VINs in the background."""
+    if not settings.has_chromedata_media:
+        return {"status": "skipped", "reason": "chromedata_disabled"}
+
+    from app.services.chromedata_service import build_chromedata_manifest, sync_chromedata_source_assets
+    from app.models.entities import Vehicle
+
+    synced = 0
+    skipped = 0
+    failed = 0
+    with SessionLocal() as db:
+        for vin in vins:
+            try:
+                vehicle = db.get(Vehicle, vin)
+                if not vehicle:
+                    skipped += 1
+                    continue
+                manifest = build_chromedata_manifest(vehicle, detail_level="card")
+                if manifest:
+                    sync_chromedata_source_assets(db, vehicle=vehicle, manifest=manifest)
+                    synced += 1
+                else:
+                    skipped += 1
+            except Exception:
+                logger.debug("chromedata_backfill failed for vin=%s", vin, exc_info=True)
+                failed += 1
+        db.commit()
+    return {"synced": synced, "skipped": skipped, "failed": failed}
+
+
 @celery_app.task(name="inventory.history_enrichment_batch")
 def history_enrichment_batch(limit: int = 8, force: bool = False) -> dict:
     with SessionLocal() as db:

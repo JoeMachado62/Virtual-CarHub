@@ -196,7 +196,10 @@ def test_inspection_pending_when_stage_requires_inspection_but_no_report() -> No
 
     assert context["mode"] == ImageDisplayMode.INSPECTION_PENDING.value
     assert context["inspection_status"] == InspectionStatus.PENDING.value
-    assert len(context["gallery_images"]) >= 1
+    # Dealer photos are gated for marketcheck source — gallery is empty until
+    # reference images (ChromeData) are fetched or vehicle is added to garage.
+    assert context["dealer_photos_gated"] is True
+    assert context["gallery_images"] == []
 
 
 def test_image_jobs_are_deduped_by_fingerprint() -> None:

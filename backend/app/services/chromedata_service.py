@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 CHROMEDATA_SOURCE_KIND = "chromedata"
 
 _CARD_SHOT_ORDER = ["01", "02", "03", "07", "05", "06"]
+_BASIC_EXTERIOR_SHOTS = {"01", "02", "03"}  # 3-angle set used when no color match
 _INTERIOR_SHOT_CODES = {
     "11", "12", "13", "17", "18", "20", "21", "28", "29", "32", "43", "44", "45", "46", "47",
 }
@@ -258,8 +260,12 @@ def _parse_cvd_descriptor(response: dict[str, Any], vehicle: Vehicle) -> dict[st
     if not isinstance(result, dict):
         return {}
 
-    vehicle_info = result.get("vehicles") or result.get("vehicle") or {}
-    if not isinstance(vehicle_info, dict):
+    raw_vehicles = result.get("vehicles") or result.get("vehicle") or {}
+    if isinstance(raw_vehicles, list):
+        vehicle_info = raw_vehicles[0] if raw_vehicles else {}
+    elif isinstance(raw_vehicles, dict):
+        vehicle_info = raw_vehicles
+    else:
         vehicle_info = {}
 
     style_id = _coerce_int(
@@ -267,11 +273,31 @@ def _parse_cvd_descriptor(response: dict[str, Any], vehicle: Vehicle) -> dict[st
         or result.get("styleId")
         or ((result.get("vehicle") or {}).get("styleId") if isinstance(result.get("vehicle"), dict) else None)
     )
-    selected_color = _select_color_info(
-        _normalize_items(result.get("exteriorColors")),
-        style_id=style_id,
-        preferred_code=_normalized_color_code(vehicle),
+    cvd_colors = _normalize_items(result.get("exteriorColors"))
+    preferred_code = _normalized_color_code(vehicle)
+    normalized_features = vehicle.features_normalized or {}
+    exterior_color_text = _clean(
+        normalized_features.get("exterior_color")
+        or normalized_features.get("exterior_color_description")
+        or (vehicle.exterior_color if hasattr(vehicle, "exterior_color") else "")
     )
+
+    # If any CVD color has a VIN-confirmed installCause, prefer that over
+    # the stored paint_code (which may come from unreliable auction data).
+    vin_confirmed = [c for c in cvd_colors if _clean(c.get("installCause")).upper() in {"B", "E", "V", "I"}]
+    if vin_confirmed:
+        selected_color = _select_color_info(cvd_colors, style_id=style_id, preferred_code=vin_confirmed[0].get("colorCode"))
+    elif exterior_color_text and cvd_colors:
+        # CVD can't confirm installed color — match the listing's exterior_color
+        # text (e.g. "Black") against CVD descriptions/genericDesc.
+        text_matched = _match_color_by_text(cvd_colors, exterior_color_text)
+        if text_matched:
+            selected_color = _select_color_info(cvd_colors, style_id=style_id, preferred_code=text_matched)
+        else:
+            selected_color = _select_color_info(cvd_colors, style_id=style_id, preferred_code=preferred_code)
+    else:
+        selected_color = _select_color_info(cvd_colors, style_id=style_id, preferred_code=preferred_code)
+
     return {
         "style_id": style_id,
         "match_level": "vin",
@@ -283,18 +309,99 @@ def _parse_cvd_descriptor(response: dict[str, Any], vehicle: Vehicle) -> dict[st
     }
 
 
+_vss_make_cache: dict[tuple[int, str], str | None] = {}
+_vss_model_cache: dict[tuple[int, str, str], str | None] = {}
+
+
+def _resolve_vss_make_code(year: int, make_display: str) -> str | None:
+    """Resolve a display make name (e.g. 'Ford') to the VSS makeCode via
+    GET /makes.  Results are cached by (year, make_display)."""
+    cache_key = (year, make_display.strip().lower())
+    if cache_key in _vss_make_cache:
+        return _vss_make_cache[cache_key]
+
+    client = _get_vss_client()
+    try:
+        response = client.get_makes(year=year, locale=settings.chromedata_locale)
+    except Exception:
+        logger.debug("VSS /makes lookup failed for year=%s", year, exc_info=True)
+        return None
+    makes = _normalize_items(response.get("makes") or response.get("result") or response)
+    target = _normalize_match_text(make_display)
+    best_code: str | None = None
+    for item in makes:
+        code = _clean(item.get("makeCode") or item.get("code"))
+        name = _clean(item.get("make") or item.get("name") or item.get("description"))
+        if not code:
+            continue
+        if _normalize_match_text(name) == target:
+            best_code = code
+            break
+    _vss_make_cache[cache_key] = best_code
+    return best_code
+
+
+def _resolve_vss_model_name(year: int, make_code: str, model_display: str) -> str | None:
+    """Resolve a display model name (e.g. 'Expedition MAX') to the exact VSS
+    model name via GET /models.  Cached by (year, makeCode, model_display)."""
+    cache_key = (year, make_code, model_display.strip().lower())
+    if cache_key in _vss_model_cache:
+        return _vss_model_cache[cache_key]
+
+    client = _get_vss_client()
+    try:
+        response = client.get_models(year=year, make_code=make_code, locale=settings.chromedata_locale)
+    except Exception:
+        logger.debug("VSS /models lookup failed for year=%s makeCode=%s", year, make_code, exc_info=True)
+        return None
+    models = _normalize_items(response.get("models") or response.get("result") or response)
+    target = _normalize_match_text(model_display)
+    best_name: str | None = None
+    best_score = -1
+    for item in models:
+        name = _clean(item.get("model") or item.get("name") or item.get("description"))
+        if not name:
+            continue
+        normalized_name = _normalize_match_text(name)
+        if normalized_name == target:
+            best_name = name
+            break
+        name_tokens = set(normalized_name.split())
+        target_tokens = set(target.split())
+        if target_tokens and target_tokens.issubset(name_tokens):
+            score = len(target_tokens)
+            if score > best_score:
+                best_score = score
+                best_name = name
+    _vss_model_cache[cache_key] = best_name
+    return best_name
+
+
 def _resolve_style_via_vss(
     vehicle: Vehicle,
 ) -> tuple[int | None, str | None, str | None]:
-    """Query VSS /styles for the vehicle's year/make/model and return the
+    """Query VSS /makes → /models → /styles for the vehicle and return the
     best-matching (styleId, bodyType, styleDescription) tuple."""
+    make_code = _resolve_vss_make_code(vehicle.year, vehicle.make)
+    if not make_code:
+        return None, None, None
+
+    model_name = _resolve_vss_model_name(vehicle.year, make_code, vehicle.model)
+    if not model_name:
+        return None, None, None
+
     client = _get_vss_client()
-    response = client.get_styles(
-        year=vehicle.year,
-        make_code=vehicle.make,
-        model=vehicle.model,
-        locale=settings.chromedata_locale,
-    )
+    try:
+        response = client.get_styles(
+            year=vehicle.year,
+            make_code=make_code,
+            model=model_name,
+            locale=settings.chromedata_locale,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            return None, None, None
+        raise
     styles = _normalize_items(response.get("styles") or response.get("result") or response)
     if not styles:
         return None, None, None
@@ -583,26 +690,43 @@ def _parse_media_response(
     if selected_code:
         matched_colorized = [
             item for item in colorized_images
-            if _clean(item.get("primaryColorOptionCode")).upper() == selected_code
+            if _clean(item.get("primaryColorOptionCode") or item.get("@primaryColorOptionCode")).upper() == selected_code
         ]
     else:
         matched_colorized = []
-    chosen_colorized = matched_colorized or _primary_color_group(colorized_images)
 
+    # Prefer transparent background (PNG) for colorized images so they
+    # composite cleanly over our dark UI.  Fall back to the full set if
+    # transparent variants aren't available for a given style.
+    transparent_colorized = [
+        item for item in matched_colorized
+        if _clean(item.get("@backgroundDescription") or item.get("backgroundDescription")).lower() == "transparent"
+    ]
+    preferred_colorized = transparent_colorized or matched_colorized
+
+    # When we have a color-matched set, prefer it.  Otherwise fall through to
+    # generic multi-view images — showing a random manufacturer color is worse
+    # than showing a neutral view shot.
+    # When we have color-matched images, show all 6 exterior angles.
+    # When falling back to generic view/stock, limit to 3 basic angles
+    # (01, 02, 03) to avoid showing redundant wrong-color shots.
     card_images = _dedupe_urls(
-        _sorted_media_urls(chosen_colorized, allowed_shot_codes=set(_CARD_SHOT_ORDER))
-        or _sorted_media_urls(_normalize_items(container.get("view")), allowed_shot_codes=set(_CARD_SHOT_ORDER))
-        or _sorted_media_urls(_normalize_items(container.get("stock")), allowed_shot_codes=set(_CARD_SHOT_ORDER))
+        _sorted_media_urls(preferred_colorized, allowed_shot_codes=set(_CARD_SHOT_ORDER))
+        or _sorted_media_urls(_normalize_items(container.get("view")), allowed_shot_codes=_BASIC_EXTERIOR_SHOTS)
+        or _sorted_media_urls(_normalize_items(container.get("stock")), allowed_shot_codes=_BASIC_EXTERIOR_SHOTS)
     )
     if not card_images:
         return None
 
     detail_images: list[str] = []
     if detail_level != "card":
+        # Only include interior shots in the detail set.  The generic view/stock
+        # exterior angles are NOT color-matched and would show a different color
+        # than the colorized card images, confusing the user.
         detail_candidates = _normalize_items(container.get("view")) + _normalize_items(container.get("stock"))
         detail_images = _dedupe_urls(
             url
-            for url in _sorted_media_urls(detail_candidates)
+            for url in _sorted_media_urls(detail_candidates, allowed_shot_codes=_INTERIOR_SHOT_CODES)
             if url not in card_images
         )
 
@@ -645,7 +769,7 @@ def _normalize_items(value: Any) -> list[dict[str, Any]]:
 
 
 def _sorted_media_urls(items: list[dict[str, Any]], allowed_shot_codes: set[str] | None = None) -> list[str]:
-    records: dict[str, tuple[int, int, str]] = {}
+    records: dict[str, tuple[int, int, int, str]] = {}
     for item in items:
         url = _extract_url(item)
         if not url:
@@ -654,13 +778,15 @@ def _sorted_media_urls(items: list[dict[str, Any]], allowed_shot_codes: set[str]
         if allowed_shot_codes is not None and shot_code and shot_code not in allowed_shot_codes:
             continue
         order = _DETAIL_PRIORITY.get(shot_code, 999)
+        bg = _clean(item.get("@backgroundDescription") or item.get("backgroundDescription")).lower()
+        bg_rank = 0 if bg == "transparent" else 1
         width_rank = _width_rank(item)
         key = shot_code or url
         existing = records.get(key)
-        candidate = (order, width_rank, url)
-        if existing is None or candidate[:2] < existing[:2]:
+        candidate = (order, bg_rank, width_rank, url)
+        if existing is None or candidate[:3] < existing[:3]:
             records[key] = candidate
-    return [url for _order, _width_rank_value, url in sorted(records.values())]
+    return [url for _order, _bg, _wr, url in sorted(records.values())]
 
 
 def _primary_color_group(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -671,7 +797,7 @@ def _primary_color_group(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return items
     return [
         item for item in items
-        if _clean(item.get("primaryColorOptionCode")).upper() == primary_code
+        if _clean(item.get("primaryColorOptionCode") or item.get("@primaryColorOptionCode")).upper() == primary_code
     ]
 
 
@@ -811,6 +937,40 @@ def _select_color_info(
         return _to_color_info(primary, exact_override=_is_exact_color(primary))
 
     return _to_color_info(candidates[0], exact_override=_is_exact_color(candidates[0]) and len(candidates) == 1)
+
+
+def _match_color_by_text(colors: list[dict[str, Any]], exterior_text: str) -> str | None:
+    """Match a free-text exterior color (e.g. 'Black') against CVD color
+    descriptions and genericDesc to find the best colorCode."""
+    target = _normalize_match_text(exterior_text)
+    if not target:
+        return None
+    target_tokens = set(target.split())
+
+    best_code: str | None = None
+    best_score = 0
+    for item in colors:
+        code = _clean(item.get("colorCode"))
+        if not code:
+            continue
+        for field in ("genericDesc", "description"):
+            desc = _normalize_match_text(_clean(item.get(field)))
+            if not desc:
+                continue
+            desc_tokens = set(desc.split())
+            if target == desc:
+                return code  # exact match — return immediately
+            if target_tokens and target_tokens.issubset(desc_tokens):
+                score = 60 + len(target_tokens)
+                if score > best_score:
+                    best_score = score
+                    best_code = code
+            elif desc_tokens and desc_tokens.issubset(target_tokens):
+                score = 40 + len(desc_tokens)
+                if score > best_score:
+                    best_score = score
+                    best_code = code
+    return best_code
 
 
 def _to_color_info(item: dict[str, Any], *, exact_override: bool) -> ChromeDataColorInfo:

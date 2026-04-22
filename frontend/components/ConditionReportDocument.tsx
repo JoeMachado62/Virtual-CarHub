@@ -161,10 +161,30 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
   useEffect(() => {
-    async function loadVehicle() {
+    let cancelled = false;
+    async function loadData() {
       setLoading(true);
       setError(null);
-      const response = await apiFetch<VehicleDetail>(`/inventory/${encodeURIComponent(vin)}`);
+
+      // Load auth state first so we can pass the token to the API
+      const auth = await loadValidAuthState();
+      if (cancelled) return;
+
+      const adminUser = isAdminUser(auth);
+      setAuthorized(adminUser);
+
+      if (!adminUser) {
+        setLoading(false);
+        return;
+      }
+
+      // Fetch vehicle data WITH auth token so backend returns full CR data
+      const response = await apiFetch<VehicleDetail>(
+        `/inventory/${encodeURIComponent(vin)}`,
+        {},
+        auth?.accessToken,
+      );
+      if (cancelled) return;
       if (response.status !== "ok") {
         setVehicle(null);
         setError(response.error?.message || "Unable to load condition report.");
@@ -172,36 +192,25 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         return;
       }
       setVehicle(response.data);
+
+      // Check VIN reveal permissions
+      if (auth?.accessToken) {
+        const [statusRes, garageRes] = await Promise.all([
+          apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken),
+          apiFetch<Array<{ vin: string }>>("/me/garage", {}, auth.accessToken),
+        ]);
+        if (cancelled) return;
+        const preapproved = statusRes.status === "ok" && Boolean(statusRes.data?.is_preapproved);
+        const inGarage =
+          garageRes.status === "ok" &&
+          Array.isArray(garageRes.data) &&
+          garageRes.data.some((item) => item.vin === vin);
+        setCanRevealVin(preapproved && inGarage);
+      }
+
       setLoading(false);
     }
-    void loadVehicle();
-  }, [vin]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function checkReveal() {
-      const auth = await loadValidAuthState();
-      if (!auth?.accessToken) {
-        if (!cancelled) {
-          setCanRevealVin(false);
-          setAuthorized(false);
-        }
-        return;
-      }
-      if (!cancelled) setAuthorized(isAdminUser(auth));
-      const [statusRes, garageRes] = await Promise.all([
-        apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken),
-        apiFetch<Array<{ vin: string }>>("/me/garage", {}, auth.accessToken),
-      ]);
-      if (cancelled) return;
-      const preapproved = statusRes.status === "ok" && Boolean(statusRes.data?.is_preapproved);
-      const inGarage =
-        garageRes.status === "ok" &&
-        Array.isArray(garageRes.data) &&
-        garageRes.data.some((item) => item.vin === vin);
-      setCanRevealVin(preapproved && inGarage);
-    }
-    void checkReveal();
+    void loadData();
     return () => { cancelled = true; };
   }, [vin]);
 

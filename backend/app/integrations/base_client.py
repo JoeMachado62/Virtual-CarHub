@@ -49,6 +49,15 @@ class ExternalServiceClient:
             result = _do_request()
             self.breaker.mark_success()
             return result
+        except httpx.HTTPStatusError as exc:
+            # 4xx = client error (not found, bad request, etc.) — the service
+            # is reachable and responding.  Only 5xx (server errors) and
+            # connection failures should trip the circuit breaker.
+            if exc.response is not None and exc.response.status_code < 500:
+                self.breaker.mark_success()
+            else:
+                self.breaker.mark_failure()
+            raise
         except Exception:
             self.breaker.mark_failure()
             raise

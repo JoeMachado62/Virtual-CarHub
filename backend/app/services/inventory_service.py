@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 from app.integrations.marketcheck_client import MarketCheckClient
 from app.core.constants import InventorySourceType
 from app.models.entities import Vehicle
+import logging
+
 from app.services.image_pipeline_service import ensure_tier2_hero_job, sync_marketcheck_source_assets
+
+logger = logging.getLogger(__name__)
 
 
 MOCK_VEHICLES = [
