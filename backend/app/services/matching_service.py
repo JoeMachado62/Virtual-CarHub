@@ -60,22 +60,46 @@ def run_matching(db: Session, *, profile: BuyerProfile, deal: Deal, limit: int =
     return results
 
 
+def _range_fit(value: float, lo: float, hi: float, decay_scale: float) -> float:
+    """Return 1.0 when *value* is inside [lo, hi], exponential decay outside."""
+    if lo <= value <= hi:
+        return 1.0
+    center = (lo + hi) / 2 if hi > lo else hi
+    distance = abs(value - center)
+    return max(0.0, exp(-distance / decay_scale))
+
+
 def _quick_score(vehicle: Vehicle, bfv: dict) -> tuple[float, str]:
     body_types = normalized_list(bfv.get("body_types_included", []))
     budget_min = float(bfv.get("budget_min", 0) or 0)
     budget_max = float(bfv.get("budget_max", 1000000) or 1000000)
+    year_min = int(bfv.get("year_min") or 0)
+    year_max = int(bfv.get("year_max") or 9999)
+    mileage_min = int(bfv.get("mileage_min") or 0)
+    mileage_max = int(bfv.get("mileage_max") or 999999)
     priorities = normalized_list(bfv.get("top_3_priorities", []))
     brand_included = normalized_list(bfv.get("brands_included", []))
 
-    body_match = 1.0 if vehicle.body_type and vehicle.body_type.lower() in body_types else 0.35
+    # --- body type ---
+    body_match = 1.0 if vehicle.body_type and vehicle.body_type.lower() in body_types else 0.05
 
-    if budget_min <= vehicle.price_asking <= budget_max:
-        budget_fit = 1.0
+    # --- budget ---
+    budget_fit = _range_fit(vehicle.price_asking, budget_min, budget_max, 12000)
+
+    # --- year ---
+    if year_min or year_max < 9999:
+        year_fit = _range_fit(float(vehicle.year), float(year_min), float(year_max), 3)
     else:
-        center = (budget_min + budget_max) / 2 if budget_max > budget_min else budget_max
-        distance = abs(vehicle.price_asking - center)
-        budget_fit = max(0.0, exp(-distance / 12000))
+        year_fit = 0.50  # neutral when user didn't specify
 
+    # --- mileage ---
+    odo = float(vehicle.odometer) if vehicle.odometer is not None else 0.0
+    if mileage_min or mileage_max < 999999:
+        mileage_fit = _range_fit(odo, float(mileage_min), float(mileage_max), 30000)
+    else:
+        mileage_fit = 0.50  # neutral when user didn't specify
+
+    # --- feature priorities ---
     feature_text = " ".join(
         [
             *[str(f).lower() for f in (vehicle.features_raw or [])],
@@ -89,25 +113,50 @@ def _quick_score(vehicle: Vehicle, bfv: dict) -> tuple[float, str]:
         hits = sum(1 for kw in keywords if kw in feature_text)
         priority_alignment = min(1.0, hits / max(1, len(keywords) * 0.4))
     else:
-        priority_alignment = 0.6
+        priority_alignment = 0.40
 
+    # --- brand ---
     if brand_included:
-        brand_preference = 1.0 if vehicle.make.lower() in brand_included else 0.2
+        brand_preference = 1.0 if vehicle.make.lower() in brand_included else 0.05
     else:
         brand_preference = 0.65
 
     score = (
-        body_match * 0.30
-        + budget_fit * 0.30
-        + priority_alignment * 0.25
+        body_match * 0.20
+        + budget_fit * 0.20
+        + year_fit * 0.15
+        + mileage_fit * 0.15
+        + priority_alignment * 0.15
         + brand_preference * 0.15
     )
 
-    confidence = "Great Match" if score >= 0.8 else "Good Match"
-    explain = (
-        f"{confidence}: {vehicle.year} {vehicle.make} {vehicle.model} aligns with your body type, "
-        "budget, and stated priorities."
-    )
+    # Build explainability text reflecting actual alignment
+    label = f"{vehicle.year} {vehicle.make} {vehicle.model}"
+    strengths: list[str] = []
+    if body_match >= 1.0:
+        strengths.append("body type")
+    if budget_fit >= 0.8:
+        strengths.append("budget")
+    if year_fit >= 0.8:
+        strengths.append("year range")
+    if mileage_fit >= 0.8:
+        strengths.append("mileage range")
+    if priority_alignment >= 0.5:
+        strengths.append("feature priorities")
+    if brand_preference >= 1.0:
+        strengths.append("preferred brand")
+
+    if score >= 0.8:
+        confidence = "Great Match"
+    elif score >= 0.55:
+        confidence = "Good Match"
+    else:
+        confidence = "Partial Match"
+
+    if strengths:
+        explain = f"{confidence}: {label} aligns with your {', '.join(strengths)}."
+    else:
+        explain = f"{confidence}: {label} may still be worth a look, but doesn't closely match your stated preferences."
     return score, explain
 
 

@@ -43,6 +43,7 @@ type GarageItem = {
   display_mode: DisplayMode;
   inspection_status: InspectionStatus;
   has_inspection_report: boolean;
+  cr_request_status?: string | null;
   vehicle: {
     year?: number | null;
     make?: string | null;
@@ -82,6 +83,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
   const [garageActionVin, setGarageActionVin] = useState<string | null>(null);
   const [pendingReportVins, setPendingReportVins] = useState<Set<string>>(new Set());
   const [crRequestModal, setCrRequestModal] = useState<CrRequestModalState | null>(null);
+  const [profileBfv, setProfileBfv] = useState<Record<string, unknown> | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -326,12 +328,13 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     setDashboardError(null);
     setGarageError(null);
 
-    const [dealResponse, recs, notes, garage, accountStatus] = await Promise.all([
+    const [dealResponse, recs, notes, garage, accountStatus, profileResponse] = await Promise.all([
       apiFetch<DealSummary>("/me/deal", {}, auth.accessToken),
       apiFetch<Recommendation[]>("/me/recommendations", {}, auth.accessToken),
       apiFetch<{ id: string; message: string }[]>("/me/notifications", {}, auth.accessToken),
       apiFetch<GarageItem[]>("/me/garage", {}, auth.accessToken),
-      apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken)
+      apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken),
+      apiFetch<{ bfv_json: Record<string, unknown> | null }>("/me/profile", {}, auth.accessToken)
     ]);
 
     if ([dealResponse, recs, notes, garage].some(isUnauthorized)) {
@@ -361,6 +364,10 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       setIsPreapproved(Boolean(accountStatus.data.is_preapproved));
     } else {
       setIsPreapproved(false);
+    }
+
+    if (profileResponse.status === "ok" && profileResponse.data?.bfv_json) {
+      setProfileBfv(profileResponse.data.bfv_json);
     }
 
     if (garage.status === "ok") {
@@ -410,15 +417,22 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     const items = garage.data || [];
     setGarageItems(items);
 
+    // Seed pendingReportVins from backend cr_request_status so the
+    // "CR Pending" state survives page reloads.
+    const serverPendingVins = new Set(
+      items.filter((item) => item.cr_request_status === "pending").map((item) => item.vin),
+    );
     const vinsWithReports = new Set(items.filter((item) => item.has_inspection_report).map((item) => item.vin));
     const completedVins = [...pendingReportVins].filter((vin) => vinsWithReports.has(vin));
-    if (completedVins.length) {
-      setPendingReportVins((prev) => {
-        const next = new Set(prev);
-        completedVins.forEach((vin) => next.delete(vin));
-        return next;
-      });
-    }
+
+    setPendingReportVins((prev) => {
+      const next = new Set(prev);
+      // Add any server-side pending VINs the client didn't know about
+      serverPendingVins.forEach((vin) => next.add(vin));
+      // Remove VINs that now have reports
+      completedVins.forEach((vin) => next.delete(vin));
+      return next;
+    });
 
     if (completedVins.length) {
       const completedTitles = completedVins
@@ -753,6 +767,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
           </div>
           <QuickMatchForm
             accessToken={accessToken}
+            initialProfile={profileBfv ?? undefined}
             onCompleted={async () => {
               setAuthView("login");
               await refreshData();
@@ -913,7 +928,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                           onClick={() => requestConditionReport(item.vin)}
                           disabled={itemActionLoading}
                         >
-                          {itemActionLoading ? "Requesting..." : "Order CR"}
+                          {itemActionLoading ? "Requesting..." : item.cr_request_status === "terminal" ? "Retry CR" : "Order CR"}
                         </button>
                       ) : null}
                       <button className="button" onClick={() => startGarageAcquisition(item.vin)} disabled={itemActionLoading}>
@@ -1014,7 +1029,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       </section>
 
       {authView !== "onboarding" ? (
-        <QuickMatchForm accessToken={accessToken} onCompleted={refreshData} />
+        <QuickMatchForm accessToken={accessToken} initialProfile={profileBfv ?? undefined} onCompleted={refreshData} />
       ) : null}
 
       <section>

@@ -7,6 +7,10 @@ class QuickMatchRequest(BaseModel):
     body_types_included: list[str] = Field(default_factory=list)
     budget_min: float = 0
     budget_max: float = 100000
+    year_min: int | None = None
+    year_max: int | None = None
+    mileage_min: int | None = None
+    mileage_max: int | None = None
     top_3_priorities: list[str] = Field(default_factory=list, max_length=3)
     brands_included: list[str] = Field(default_factory=list)
     brands_excluded: list[str] = Field(default_factory=list)

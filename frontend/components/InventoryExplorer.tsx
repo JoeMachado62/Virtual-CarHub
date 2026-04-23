@@ -612,6 +612,35 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     if (auth?.accessToken) {
       void loadGarage(auth.accessToken);
       void loadAccountStatus(auth.accessToken);
+
+      // Pre-populate filters from saved Quick Match profile when the user
+      // lands on /vinventory without explicit search params or session filters.
+      const hasExplicitFilters =
+        searchParams.size > 0 || Boolean(window.sessionStorage.getItem(SEARCH_FILTERS_KEY));
+      if (!hasExplicitFilters) {
+        void (async () => {
+          try {
+            const res = await apiFetch<{
+              bfv_json: Record<string, unknown> | null;
+              is_complete: boolean;
+            }>("/me/profile", {}, auth.accessToken);
+            if (res.status !== "ok" || !res.data?.bfv_json || !res.data.is_complete) return;
+            const bfv = res.data.bfv_json;
+            const seed: Partial<FilterState> = {};
+            if (bfv.delivery_zip) seed.zip_code = String(bfv.delivery_zip);
+            if (bfv.year_min) seed.min_year = String(bfv.year_min);
+            if (bfv.year_max) seed.max_year = String(bfv.year_max);
+            if (bfv.budget_min) seed.min_price = String(bfv.budget_min);
+            if (bfv.budget_max) seed.max_price = String(bfv.budget_max);
+            if (bfv.mileage_min) seed.min_miles = String(bfv.mileage_min);
+            if (bfv.mileage_max) seed.max_miles = String(bfv.mileage_max);
+            if (Object.keys(seed).length) {
+              setFilters((prev) => ({ ...prev, ...seed }));
+              setAppliedFilters((prev) => ({ ...prev, ...seed }));
+            }
+          } catch { /* profile fetch is best-effort */ }
+        })();
+      }
     } else {
       setGarageItems([]);
       setGarageError(null);

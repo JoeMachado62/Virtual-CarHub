@@ -5,10 +5,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_deal, get_current_user, is_admin_user
-from app.core.constants import AuctionPlatform, DealState, FundingState, InventorySourceType
+from app.core.constants import AuctionPlatform, DealState, FundingState, InventorySourceType, OveDetailRequestStatus
 from app.core.responses import ok
 from app.db.session import get_db
-from app.models.entities import Document, GarageItem, Notification, OveVehicleDetail, Shipment, User, Vehicle, VehicleMatch
+from app.models.entities import Document, GarageItem, Notification, OveDetailRequest, OveVehicleDetail, Shipment, User, Vehicle, VehicleMatch
 from app.schemas.profile import ProfileUpdateRequest, QuickMatchRequest
 from app.schemas.returns import InitiateReturnRequest
 from app.schemas.ove_inventory import OveDetailRequestEnqueueRequest
@@ -134,6 +134,7 @@ def _serialize_garage_item(
     *,
     deal_stage: DealState,
     allow_protected_photos: bool,
+    cr_request_status: str | None = None,
 ) -> dict:
     if vehicle:
         media = resolve_vehicle_card_media(
@@ -176,6 +177,7 @@ def _serialize_garage_item(
         "display_mode": display_mode,
         "inspection_status": inspection_status,
         "has_inspection_report": has_inspection_report,
+        "cr_request_status": cr_request_status,
         "display_context": display_context,
         "vehicle": {
             "year": vehicle.year if vehicle else None,
@@ -444,8 +446,35 @@ def get_garage(
         .where(GarageItem.status != "removed")
         .order_by(GarageItem.updated_at.desc())
     ).all()
-    vehicles = {v.vin: v for v in db.scalars(select(Vehicle).where(Vehicle.vin.in_([item.vin for item in garage_items]))).all()}
+    garage_vins = [item.vin for item in garage_items]
+    vehicles = {v.vin: v for v in db.scalars(select(Vehicle).where(Vehicle.vin.in_(garage_vins))).all()}
     allow_protected_photos = can_view_protected_vehicle_photos(user=current_user, deal=current_deal)
+
+    # Batch-query the most recent OveDetailRequest per garage VIN so the
+    # frontend can restore "CR Pending" / "CR Failed" state across reloads.
+    _ACTIVE_CR_STATUSES = (
+        OveDetailRequestStatus.PENDING,
+        OveDetailRequestStatus.CLAIMED,
+        OveDetailRequestStatus.IN_PROGRESS,
+        OveDetailRequestStatus.FAILED,
+    )
+    cr_requests = db.execute(
+        select(OveDetailRequest.vin, OveDetailRequest.status)
+        .where(OveDetailRequest.vin.in_(garage_vins))
+        .where(OveDetailRequest.request_source == "buyer_portal")
+        .order_by(OveDetailRequest.requested_at.desc())
+    ).all()
+    # Keep the latest request per VIN — map to a simplified status string.
+    cr_status_by_vin: dict[str, str | None] = {}
+    for vin, req_status in cr_requests:
+        if vin in cr_status_by_vin:
+            continue  # already recorded the most-recent request
+        if req_status in _ACTIVE_CR_STATUSES:
+            cr_status_by_vin[vin] = "pending"
+        elif req_status == OveDetailRequestStatus.TERMINAL:
+            cr_status_by_vin[vin] = "terminal"
+        # COMPLETED / CANCELED → no flag needed (has_inspection_report covers it)
+
     return ok(
         [
             _serialize_garage_item(
@@ -454,6 +483,7 @@ def get_garage(
                 vehicles.get(item.vin),
                 deal_stage=current_deal.stage,
                 allow_protected_photos=allow_protected_photos,
+                cr_request_status=cr_status_by_vin.get(item.vin),
             )
             for item in garage_items
         ]
