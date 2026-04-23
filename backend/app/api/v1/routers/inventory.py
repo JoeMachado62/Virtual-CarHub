@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_optional_user, is_admin_user, require_service_token, require_wordpress_export_auth
 from app.core.config import settings
-from app.core.constants import ImageTier, InventorySourceType
+from app.core.constants import FundingState, ImageTier, InventorySourceType
 from app.core.responses import ok
 from app.db.session import get_db
 from app.integrations.marketcheck_client import MarketCheckClient
@@ -2204,13 +2204,33 @@ def get_inventory_vehicle(
     pricing = _pricing_breakdown(vehicle.price_asking)
     ove_detail = db.get(OveVehicleDetail, vehicle.vin)
     ove_payload = None
-    _is_admin = current_user and is_admin_user(current_user)
+    # CR data is visible to admins, pre-approved users, and users with eligible funding state
+    _can_view_cr = False
+    if current_user:
+        if is_admin_user(current_user):
+            _can_view_cr = True
+        elif current_user.is_preapproved:
+            if not current_user.preapproved_until or current_user.preapproved_until >= datetime.now(UTC):
+                _can_view_cr = True
+        else:
+            active_deal = db.scalar(
+                select(Deal).where(
+                    Deal.user_id == current_user.id,
+                    Deal.stage.notin_(["CLOSED_WON", "CLOSED_LOST"]),
+                ).order_by(Deal.created_at.desc())
+            )
+            if active_deal and active_deal.funding_state in {
+                FundingState.PRE_APPROVED, FundingState.TERMS_ACCEPTED,
+                FundingState.FINAL_APPROVAL_PENDING, FundingState.FULLY_FUNDED,
+                FundingState.CASH_BUYER,
+            }:
+                _can_view_cr = True
     if ove_detail:
         ove_payload = {
             "source_platform": ove_detail.source_platform.value,
             "seller_comments": ove_detail.seller_comments,
             "images": ove_detail.images_json or [],
-            "condition_report": (ove_detail.condition_report_json or {}) if _is_admin else {},
+            "condition_report": (ove_detail.condition_report_json or {}) if _can_view_cr else {},
             "listing_snapshot": ove_detail.listing_snapshot_json or {},
             "sync_metadata": ove_detail.sync_metadata_json or {},
             "page_url": ove_detail.page_url,
@@ -2360,8 +2380,8 @@ def get_inventory_vehicle(
             "city": listing_meta.get("city") or normalized.get("city"),
             "features_normalized": normalized,
             "seller_comments": seller_comments,
-            "condition_report": (ove_detail.condition_report_json if ove_detail else {}) if _is_admin else {},
-            "condition_report_url": _extract_cr_url(ove_detail) if _is_admin else None,
+            "condition_report": (ove_detail.condition_report_json if ove_detail else {}) if _can_view_cr else {},
+            "condition_report_url": _extract_cr_url(ove_detail) if _can_view_cr else None,
             "listing_snapshot": ove_detail.listing_snapshot_json if ove_detail else {},
             "ove_detail": ove_payload,
             "history_enrichment": {

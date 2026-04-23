@@ -1568,6 +1568,7 @@ textarea {
   height: 192px;
   background: linear-gradient(145deg, rgba(120, 131, 235, 0.16), rgba(216, 104, 67, 0.12));
   position: relative;
+  overflow: hidden;
 }
 
 .gated-photos-overlay {

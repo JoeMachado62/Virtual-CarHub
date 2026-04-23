@@ -609,6 +609,20 @@ def request_vehicle_condition_report(
             detail="Condition report requests are only supported for auction inventory.",
         )
 
+    # Auto-add vehicle to garage if not already present
+    existing_garage = db.scalar(
+        select(GarageItem).where(GarageItem.deal_id == current_deal.id, GarageItem.vin == normalized_vin)
+    )
+    if not existing_garage:
+        db.add(GarageItem(
+            deal_id=current_deal.id,
+            user_id=current_user.id,
+            vin=normalized_vin,
+            status="saved",
+            source="condition_report_request",
+        ))
+        db.flush()
+
     ove_detail = db.get(OveVehicleDetail, normalized_vin)
     if ove_detail and ove_detail.condition_report_json:
         response = {

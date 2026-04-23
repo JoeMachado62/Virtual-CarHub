@@ -154,6 +154,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   const [error, setError] = useState<string | null>(null);
   const [canRevealVin, setCanRevealVin] = useState(false);
   const [authorized, setAuthorized] = useState<boolean | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Gallery state
   const [galleryIndex, setGalleryIndex] = useState(0);
@@ -170,10 +171,28 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
       const auth = await loadValidAuthState();
       if (cancelled) return;
 
-      const adminUser = isAdminUser(auth);
-      setAuthorized(adminUser);
+      // Check preapproval / admin status to determine CR access
+      let preapproved = false;
+      if (auth?.accessToken) {
+        const [statusRes, garageRes] = await Promise.all([
+          apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken),
+          apiFetch<Array<{ vin: string }>>("/me/garage", {}, auth.accessToken),
+        ]);
+        if (cancelled) return;
+        preapproved = statusRes.status === "ok" && Boolean(statusRes.data?.is_preapproved);
+        const inGarage =
+          garageRes.status === "ok" &&
+          Array.isArray(garageRes.data) &&
+          garageRes.data.some((item) => item.vin === vin);
+        setCanRevealVin(preapproved && inGarage);
+      }
 
-      if (!adminUser) {
+      const adminUser = isAdminUser(auth);
+      setIsAdmin(adminUser);
+      const hasAccess = adminUser || preapproved;
+      setAuthorized(hasAccess);
+
+      if (!hasAccess) {
         setLoading(false);
         return;
       }
@@ -192,21 +211,6 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         return;
       }
       setVehicle(response.data);
-
-      // Check VIN reveal permissions
-      if (auth?.accessToken) {
-        const [statusRes, garageRes] = await Promise.all([
-          apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken),
-          apiFetch<Array<{ vin: string }>>("/me/garage", {}, auth.accessToken),
-        ]);
-        if (cancelled) return;
-        const preapproved = statusRes.status === "ok" && Boolean(statusRes.data?.is_preapproved);
-        const inGarage =
-          garageRes.status === "ok" &&
-          Array.isArray(garageRes.data) &&
-          garageRes.data.some((item) => item.vin === vin);
-        setCanRevealVin(preapproved && inGarage);
-      }
 
       setLoading(false);
     }
@@ -368,7 +372,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
               <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vehicle.public_slug || vehicle.vin)}` as any}>
                 Back to Vehicle
               </Link>
-              {crUrl && (
+              {isAdmin && crUrl && (
                 <button className="button" onClick={() => window.open(crUrl, "_blank", "noopener,noreferrer")}>
                   See Original CR
                 </button>
@@ -675,7 +679,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
                       <span className="cr-autocheck-details-hint">Expand</span>
                     </summary>
                     <div className="cr-autocheck-details-body">
-                      {autocheck.view_report_href && (
+                      {isAdmin && autocheck.view_report_href && (
                         <div className="cr-autocheck-report-actions">
                           <button className="button" onClick={() => window.open(autocheck.view_report_href!, "_blank", "noopener,noreferrer")}>
                             Open AutoCheck Source
@@ -770,9 +774,9 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           </section>
         )}
 
-        {/* ── SELLER COMMENTS ── */}
+        {/* ── VEHICLE NOTES ── */}
         <section className="cr-section">
-          <h3 className="cr-section-bar">SELLER COMMENTS</h3>
+          <h3 className="cr-section-bar">VEHICLE NOTES</h3>
           {sellerCommentsItems.length > 0 ? (
             <ul className="cr-announce-list">
               {sellerCommentsItems.map((c, i) => <li key={i}>{sanitizePublicText(c)}</li>)}
@@ -796,8 +800,8 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           </section>
         )}
 
-        {/* ── ORIGINAL CR BUTTON ── */}
-        {crUrl && (
+        {/* ── ORIGINAL CR BUTTON (admin only) ── */}
+        {isAdmin && crUrl && (
           <section className="cr-section" style={{ textAlign: "center", padding: "20px 0" }}>
             <button className="button" onClick={() => window.open(crUrl, "_blank", "noopener,noreferrer")} style={{ fontSize: 16, padding: "12px 32px" }}>
               See Original Condition Report

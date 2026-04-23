@@ -103,6 +103,14 @@ export function isAdminUser(auth: AuthState | null): boolean {
   return ADMIN_DOMAINS.has(domain ?? "");
 }
 
+export function canAccessConditionReports(
+  auth: AuthState | null,
+  opts: { isPreapproved?: boolean; crEligible?: boolean } = {}
+): boolean {
+  if (isAdminUser(auth)) return true;
+  return Boolean(opts.isPreapproved || opts.crEligible);
+}
+
 export async function loadValidAuthState(): Promise<AuthState | null> {
   const auth = loadAuthState();
   if (!auth) return null;

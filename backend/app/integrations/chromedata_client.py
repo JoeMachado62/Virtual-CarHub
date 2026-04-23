@@ -32,7 +32,7 @@ def _build_authtoken(*, api_key: str, api_secret: str, date_value: str) -> str:
     return f'Signature keyId="{api_key}",algorithm="hmac-sha1",signature="{encoded_signature}"'
 
 
-_HMAC_POLICY = ServicePolicy(max_retries=2, timeout_seconds=15, failure_threshold=5, recovery_seconds=300)
+_HMAC_POLICY = ServicePolicy(max_retries=1, timeout_seconds=15, failure_threshold=5, recovery_seconds=300)
 
 
 class ChromeDataHmacClient(ExternalServiceClient):
@@ -218,7 +218,7 @@ class ChromeDataMediaClient(ExternalServiceClient):
                 "Accept": "application/json",
                 "Authorization": f"Basic {token}",
             },
-            policy=ServicePolicy(max_retries=2, timeout_seconds=15, failure_threshold=5, recovery_seconds=300),
+            policy=ServicePolicy(max_retries=1, timeout_seconds=15, failure_threshold=5, recovery_seconds=300),
         )
 
     def _request_json_path(self, path: str) -> Any:

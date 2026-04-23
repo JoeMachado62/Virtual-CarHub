@@ -9,7 +9,7 @@ import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { AuthModal } from "@/components/AuthModal";
 import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
-import { AuthState, clearAuthState, isAdminUser, loadValidAuthState } from "@/lib/auth";
+import { AuthState, canAccessConditionReports, clearAuthState, isAdminUser, loadValidAuthState } from "@/lib/auth";
 import { normalizeSourceFilterValue, toPublicSourceLabel } from "@/lib/sourceLabels";
 import { maskVin } from "@/lib/vin";
 
@@ -321,6 +321,20 @@ const EMPTY_SYNC: SyncMeta = {
 };
 
 const FALLBACK_IMAGE = "/assets/images/portfolio/VCH Auction default image.webp";
+const SHOWROOM_BG = "/assets/images/portfolio/vch-showroom.webp";
+
+const _EXTERIOR_SHOTS = new Set(["01", "02", "03", "05", "06", "07"]);
+
+function _extractShot(url: string): string | null {
+  const m = url.match(/_(\d{2})\.\w{3,4}$/);
+  return m ? m[1] : null;
+}
+
+function isChromeDataExterior(url: string | null | undefined): boolean {
+  if (!url || !url.includes("media.chromedata.com")) return false;
+  const shot = _extractShot(url);
+  return !shot || _EXTERIOR_SHOTS.has(shot);
+}
 const SEARCH_CONTEXT_KEY = "vch:inventory:search-context";
 const SEARCH_FILTERS_KEY = "vch:inventory:filters";
 const LIVE_SYNC_FALLBACK_MESSAGE = "Live wholesale sync is temporarily unavailable. Showing saved inventory results.";
@@ -1349,7 +1363,11 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
               {rows.map((item) => (
                 <article className="card inventory-card" key={item.vin}>
                   <Link className="inventory-media-button" href={`/vinventory/${encodeURIComponent(publicIdentifier(item))}` as any}>
-                    <div className="inventory-media">
+                    <div className="inventory-media" style={
+                      !item.reference_pending && item.thumbnail && isChromeDataExterior(item.thumbnail)
+                        ? { background: `url(${SHOWROOM_BG}) center bottom / cover no-repeat` }
+                        : undefined
+                    }>
                       {item.reference_pending ? (
                         <>
                           <img src={FALLBACK_IMAGE} alt={`${item.year} ${item.make} ${item.model}`} loading="lazy" style={{ opacity: 0.45 }} />
@@ -1357,6 +1375,13 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                             <span style={{ fontSize: "0.8rem" }}>Fetching Wholesale Images&hellip;</span>
                           </div>
                         </>
+                      ) : item.thumbnail && isChromeDataExterior(item.thumbnail) ? (
+                        <img
+                          src={item.thumbnail}
+                          alt={`${item.year} ${item.make} ${item.model}`}
+                          loading="lazy"
+                          style={{ objectFit: "contain", objectPosition: "center bottom", transform: "translateY(18%) scale(1.25)", transformOrigin: "center bottom" }}
+                        />
                       ) : item.thumbnail ? (
                         <img src={item.thumbnail} alt={`${item.year} ${item.make} ${item.model}`} loading="lazy" />
                       ) : (
@@ -1599,7 +1624,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                           ? "In Garage"
                           : "Add to My Garage"}
                     </button>
-                    {isAdminUser(auth) && (selectedVehicle.source_type === "ove" || selectedVehicle.source_type === "auction") && !selectedVehicle.has_inspection_report ? (
+                    {canAccessConditionReports(auth, { isPreapproved }) && (selectedVehicle.source_type === "ove" || selectedVehicle.source_type === "auction") && !selectedVehicle.has_inspection_report ? (
                       <button
                         className="button ghost"
                         onClick={() => requestConditionReport(selectedVehicle.vin)}
@@ -1608,7 +1633,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                         {garageActionVin === selectedVehicle.vin ? "Requesting..." : "Request Condition Report"}
                       </button>
                     ) : null}
-                    {isAdminUser(auth) && selectedVehicle.has_inspection_report ? (
+                    {canAccessConditionReports(auth, { isPreapproved }) && selectedVehicle.has_inspection_report ? (
                       <Link
                         className="button ghost"
                         href={`/vinventory/${encodeURIComponent(publicIdentifier(selectedVehicle))}/condition-report` as any}

@@ -77,7 +77,6 @@ def send_condition_report_ready_email(
     vehicle_title = _vehicle_title(vehicle, vin)
     hero_image = _extract_best_vehicle_image(detail, vehicle)
     dashboard_url = _dashboard_magic_link(user=user, vin=vin)
-    report_cta_url = report_url or dashboard_url
     greeting = f"Hi {user.first_name}" if user.first_name else "Hi"
 
     hero_block = (
@@ -90,7 +89,6 @@ def send_condition_report_ready_email(
         else ""
     )
 
-    report_button_label = "View Original Auction Report" if report_url else "Open My Garage"
     html_body = f"""\
 <div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto;padding:28px;background:#f5f1e8;">
   <div style="background:linear-gradient(180deg,#fff9f0 0%,#ffffff 100%);border:1px solid #eadfce;border-radius:28px;padding:28px;box-shadow:0 14px 40px rgba(70,54,32,0.08);">
@@ -105,9 +103,6 @@ def send_condition_report_ready_email(
     <div style="display:grid;gap:10px;margin:0 0 18px;">
       <a href="{dashboard_url}" style="display:block;text-align:center;background:#1d4ed8;color:#ffffff;padding:14px 18px;border-radius:14px;text-decoration:none;font-weight:700;">
         Open My Garage
-      </a>
-      <a href="{report_cta_url}" style="display:block;text-align:center;background:#eef4ff;color:#1d4ed8;padding:14px 18px;border-radius:14px;text-decoration:none;font-weight:700;border:1px solid #c9dafd;">
-        {report_button_label}
       </a>
     </div>
     <div style="display:grid;gap:8px;padding:16px 18px;border-radius:18px;background:#f8fafc;border:1px solid #e5e7eb;">
@@ -124,8 +119,7 @@ def send_condition_report_ready_email(
     text_body = (
         f"{greeting},\n\n"
         f"Your condition report for {vehicle_title} is ready.\n\n"
-        f"Open My Garage: {dashboard_url}\n"
-        f"{report_button_label}: {report_cta_url}\n\n"
+        f"Open My Garage: {dashboard_url}\n\n"
         f"VIN: {vin}\n\n"
         f"This sign-in link expires in {settings.email_login_expire_minutes} minutes.\n\n"
         "Virtual CarHub"

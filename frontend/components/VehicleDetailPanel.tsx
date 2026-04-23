@@ -175,7 +175,47 @@ type SimilarVehicle = {
   hero_image?: string | null;
 };
 
-const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
+const FALLBACK_IMAGE = "/assets/images/portfolio/VCH Auction default image.webp";
+const SHOWROOM_BG = "/assets/images/portfolio/vch-showroom.webp";
+
+const _EXTERIOR_SHOT_CODES = new Set(["01", "02", "03", "05", "06", "07"]);
+
+function _extractShotCode(url: string): string | null {
+  const match = url.match(/_(\d{2})\.\w{3,4}$/);
+  return match ? match[1] : null;
+}
+
+function isChromeDataExterior(url: string | null | undefined): boolean {
+  if (!url || !url.includes("media.chromedata.com")) return false;
+  const shot = _extractShotCode(url);
+  return !shot || _EXTERIOR_SHOT_CODES.has(shot);
+}
+
+function isSideProfile(url: string | null | undefined): boolean {
+  if (!url) return false;
+  return _extractShotCode(url) === "03";
+}
+
+function showroomContainerStyle(url: string | null | undefined): React.CSSProperties | undefined {
+  if (!isChromeDataExterior(url)) return undefined;
+  return {
+    background: `url(${SHOWROOM_BG}) center bottom / cover no-repeat`,
+  };
+}
+
+function showroomImageStyle(url: string | null | undefined): React.CSSProperties | undefined {
+  if (!isChromeDataExterior(url)) return undefined;
+  const side = isSideProfile(url);
+  return {
+    objectFit: "contain" as const,
+    objectPosition: "center bottom",
+    // Push the image far enough down that the transparent padding below
+    // the tires goes completely off-screen (past overflow:hidden), so the
+    // tires sit flush on the showroom floor.
+    transform: side ? "translateY(33%) scale(1.55)" : "translateY(18%) scale(1.25)",
+    transformOrigin: "center bottom",
+  };
+}
 const SEARCH_FILTERS_KEY = "vch:inventory:filters";
 
 type InventorySearchItem = {
@@ -676,13 +716,17 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
         <div className="vdp-hero-grid">
           <div className="vdp-gallery-shell">
             <div className="vdp-gallery-grid">
-              <div className="vdp-gallery-stage" onClick={() => openPhotoModal(galleryIndex)} role="button" tabIndex={0} onKeyDown={(event) => {
+              <div className="vdp-gallery-stage" style={showroomContainerStyle(galleryMain)} onClick={() => openPhotoModal(galleryIndex)} role="button" tabIndex={0} onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   openPhotoModal(galleryIndex);
                 }
               }}>
-                <img src={galleryMain} alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`} />
+                <img
+                  src={galleryMain}
+                  alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`}
+                  style={showroomImageStyle(galleryMain)}
+                />
                 {displayImages.length > 1 ? (
                   <>
                     <button className="vdp-gallery-arrow vdp-gallery-arrow-left" onClick={(event) => { event.stopPropagation(); prevGallery(); }}>
@@ -702,9 +746,15 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                     <button
                       key={`${image}-${index}`}
                       className="vdp-gallery-preview"
+                      style={showroomContainerStyle(image)}
                       onClick={() => setGalleryIndex(index)}
                     >
-                      <img src={image} alt={`Vehicle preview ${index + 1}`} loading="lazy" />
+                      <img
+                        src={image}
+                        alt={`Vehicle preview ${index + 1}`}
+                        loading="lazy"
+                        style={showroomImageStyle(image)}
+                      />
                     </button>
                   );
                 })}
@@ -900,8 +950,8 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                     <h3>Virtual CarHub Listing Summary</h3>
                     <p>
                       {vehicle.seller_comments
-                        ? "Rewritten from source listing data for Virtual CarHub shoppers."
-                        : "Generated from verified vehicle data when source seller comments are unavailable."}
+                        ? "Curated from listing data for Virtual CarHub shoppers."
+                        : "Generated from verified vehicle data."}
                     </p>
                   </div>
                   <div className="inventory-feature-grid vdp-summary-badges">
@@ -910,7 +960,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                         {[vehicle.city, vehicle.location_state].filter(Boolean).join(", ")}
                       </span>
                     ) : null}
-                    {vehicle.dealer_name && !isAuction ? <span className="badge">{vehicle.dealer_name}</span> : null}
+                    {/* dealer_name hidden — must not expose sourcing partner identity */}
                     {vehicle.source_label ? <span className="badge">{toPublicSourceLabel(vehicle.source_label, vehicle.source_type)}</span> : null}
                   </div>
                 </div>
@@ -1020,6 +1070,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
             role="dialog"
             aria-modal="true"
             onClick={(event) => event.stopPropagation()}
+            style={{ width: "90vw", maxWidth: "90vw", height: "90vh", maxHeight: "90vh", display: "flex", flexDirection: "column" }}
           >
             <header className="vdp-modal-header">
               <div>
@@ -1029,8 +1080,17 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
               <button className="button ghost" onClick={closePhotoModal}>Close</button>
             </header>
 
-            <div className="vdp-photo-stage">
-              <img src={activeModalImage} alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`} />
+            <div className="vdp-photo-stage" style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", ...showroomContainerStyle(activeModalImage) }}>
+              <img
+                src={activeModalImage}
+                alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`}
+                style={{
+                  ...(isChromeDataExterior(activeModalImage)
+                    ? { width: "100%", height: "100%" }
+                    : { maxWidth: "100%", maxHeight: "100%" }),
+                  ...showroomImageStyle(activeModalImage),
+                }}
+              />
               {displayImages.length > 1 ? (
                 <>
                   <button className="vdp-gallery-nav vdp-gallery-prev" onClick={prevModalImage}>&lsaquo;</button>

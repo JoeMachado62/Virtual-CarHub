@@ -139,7 +139,7 @@ export function ConditionReportCard({
       {/* AI summary */}
       {aiSummary && <p style={{ marginTop: 0, fontSize: 13, color: "var(--muted)" }}>{aiSummary}</p>}
 
-      {sanitizedSellerComments ? <p style={{ marginTop: 0 }}>Seller Comments: {sanitizedSellerComments}</p> : null}
+      {sanitizedSellerComments ? <p style={{ marginTop: 0 }}>Vehicle Notes: {sanitizedSellerComments}</p> : null}
 
       {announcements.length > 0 && (
         <>

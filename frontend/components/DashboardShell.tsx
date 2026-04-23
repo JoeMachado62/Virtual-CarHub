@@ -10,7 +10,7 @@ import { DealTracker } from "@/components/DealTracker";
 import { QuickMatchForm } from "@/components/QuickMatchForm";
 import { Recommendation, RecommendationCards } from "@/components/RecommendationCards";
 import { apiFetch } from "@/lib/api";
-import { AuthState, clearAuthState, isAdminUser, loadValidAuthState, saveAuthState } from "@/lib/auth";
+import { AuthState, canAccessConditionReports, clearAuthState, isAdminUser, loadValidAuthState, saveAuthState } from "@/lib/auth";
 import { toPublicSourceLabel } from "@/lib/sourceLabels";
 import { maskVin } from "@/lib/vin";
 
@@ -988,7 +988,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                 <Link className="button secondary" href={`/vinventory/${encodeURIComponent(spotlightItem.public_slug || spotlightItem.vin)}`}>
                   View Details
                 </Link>
-                {isAdminUser(auth) && spotlightItem.has_inspection_report ? (
+                {canAccessConditionReports(auth, { isPreapproved }) && spotlightItem.has_inspection_report ? (
                   <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(spotlightItem.public_slug || spotlightItem.vin)}/condition-report`}>
                     CR Available
                   </Link>

@@ -225,16 +225,21 @@ def _resolve_vehicle_descriptor(vehicle: Vehicle) -> dict[str, Any]:
         "color_description": normalized.get("paint_description") or normalized.get("exterior_color"),
         "flags": {},
     }
+    hmac_quota_exhausted = False
     if vehicle.vin and settings.has_chromedata_vin:
         try:
             response = _get_cvd_client().get_vin_description(vehicle.vin, locale=settings.chromedata_locale)
             cvd_descriptor = _parse_cvd_descriptor(response, vehicle)
             if cvd_descriptor:
                 descriptor.update({key: value for key, value in cvd_descriptor.items() if value not in (None, "", {})})
+        except httpx.HTTPStatusError as exc:
+            if exc.response is not None and exc.response.status_code == 403:
+                hmac_quota_exhausted = True
+            logger.warning("ChromeData CVD query failed for vin=%s", vehicle.vin, exc_info=True)
         except Exception:
             logger.warning("ChromeData CVD query failed for vin=%s", vehicle.vin, exc_info=True)
 
-    if not descriptor.get("style_id") and settings.has_chromedata_vss:
+    if not descriptor.get("style_id") and settings.has_chromedata_vss and not hmac_quota_exhausted:
         if vehicle.year and vehicle.make and vehicle.model:
             try:
                 vss_style_id, vss_body_type, vss_description = _resolve_style_via_vss(vehicle)
@@ -710,10 +715,11 @@ def _parse_media_response(
     # When we have color-matched images, show all 6 exterior angles.
     # When falling back to generic view/stock, limit to 3 basic angles
     # (01, 02, 03) to avoid showing redundant wrong-color shots.
+    use_large = detail_level != "card"
     card_images = _dedupe_urls(
-        _sorted_media_urls(preferred_colorized, allowed_shot_codes=set(_CARD_SHOT_ORDER))
-        or _sorted_media_urls(_normalize_items(container.get("view")), allowed_shot_codes=_BASIC_EXTERIOR_SHOTS)
-        or _sorted_media_urls(_normalize_items(container.get("stock")), allowed_shot_codes=_BASIC_EXTERIOR_SHOTS)
+        _sorted_media_urls(preferred_colorized, allowed_shot_codes=set(_CARD_SHOT_ORDER), prefer_large=use_large)
+        or _sorted_media_urls(_normalize_items(container.get("view")), allowed_shot_codes=_BASIC_EXTERIOR_SHOTS, prefer_large=use_large)
+        or _sorted_media_urls(_normalize_items(container.get("stock")), allowed_shot_codes=_BASIC_EXTERIOR_SHOTS, prefer_large=use_large)
     )
     if not card_images:
         return None
@@ -726,7 +732,7 @@ def _parse_media_response(
         detail_candidates = _normalize_items(container.get("view")) + _normalize_items(container.get("stock"))
         detail_images = _dedupe_urls(
             url
-            for url in _sorted_media_urls(detail_candidates, allowed_shot_codes=_INTERIOR_SHOT_CODES)
+            for url in _sorted_media_urls(detail_candidates, allowed_shot_codes=_INTERIOR_SHOT_CODES, prefer_large=True)
             if url not in card_images
         )
 
@@ -768,7 +774,12 @@ def _normalize_items(value: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _sorted_media_urls(items: list[dict[str, Any]], allowed_shot_codes: set[str] | None = None) -> list[str]:
+def _sorted_media_urls(
+    items: list[dict[str, Any]],
+    allowed_shot_codes: set[str] | None = None,
+    *,
+    prefer_large: bool = False,
+) -> list[str]:
     records: dict[str, tuple[int, int, int, str]] = {}
     for item in items:
         url = _extract_url(item)
@@ -780,7 +791,7 @@ def _sorted_media_urls(items: list[dict[str, Any]], allowed_shot_codes: set[str]
         order = _DETAIL_PRIORITY.get(shot_code, 999)
         bg = _clean(item.get("@backgroundDescription") or item.get("backgroundDescription")).lower()
         bg_rank = 0 if bg == "transparent" else 1
-        width_rank = _width_rank(item)
+        width_rank = _width_rank(item, prefer_large=prefer_large)
         key = shot_code or url
         existing = records.get(key)
         candidate = (order, bg_rank, width_rank, url)
@@ -801,17 +812,16 @@ def _primary_color_group(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _width_rank(item: dict[str, Any]) -> int:
+_WIDTH_RANK_CARD = {640: 0, 1280: 1, 320: 2, 2100: 3}
+_WIDTH_RANK_FULL = {1280: 0, 2100: 1, 640: 2, 320: 3}
+
+
+def _width_rank(item: dict[str, Any], *, prefer_large: bool = False) -> int:
     width = _coerce_int(item.get("@width") or item.get("width"))
     if width is None:
         return 99
-    preference = {
-        640: 0,
-        1280: 1,
-        320: 2,
-        2100: 3,
-    }
-    return preference.get(width, 10 + abs(width - 640))
+    preference = _WIDTH_RANK_FULL if prefer_large else _WIDTH_RANK_CARD
+    return preference.get(width, 10 + abs(width - 1280 if prefer_large else width - 640))
 
 
 def _extract_url(item: dict[str, Any]) -> str:
