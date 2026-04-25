@@ -18,6 +18,7 @@ export function DealBuilderPanel() {
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [zipCode, setZipCode] = useState("");
   const [pendingFilters, setPendingFilters] = useState<Record<string, string | number | boolean> | null>(null);
   const [pendingRawQuery, setPendingRawQuery] = useState("");
@@ -65,6 +66,7 @@ export function DealBuilderPanel() {
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const nextQuery = query.trim();
+    setError(null);
     if (!nextQuery) {
       router.push("/vinventory");
       return;
@@ -100,19 +102,15 @@ export function DealBuilderPanel() {
 
         navigateWithFilters(filters, nextQuery, zipCode);
       } else {
-        // Fallback: pass raw query
-        if (!zipCode) {
-          setPendingFilters({});
-          setPendingRawQuery(nextQuery);
-          setLoading(false);
-          return;
-        }
-        router.push(
-          `/vinventory?q=${encodeURIComponent(nextQuery)}&zip_code=${encodeURIComponent(zipCode)}`,
+        setError(
+          response.error?.message ||
+            "Danny could not understand that request yet. Try adding a make, model, budget, mileage, or must-have feature.",
         );
       }
     } catch {
-      router.push(`/vinventory?q=${encodeURIComponent(nextQuery)}`);
+      setError(
+        "Danny cannot reach the inventory AI right now. Check that the VirtualCarHub API is running, then try again.",
+      );
     } finally {
       setLoading(false);
     }
@@ -139,7 +137,7 @@ export function DealBuilderPanel() {
         <p className="section-eyebrow">Build Your Deal</p>
         <h2>Almost there — where are you located?</h2>
         <p className="muted-copy">
-          We need your ZIP code to find vehicles near you.
+          Enter your ZIP code so Danny can compare vehicles that make sense for your area.
         </p>
         <form className="deal-builder-form" onSubmit={onZipSubmit}>
           <input
@@ -177,6 +175,7 @@ export function DealBuilderPanel() {
             onClick={() => {
               setPendingFilters(null);
               setPendingRawQuery("");
+              setError(null);
             }}
           >
             Back
@@ -189,10 +188,10 @@ export function DealBuilderPanel() {
   return (
     <aside className="deal-builder-card">
       <p className="section-eyebrow">Build Your Deal</p>
-      <h2>Tell our AI exactly what you want.</h2>
+      <h2>Tell Danny exactly what you want.</h2>
       <p className="muted-copy">
-        Describe the vehicle, price band, mileage, or equipment you want and
-        jump straight into live wholesale search.
+        Describe the vehicle, price range, mileage, or features you want. Danny will turn it into a live wholesale
+        search.
       </p>
 
       <form className="deal-builder-form" onSubmit={onSubmit}>
@@ -204,13 +203,14 @@ export function DealBuilderPanel() {
           disabled={loading}
         />
         <button type="submit" className="button" disabled={loading}>
-          {loading ? "Parsing your request..." : "Browse Matches"}
+          {loading ? "Finding matches..." : "Browse Matches"}
         </button>
       </form>
+      {error ? <p className="dashboard-error">{error}</p> : null}
 
       <div className="deal-builder-badges">
-        <span className="badge">Powered by live auction + retail feeds</span>
-        <span className="badge">Pre-approval friendly</span>
+        <span className="badge">Wholesale + retail inventory</span>
+        <span className="badge">Built around your budget</span>
       </div>
     </aside>
   );

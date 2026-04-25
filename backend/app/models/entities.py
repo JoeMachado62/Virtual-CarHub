@@ -167,6 +167,7 @@ class VehicleTaxonomyCache(Base, TimestampMixin):
     make: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
     model: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     trim: Mapped[str] = mapped_column(String(120), default="", nullable=False, index=True)
+    body_type: Mapped[str | None] = mapped_column(String(40), index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 

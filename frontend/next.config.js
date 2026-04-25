@@ -16,7 +16,17 @@ const nextConfig = {
     ];
   },
   async rewrites() {
+    const apiBase = (process.env.API_INTERNAL_BASE || "http://backend:8000/v1").replace(/\/$/, "");
+
     return [
+      {
+        source: "/v1/:path*",
+        destination: `${apiBase}/:path*`
+      },
+      {
+        source: "/favicon.ico",
+        destination: "/assets/images/logo/logo.svg"
+      },
       {
         source: "/index.html",
         destination: "/"

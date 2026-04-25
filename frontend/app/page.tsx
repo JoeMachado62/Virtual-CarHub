@@ -10,27 +10,27 @@ export const dynamic = "force-dynamic";
 const VALUE_POINTS = [
   {
     title: "Tell Us What You Want",
-    body: "Start with the exact vehicle, payment target, mileage, or feature set you need. We work backward from your deal."
+    body: "Share the vehicle, payment target, mileage, and must-have features. Danny turns that into a smarter wholesale search."
   },
   {
-    title: "We Search Wholesale Inventory",
-    body: "Live feeds from retail and auction sources give you far more coverage than a single dealer lot."
+    title: "We Search Dealer-Only Channels",
+    body: "We look across the same wholesale channels dealers use to stock their lots, then show you options built around your budget."
   },
   {
-    title: "Review Before You Commit",
-    body: "Pre-approved buyers can request a VCH condition report before the acquisition loop moves forward."
+    title: "Verify Before You Move Forward",
+    body: "Pre-approved buyers can review inspection details and condition reports before taking the next step."
   },
   {
-    title: "We Handle the Deal End-to-End",
-    body: "Financing, negotiation, paperwork, transport, and final delivery stay in one controlled workflow."
+    title: "We Handle the Hard Parts",
+    body: "Financing, negotiation, paperwork, transport, and delivery stay organized in one guided buying process."
   }
 ];
 
 const PROCESS_STEPS = [
   "Build your deal and save vehicles to My Garage.",
-  "Get pre-approved so deeper inspection workflows can unlock.",
-  "Request the VCH condition report on the vehicles you are serious about.",
-  "Approve the vehicle and move into acquisition, paperwork, and delivery."
+  "Get pre-approved so real inspection details can unlock.",
+  "Request the VirtualCarHub inspection report on vehicles you are serious about.",
+  "Choose the right vehicle and move into purchase, paperwork, and delivery."
 ];
 
 export default function HomePage() {
@@ -45,8 +45,8 @@ export default function HomePage() {
               The Dealership Run by <span>Code</span>, Not Commission.
             </h1>
             <p className="hero-lead">
-              Search wholesale inventory, save vehicles to My Garage, request condition reports, and move through the
-              full buying workflow without the usual dealership friction.
+              Save thousands on your next car. Buy direct from the same wholesale channels dealers use to stock their
+              inventories, with Danny helping you compare the math before you move forward.
             </p>
             <div className="hero-actions">
               <Link className="button" href={"/vinventory" as any}>
@@ -66,8 +66,8 @@ export default function HomePage() {
                 <span>Auction + retail feeds</span>
               </div>
               <div className="metric">
-                <strong>Buyer</strong>
-                <span>Garage + approval workflow</span>
+                <strong>Danny</strong>
+                <span>Deal math + buyer guidance</span>
               </div>
             </div>
           </div>
@@ -79,9 +79,9 @@ export default function HomePage() {
       <section className="section-shell">
         <div className="section-heading">
           <p className="section-eyebrow">How It Works</p>
-          <h2>A better front door for the entire buying process.</h2>
+          <h2>Wholesale access, clear math, and no commissioned pressure.</h2>
           <p className="muted-copy">
-            The old prototype cards were internal MVP notes. This is the customer-facing version of that same system.
+            Tell us what you want, compare real options, and move forward only when the vehicle and numbers make sense.
           </p>
         </div>
         <div className="marketing-grid">
@@ -97,10 +97,10 @@ export default function HomePage() {
       <section className="section-shell split-section">
         <div className="section-heading">
           <p className="section-eyebrow">Live Inventory</p>
-          <h2>Preview the vehicles flowing through the new stack.</h2>
+          <h2>Browse vehicles we can help you buy smarter.</h2>
           <p className="muted-copy">
-            The preview below pulls current auction inventory from the backend so this page stays tied to the actual
-            buying system.
+            Start with live inventory, then use My Garage to save favorites, request inspection details, and compare the
+            true deal.
           </p>
           <div className="hero-actions">
             <Link className="button" href={"/vinventory?source_type=auction" as any}>
@@ -115,7 +115,7 @@ export default function HomePage() {
       <section className="section-shell story-panel">
         <div className="story-copy">
           <p className="section-eyebrow">Build With Confidence</p>
-          <h2>From search to signed intent, one controlled workflow.</h2>
+          <h2>From first search to final delivery, Danny keeps the deal moving.</h2>
           <ol className="step-list">
             {PROCESS_STEPS.map((step) => (
               <li key={step}>{step}</li>
@@ -126,7 +126,7 @@ export default function HomePage() {
               Start Financing
             </Link>
             <Link className="button secondary" href="/contact#talk-to-danny">
-              Talk to Danny
+              Ask Danny
             </Link>
           </div>
         </div>

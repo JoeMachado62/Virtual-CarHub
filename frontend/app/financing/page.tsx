@@ -3,9 +3,9 @@ import Link from "next/link";
 
 const STEPS = [
   "Set your budget, vehicle goals, and ownership priorities.",
-  "Submit the buyer profile and financing information.",
-  "Unlock pre-approved buyer status for deeper vehicle due diligence.",
-  "Move from selected vehicle to acquisition and paperwork with fewer handoffs."
+  "Share the information needed to understand your buying power.",
+  "Unlock pre-approved buyer status so inspection reports and next-step details can open up.",
+  "Move from selected vehicle to purchase, paperwork, and delivery with fewer handoffs."
 ];
 
 export default function FinancingPage() {
@@ -14,10 +14,10 @@ export default function FinancingPage() {
       <section className="section-shell page-hero compact">
         <div className="section-heading">
           <p className="section-eyebrow">Financing</p>
-          <h1>Pre-approval is the gateway to the deeper buying workflow.</h1>
+          <h1>Get pre-approved before you spend time on the wrong cars.</h1>
           <p className="muted-copy">
-            Financing is not just a checkout step. It determines which vehicles you can move forward on and when the
-            condition-report process should unlock.
+            Financing is not just a checkout step. It helps Danny show vehicles that fit your real budget and unlocks
+            deeper inspection details when you are ready.
           </p>
         </div>
       </section>
@@ -25,7 +25,7 @@ export default function FinancingPage() {
       <section className="section-shell split-section">
         <div className="story-copy">
           <p className="section-eyebrow">Why It Matters</p>
-          <h2>Get qualified before you commit time to the wrong vehicles.</h2>
+          <h2>Know your buying power before you fall in love with a car.</h2>
           <ol className="step-list">
             {STEPS.map((step) => (
               <li key={step}>{step}</li>
@@ -41,7 +41,7 @@ export default function FinancingPage() {
           </div>
         </div>
         <div className="story-visual">
-          <img src="/assets/images/about/stat-bg.webp" alt="Financing workflow visual" />
+          <img src="/assets/images/about/stat-bg.webp" alt="Financing and wholesale search visual" />
         </div>
       </section>
 
@@ -49,15 +49,15 @@ export default function FinancingPage() {
         <div className="marketing-grid">
           <article className="feature-panel">
             <h3>Budget-first search</h3>
-            <p>Search inventory with realistic deal parameters instead of getting attached before the numbers work.</p>
+            <p>Search inventory with realistic numbers before you get attached to a vehicle.</p>
           </article>
           <article className="feature-panel">
-            <h3>Condition report gating</h3>
-            <p>Inspection and deeper auction-detail requests stay aligned with real buyer intent and qualification.</p>
+            <h3>Inspection reports at the right time</h3>
+            <p>Detailed inspection requests stay focused on vehicles you are actually ready to consider.</p>
           </article>
           <article className="feature-panel">
-            <h3>One workflow</h3>
-            <p>The same system that matches you to vehicles also tracks acquisition, funding, paperwork, and delivery.</p>
+            <h3>One guided process</h3>
+            <p>The same account that helps you find vehicles also tracks funding, paperwork, and delivery.</p>
           </article>
         </div>
       </section>

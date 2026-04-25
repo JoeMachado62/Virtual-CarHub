@@ -11,7 +11,7 @@ export default function DashboardPage({
     <main className="page-stack">
       <section className="section-shell page-hero compact">
         <p className="section-eyebrow">My Garage</p>
-        <h1>Buyer dashboard, deal tracking, and saved-vehicle workflow.</h1>
+        <h1>Saved vehicles, inspection reports, and purchase status in one place.</h1>
       </section>
       <DashboardShell requestedVin={requestedVin} />
     </main>

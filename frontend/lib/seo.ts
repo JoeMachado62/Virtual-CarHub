@@ -134,7 +134,7 @@ export function autoDealerJsonLd(overrides?: Record<string, unknown>): Record<st
     "@type": "AutoDealer",
     name: SITE_NAME,
     url: SITE_URL,
-    description: "AI-first flat-fee virtual dealership built for smarter wholesale buying.",
+    description: "Buy from wholesale channels, compare the real deal math, and avoid commissioned sales pressure.",
     ...overrides,
   };
 }

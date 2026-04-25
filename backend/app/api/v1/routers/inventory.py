@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.params import Param
 from pydantic import BaseModel
-from sqlalchemy import Integer, asc, case, desc, false, func, or_, select
+from sqlalchemy import Integer, and_, asc, case, desc, false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_optional_user, is_admin_user, require_service_token, require_wordpress_export_auth
@@ -55,6 +55,61 @@ from app.services.inventory_service import SOURCE_PRIORITY, ingest_marketcheck_i
 from app.services.zip_radius_service import normalize_zip_code, zip_codes_within_radius
 
 router = APIRouter()
+
+
+def _split_csv(value: str | None) -> list[str]:
+    """Split a comma-separated query param into a lowercased list."""
+    if not value:
+        return []
+    return [v.strip().lower() for v in value.split(",") if v.strip()]
+
+
+def _split_make_model_pairs(value: str | None) -> list[tuple[str, str]]:
+    if not value or not isinstance(value, str):
+        return []
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in value.split(","):
+        text = raw.strip()
+        if not text:
+            continue
+        if "|||" in text:
+            make, model = text.split("|||", 1)
+        elif "|" in text:
+            make, model = text.split("|", 1)
+        else:
+            continue
+        pair = (make.strip().lower(), model.strip().lower())
+        if not pair[0] or not pair[1] or pair in seen:
+            continue
+        seen.add(pair)
+        pairs.append(pair)
+    return pairs
+
+
+def _apply_make_model_filters(stmt, make: str | None, model: str | None, make_model_pairs: str | None = None):
+    pairs = _split_make_model_pairs(make_model_pairs)
+    if pairs:
+        return stmt.where(
+            or_(
+                *[
+                    and_(
+                        func.lower(Vehicle.make) == pair_make,
+                        func.lower(Vehicle.model) == pair_model,
+                    )
+                    for pair_make, pair_model in pairs
+                ]
+            )
+        )
+
+    makes = _split_csv(make)
+    if makes:
+        stmt = stmt.where(func.lower(Vehicle.make).in_(makes))
+    models = _split_csv(model)
+    if models:
+        stmt = stmt.where(func.lower(Vehicle.model).in_(models))
+    return stmt
+
 
 FACET_FIELDS = [
     "make",
@@ -739,6 +794,287 @@ def _extract_marketcheck_average_retail(payload: Any) -> float | None:
     return None
 
 
+def _extract_marketcheck_predicted_price(payload: Any) -> float | None:
+    if not isinstance(payload, dict):
+        return None
+
+    candidates: list[Any] = [
+        payload.get("marketcheck_price"),
+        payload.get("predicted_price"),
+        payload.get("prediction"),
+        payload.get("price"),
+        payload.get("retail"),
+        payload.get("market_price"),
+        payload.get("estimated_market_price"),
+        payload.get("average_retail"),
+    ]
+
+    for key in ("prices", "market", "prediction", "result", "data"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            candidates.extend(
+                [
+                    nested.get("marketcheck_price"),
+                    nested.get("predicted_price"),
+                    nested.get("price"),
+                    nested.get("retail"),
+                    nested.get("market_price"),
+                    nested.get("estimated_market_price"),
+                    nested.get("average_retail"),
+                ]
+            )
+
+    for candidate in candidates:
+        parsed = _to_float(candidate)
+        if parsed is not None and parsed > 0:
+            return round(parsed, 2)
+    return None
+
+
+def _extract_search_average(payload: Any, field: str) -> float | None:
+    if not isinstance(payload, dict):
+        return None
+
+    candidates: list[Any] = []
+    stats = payload.get("stats")
+    if isinstance(stats, dict):
+        field_stats = stats.get(field)
+        if isinstance(field_stats, dict):
+            candidates.extend(
+                [
+                    field_stats.get("mean"),
+                    field_stats.get("avg"),
+                    field_stats.get("average"),
+                    field_stats.get("median"),
+                ]
+            )
+        candidates.extend(
+            [
+                stats.get(f"{field}_mean"),
+                stats.get(f"{field}_avg"),
+                stats.get(f"{field}_average"),
+                stats.get(f"avg_{field}"),
+            ]
+        )
+
+    for candidate in candidates:
+        parsed = _to_float(candidate)
+        if parsed is not None and parsed > 0:
+            return round(parsed, 2)
+    return None
+
+
+def _extract_listing_miles(row: dict[str, Any]) -> int | None:
+    return _to_int(
+        row.get("miles")
+        or row.get("mileage")
+        or row.get("odometer")
+        or row.get("miles_unformatted")
+    )
+
+
+def _market_comparison_point_from_listing(
+    row: dict[str, Any],
+    *,
+    vch_vehicle: Vehicle | None = None,
+) -> dict[str, Any] | None:
+    if vch_vehicle:
+        if vch_vehicle.odometer is None or not vch_vehicle.price_asking:
+            return None
+        return {
+            "vin": vch_vehicle.vin,
+            "label": f"{vch_vehicle.year} {vch_vehicle.make} {vch_vehicle.model}{(' ' + vch_vehicle.trim) if vch_vehicle.trim else ''}",
+            "price": _pricing_breakdown(vch_vehicle.price_asking)["advertised_price"],
+            "miles": vch_vehicle.odometer,
+            "source": "vch",
+            "is_vch_listing": True,
+            "href": f"/vinventory/{vch_vehicle.public_slug or vch_vehicle.vin}",
+        }
+
+    price = _to_float(row.get("price") or row.get("price_asking") or row.get("asking_price"))
+    miles = _extract_listing_miles(row)
+    vin = _to_str(row.get("vin"))
+
+    if price is None or price <= 0 or miles is None or miles < 0:
+        return None
+
+    label_parts = [
+        _to_str(row.get("year")),
+        _to_str(row.get("make")),
+        _to_str(row.get("model")),
+        _to_str(row.get("trim")),
+    ]
+
+    point = {
+        "vin": vin,
+        "label": " ".join(part for part in label_parts if part) or "Comparable vehicle",
+        "price": round(price, 2),
+        "miles": miles,
+        "source": "vch" if vch_vehicle else "marketcheck",
+        "is_vch_listing": bool(vch_vehicle),
+        "href": None,
+    }
+
+    return point
+
+
+def _local_comparable_vehicles(db: Session, vehicle: Vehicle, *, limit: int = 20) -> list[Vehicle]:
+    stmt = (
+        select(Vehicle)
+        .where(
+            Vehicle.vin != vehicle.vin,
+            Vehicle.available == True,  # noqa: E712
+            Vehicle.odometer.is_not(None),
+            Vehicle.price_asking > 0,
+            func.lower(Vehicle.make) == (vehicle.make or "").lower(),
+            func.lower(Vehicle.model) == (vehicle.model or "").lower(),
+            Vehicle.year >= (vehicle.year or 2020) - 2,
+            Vehicle.year <= (vehicle.year or 2020) + 2,
+        )
+        .order_by(
+            case((Vehicle.year == vehicle.year, 0), else_=1),
+            case((func.lower(func.coalesce(Vehicle.trim, "")) == (vehicle.trim or "").lower(), 0), else_=1),
+            Vehicle.updated_at.desc(),
+        )
+        .limit(limit)
+    )
+    if vehicle.trim:
+        trim_text = vehicle.trim.lower()
+        exact_trim_stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")) == trim_text).limit(limit)
+        exact_rows = list(db.scalars(exact_trim_stmt).all())
+        if len(exact_rows) >= min(4, limit):
+            return exact_rows
+    return list(db.scalars(stmt).all())
+
+
+def _build_market_comparison_payload(db: Session, vehicle: Vehicle) -> dict[str, Any]:
+    local_rows = _local_comparable_vehicles(db, vehicle, limit=20)
+    vch_by_vin = {row.vin: row for row in local_rows}
+
+    points: list[dict[str, Any]] = []
+    seen_vins: set[str] = set()
+    for row in local_rows:
+        point = _market_comparison_point_from_listing({}, vch_vehicle=row)
+        if not point or point.get("miles") is None:
+            continue
+        points.append(point)
+        seen_vins.add(row.vin)
+
+    marketcheck_payload: dict[str, Any] | None = None
+    mds_payload: dict[str, Any] | None = None
+    price_payload: dict[str, Any] | None = None
+    national_price: float | None = None
+    national_miles: float | None = None
+
+    if settings.has_marketcheck:
+        client = _marketcheck_client()
+        try:
+            marketcheck_payload = client.search_inventory(
+                {
+                    "vins": vehicle.vin,
+                    "match": "year,make,model,trim",
+                    "stats": "price,miles",
+                    "rows": 20,
+                    "start": 0,
+                    "car_type": "used",
+                    "exclude_certified": "true",
+                }
+            )
+            for listing in marketcheck_payload.get("listings", []) if isinstance(marketcheck_payload, dict) else []:
+                if not isinstance(listing, dict):
+                    continue
+                listing_vin = (_to_str(listing.get("vin")) or "").upper()
+                if listing_vin == vehicle.vin or listing_vin in seen_vins:
+                    continue
+                vch_match = vch_by_vin.get(listing_vin) or (db.get(Vehicle, listing_vin) if listing_vin else None)
+                point = _market_comparison_point_from_listing(listing, vch_vehicle=vch_match)
+                if not point:
+                    continue
+                points.append(point)
+                if listing_vin:
+                    seen_vins.add(listing_vin)
+                if len(points) >= 20:
+                    break
+            national_price = _extract_search_average(marketcheck_payload, "price")
+            national_miles = _extract_search_average(marketcheck_payload, "miles")
+        except Exception:
+            logger.debug("market comparison comparable search failed vin=%s", vehicle.vin, exc_info=True)
+
+        try:
+            if not vehicle.location_zip:
+                raise ValueError("vehicle zip unavailable for MarketCheck Price")
+            price_params = {
+                "vin": vehicle.vin,
+                "miles": vehicle.odometer or 0,
+                "dealer_type": "independent",
+                "zip": vehicle.location_zip,
+                "is_certified": "false",
+            }
+            price_payload = client.get_marketcheck_price(price_params)
+            national_price = _extract_marketcheck_predicted_price(price_payload) or national_price
+        except Exception:
+            logger.debug("market comparison price prediction failed vin=%s", vehicle.vin, exc_info=True)
+
+        try:
+            mds_payload = client.get_market_days_supply(
+                {
+                    "vin": vehicle.vin,
+                    "exact": "true",
+                    "debug": "true",
+                    "car_type": "used",
+                    "exclude_certified": "true",
+                }
+            )
+        except Exception:
+            logger.debug("market comparison mds failed vin=%s", vehicle.vin, exc_info=True)
+
+    if national_price is None:
+        prices = [point["price"] for point in points if _to_float(point.get("price"))]
+        national_price = round(sum(prices) / len(prices), 2) if prices else None
+    if national_miles is None:
+        miles_values = [point["miles"] for point in points if _to_int(point.get("miles")) is not None]
+        national_miles = round(sum(miles_values) / len(miles_values), 0) if miles_values else vehicle.odometer
+
+    pricing = _pricing_breakdown(vehicle.price_asking)
+    active_units = _to_int((mds_payload or {}).get("total_active_cars_for_ymmt")) if isinstance(mds_payload, dict) else None
+    sold_units = _to_int((mds_payload or {}).get("total_cars_sold_in_last_45_days")) if isinstance(mds_payload, dict) else None
+    market_days_supply = _to_int((mds_payload or {}).get("mds")) if isinstance(mds_payload, dict) else None
+
+    if active_units is None:
+        active_units = len(points) + 1
+
+    return {
+        "vin": vehicle.vin,
+        "generated_at": _to_iso(datetime.now(UTC)),
+        "this_vehicle": {
+            "vin": vehicle.vin,
+            "label": f"{vehicle.year} {vehicle.make} {vehicle.model}{(' ' + vehicle.trim) if vehicle.trim else ''}",
+            "price": pricing["advertised_price"],
+            "miles": vehicle.odometer,
+            "href": f"/vinventory/{vehicle.public_slug or vehicle.vin}",
+        },
+        "comparables": points[:20],
+        "national_average": {
+            "label": "National Market Value" if price_payload else "Comparable Average",
+            "price": national_price,
+            "miles": vehicle.odometer or national_miles,
+            "source": "marketcheck_price" if price_payload else ("marketcheck_search" if marketcheck_payload else "vch_comparables"),
+        },
+        "metrics": {
+            "available_units": active_units,
+            "market_days_supply": market_days_supply,
+            "sold_units_45_days": sold_units,
+        },
+        "sources": {
+            "local_comparable_count": len(local_rows),
+            "marketcheck_enabled": bool(settings.has_marketcheck),
+            "marketcheck_comparable_count": len(marketcheck_payload.get("listings", [])) if isinstance(marketcheck_payload, dict) else 0,
+            "mds_available": bool(mds_payload),
+            "price_prediction_available": bool(price_payload),
+        },
+    }
+
+
 def _attach_marketcheck_price_stats(client: MarketCheckClient, items: list[dict[str, Any]]) -> None:
     for item in items:
         vin = _to_str(item.get("vin"))
@@ -1068,8 +1404,10 @@ def _try_marketcheck_history_enrichment(vehicle: Vehicle) -> dict[str, Any]:
 def _local_facets(
     db: Session,
     *,
+    q: str | None,
     make: str | None,
     model: str | None,
+    make_model_pairs: str | None,
     trim: str | None,
     state: str | None,
     body_type: str | None,
@@ -1078,6 +1416,10 @@ def _local_facets(
     max_price: float | None,
     min_year: int | None,
     max_year: int | None,
+    min_miles: int | None,
+    max_miles: int | None,
+    exterior_color: str | None,
+    interior_color: str | None,
     zip_code: str | None,
     radius: int | None,
     has_images: bool | None,
@@ -1085,16 +1427,29 @@ def _local_facets(
 ) -> dict[str, Any]:
     stmt = select(Vehicle).where(Vehicle.available.is_(True))
     advertised_price = _advertised_price_expr()
-    if make:
-        stmt = stmt.where(func.lower(Vehicle.make) == make.lower())
-    if model:
-        stmt = stmt.where(_model_filter_expr(model))
-    if trim:
-        stmt = stmt.where(func.lower(Vehicle.trim) == trim.lower())
+    if q:
+        clean_q = q.strip()
+        if len(clean_q) == 17 and clean_q.isalnum():
+            stmt = stmt.where(func.upper(Vehicle.vin) == clean_q.upper())
+        else:
+            text = f"%{clean_q.lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(Vehicle.vin).like(text),
+                    func.lower(Vehicle.make).like(text),
+                    func.lower(Vehicle.model).like(text),
+                    func.lower(func.coalesce(Vehicle.trim, "")).like(text),
+                )
+            )
+    stmt = _apply_make_model_filters(stmt, make, model, make_model_pairs)
+    trims = _split_csv(trim)
+    if trims:
+        stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")).in_(trims))
     if state:
         stmt = stmt.where(func.lower(Vehicle.location_state) == state.lower())
-    if body_type:
-        stmt = stmt.where(func.lower(Vehicle.body_type) == body_type.lower())
+    body_types = _split_csv(body_type)
+    if body_types:
+        stmt = stmt.where(func.lower(Vehicle.body_type).in_(body_types))
     stmt = _apply_source_type_filter(stmt, source_type)
     if min_price is not None:
         stmt = stmt.where(advertised_price >= min_price)
@@ -1104,6 +1459,10 @@ def _local_facets(
         stmt = stmt.where(Vehicle.year >= min_year)
     if max_year is not None:
         stmt = stmt.where(Vehicle.year <= max_year)
+    if min_miles is not None:
+        stmt = stmt.where(Vehicle.odometer >= min_miles)
+    if max_miles is not None:
+        stmt = stmt.where(Vehicle.odometer <= max_miles)
     stmt = _apply_zip_radius_filter(stmt, zip_code, radius)
 
     rows = db.scalars(stmt).all()
@@ -1121,6 +1480,16 @@ def _local_facets(
             continue
         if has_images is True and not row.images:
             continue
+        if exterior_color:
+            ext_parts = _split_csv(exterior_color)
+            ext_value = (_to_str(normalized.get("exterior_color")) or "").lower()
+            if ext_parts and not any(part in ext_value for part in ext_parts):
+                continue
+        if interior_color:
+            int_parts = _split_csv(interior_color)
+            int_value = (_to_str(normalized.get("interior_color")) or "").lower()
+            if int_parts and not any(part in int_value for part in int_parts):
+                continue
 
         add("make", row.make)
         add("model", row.model)
@@ -1202,17 +1571,23 @@ def inventory_stats(db: Session = Depends(get_db)) -> dict:
 
 @router.get("/facets")
 def inventory_facets(
+    q: str | None = Query(default=None),
     make: str | None = Query(default=None),
     model: str | None = Query(default=None),
+    make_model_pairs: str | None = Query(default=None),
     trim: str | None = Query(default=None),
     body_type: str | None = Query(default=None),
     state: str | None = Query(default=None, min_length=2, max_length=2),
     inventory_type: str | None = Query(default=None),
     source_type: str | None = Query(default=None),
+    exterior_color: str | None = Query(default=None),
+    interior_color: str | None = Query(default=None),
     min_price: float | None = Query(default=None),
     max_price: float | None = Query(default=None),
     min_year: int | None = Query(default=None),
     max_year: int | None = Query(default=None),
+    min_miles: int | None = Query(default=None),
+    max_miles: int | None = Query(default=None),
     zip_code: str | None = Query(default=None),
     radius: int | None = Query(default=None, ge=1, le=500),
     has_images: bool | None = Query(default=True),
@@ -1229,7 +1604,7 @@ def inventory_facets(
     if use_marketcheck and settings.has_marketcheck:
         client = _marketcheck_client()
         params = _build_marketcheck_search_params(
-            q=None,
+            q=q,
             make=make,
             model=model,
             trim=trim,
@@ -1240,8 +1615,8 @@ def inventory_facets(
             min_year=min_year,
             max_year=max_year,
             has_images=has_images,
-            exterior_color=None,
-            interior_color=None,
+            exterior_color=exterior_color,
+            interior_color=interior_color,
             drivetrain=None,
             fuel_type=None,
             transmission=None,
@@ -1275,8 +1650,10 @@ def inventory_facets(
             "num_found": 0,
             "facets": _local_facets(
                 db,
+                q=q,
                 make=make,
                 model=model,
+                make_model_pairs=make_model_pairs,
                 trim=trim,
                 state=state,
                 body_type=body_type,
@@ -1285,6 +1662,10 @@ def inventory_facets(
                 max_price=max_price,
                 min_year=min_year,
                 max_year=max_year,
+                min_miles=min_miles,
+                max_miles=max_miles,
+                exterior_color=exterior_color,
+                interior_color=interior_color,
                 zip_code=zip_code,
                 radius=radius,
                 has_images=has_images,
@@ -1366,6 +1747,7 @@ def search_inventory(
     q: str | None = Query(default=None),
     make: str | None = Query(default=None),
     model: str | None = Query(default=None),
+    make_model_pairs: str | None = Query(default=None),
     trim: str | None = Query(default=None),
     body_type: str | None = Query(default=None),
     inventory_type: str | None = Query(default=None),
@@ -1474,10 +1856,7 @@ def search_inventory(
                 [InventorySourceType.AUCTION.value, InventorySourceType.OVE.value]
             ),
         )
-        if make:
-            auction_count_stmt = auction_count_stmt.where(func.lower(Vehicle.make) == make.lower())
-        if model:
-            auction_count_stmt = auction_count_stmt.where(_model_filter_expr(model))
+        auction_count_stmt = _apply_make_model_filters(auction_count_stmt, make, model, make_model_pairs)
         if min_year is not None:
             auction_count_stmt = auction_count_stmt.where(Vehicle.year >= min_year)
         if max_year is not None:
@@ -1560,30 +1939,23 @@ def search_inventory(
                     func.lower(func.coalesce(Vehicle.trim, "")).like(text),
                 )
             )
-    if make:
-        stmt = stmt.where(func.lower(Vehicle.make) == make.lower())
-    if model:
-        stmt = stmt.where(_model_filter_expr(model))
-    if trim:
-        stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")) == trim.lower())
-    if body_type:
-        stmt = stmt.where(func.lower(Vehicle.body_type) == body_type.lower())
+    stmt = _apply_make_model_filters(stmt, make, model, make_model_pairs)
+    trims = _split_csv(trim)
+    if trims:
+        stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")).in_(trims))
+    body_types = _split_csv(body_type)
+    if body_types:
+        stmt = stmt.where(func.lower(Vehicle.body_type).in_(body_types))
     if exterior_color:
         ext_col_expr = func.lower(func.coalesce(Vehicle.features_normalized["exterior_color"].as_string(), ""))
-        ext_col_lower = exterior_color.strip().lower()
-        ext_col_parts = [p.strip() for p in ext_col_lower.replace("/", "|").split("|") if p.strip()]
-        if len(ext_col_parts) > 1:
-            stmt = stmt.where(or_(*[ext_col_expr.like(f"%{p}%") for p in ext_col_parts]))
-        else:
-            stmt = stmt.where(ext_col_expr.like(f"%{ext_col_lower}%"))
+        ext_parts = _split_csv(exterior_color)
+        if ext_parts:
+            stmt = stmt.where(or_(*[ext_col_expr.like(f"%{p}%") for p in ext_parts]))
     if interior_color:
         int_col_expr = func.lower(func.coalesce(Vehicle.features_normalized["interior_color"].as_string(), ""))
-        int_col_lower = interior_color.strip().lower()
-        int_col_parts = [p.strip() for p in int_col_lower.replace("/", "|").split("|") if p.strip()]
-        if len(int_col_parts) > 1:
-            stmt = stmt.where(or_(*[int_col_expr.like(f"%{p}%") for p in int_col_parts]))
-        else:
-            stmt = stmt.where(int_col_expr.like(f"%{int_col_lower}%"))
+        int_parts = _split_csv(interior_color)
+        if int_parts:
+            stmt = stmt.where(or_(*[int_col_expr.like(f"%{p}%") for p in int_parts]))
     if inventory_type:
         stmt = stmt.where(
             func.lower(func.coalesce(Vehicle.features_normalized["inventory_type"].as_string(), "")) == inventory_type.lower()
@@ -1845,14 +2217,18 @@ def wordpress_inventory_export(
                 func.lower(func.coalesce(Vehicle.trim, "")).like(text),
             )
         )
-    if make:
-        stmt = stmt.where(func.lower(Vehicle.make) == make.lower())
-    if model:
-        stmt = stmt.where(_model_filter_expr(model))
-    if trim:
-        stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")) == trim.lower())
-    if body_type:
-        stmt = stmt.where(func.lower(Vehicle.body_type) == body_type.lower())
+    makes = _split_csv(make)
+    if makes:
+        stmt = stmt.where(func.lower(Vehicle.make).in_(makes))
+    models = _split_csv(model)
+    if models:
+        stmt = stmt.where(func.lower(Vehicle.model).in_(models))
+    trims = _split_csv(trim)
+    if trims:
+        stmt = stmt.where(func.lower(func.coalesce(Vehicle.trim, "")).in_(trims))
+    body_types = _split_csv(body_type)
+    if body_types:
+        stmt = stmt.where(func.lower(Vehicle.body_type).in_(body_types))
     if inventory_type:
         stmt = stmt.where(
             func.lower(func.coalesce(Vehicle.features_normalized["inventory_type"].as_string(), "")) == inventory_type.lower()
@@ -2421,6 +2797,49 @@ def get_inventory_vehicle_payment_estimate(
             **build_payment_estimate(principal=principal, tier_id=credit_tier, months=months),
         }
     )
+
+
+@router.get("/{identifier}/market-comparison")
+def get_inventory_vehicle_market_comparison(
+    identifier: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.vin_slug_service import resolve_vehicle_identifier
+
+    vehicle = resolve_vehicle_identifier(db, identifier)
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+
+    if not vehicle.odometer or not vehicle.price_asking:
+        return ok(
+            {
+                "vin": vehicle.vin,
+                "generated_at": _to_iso(datetime.now(UTC)),
+                "this_vehicle": {
+                    "vin": vehicle.vin,
+                    "label": f"{vehicle.year} {vehicle.make} {vehicle.model}{(' ' + vehicle.trim) if vehicle.trim else ''}",
+                    "price": _pricing_breakdown(vehicle.price_asking)["advertised_price"],
+                    "miles": vehicle.odometer,
+                    "href": f"/vinventory/{vehicle.public_slug or vehicle.vin}",
+                },
+                "comparables": [],
+                "national_average": None,
+                "metrics": {
+                    "available_units": None,
+                    "market_days_supply": None,
+                    "sold_units_45_days": None,
+                },
+                "sources": {
+                    "local_comparable_count": 0,
+                    "marketcheck_enabled": bool(settings.has_marketcheck),
+                    "marketcheck_comparable_count": 0,
+                    "mds_available": False,
+                    "price_prediction_available": False,
+                },
+            }
+        )
+
+    return ok(_build_market_comparison_payload(db, vehicle))
 
 
 @router.post("/history-enrichment/run", dependencies=[Depends(require_service_token)])

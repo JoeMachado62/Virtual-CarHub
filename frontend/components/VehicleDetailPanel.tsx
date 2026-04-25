@@ -2,7 +2,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import type { TouchEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { AuthModal } from "@/components/AuthModal";
@@ -175,6 +176,36 @@ type SimilarVehicle = {
   hero_image?: string | null;
 };
 
+type MarketComparisonPoint = {
+  vin?: string | null;
+  label: string;
+  price: number;
+  miles: number;
+  source?: string | null;
+  is_vch_listing?: boolean;
+  href?: string | null;
+};
+
+type MarketComparisonData = {
+  vin: string;
+  generated_at?: string | null;
+  this_vehicle: MarketComparisonPoint;
+  comparables: MarketComparisonPoint[];
+  national_average?: MarketComparisonPoint | null;
+  metrics: {
+    available_units?: number | null;
+    market_days_supply?: number | null;
+    sold_units_45_days?: number | null;
+  };
+  sources?: {
+    local_comparable_count?: number;
+    marketcheck_enabled?: boolean;
+    marketcheck_comparable_count?: number;
+    mds_available?: boolean;
+    price_prediction_available?: boolean;
+  };
+};
+
 const FALLBACK_IMAGE = "/assets/images/portfolio/VCH Auction default image.webp";
 const SHOWROOM_BG = "/assets/images/portfolio/vch-showroom.webp";
 
@@ -205,16 +236,16 @@ function showroomContainerStyle(url: string | null | undefined): React.CSSProper
 
 function showroomImageStyle(url: string | null | undefined): React.CSSProperties | undefined {
   if (!isChromeDataExterior(url)) return undefined;
-  const side = isSideProfile(url);
   return {
     objectFit: "contain" as const,
     objectPosition: "center bottom",
-    // Push the image far enough down that the transparent padding below
-    // the tires goes completely off-screen (past overflow:hidden), so the
-    // tires sit flush on the showroom floor.
-    transform: side ? "translateY(33%) scale(1.55)" : "translateY(18%) scale(1.25)",
     transformOrigin: "center bottom",
   };
+}
+
+function showroomImageClassName(url: string | null | undefined): string | undefined {
+  if (!isChromeDataExterior(url)) return undefined;
+  return isSideProfile(url) ? "vdp-showroom-image vdp-showroom-image-side" : "vdp-showroom-image";
 }
 const SEARCH_FILTERS_KEY = "vch:inventory:filters";
 
@@ -343,6 +374,215 @@ function CategoryCard({ title, icon, items, color }: {
   );
 }
 
+function IconTrend() {
+  return (
+    <svg className="vdp-market-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 17l5-5 4 4 7-8" />
+      <path d="M15 8h5v5" />
+      <circle cx="4" cy="17" r="1.6" />
+      <circle cx="9" cy="12" r="1.6" />
+      <circle cx="13" cy="16" r="1.6" />
+    </svg>
+  );
+}
+
+function IconVehicleMetric() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 16h14l-1.6-5.2A3 3 0 0014.5 8h-5a3 3 0 00-2.9 2.8L5 16z" />
+      <path d="M7 16v2M17 16v2M7.5 18.5h0M16.5 18.5h0" />
+      <path d="M8 12h8" />
+    </svg>
+  );
+}
+
+function IconCalendarMetric() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="5" width="16" height="15" rx="2" />
+      <path d="M8 3v4M16 3v4M4 10h16" />
+      <path d="M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01" />
+    </svg>
+  );
+}
+
+function IconSalesMetric() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 19V9M10 19V5M16 19v-7M21 6l-5 5-4-4-7 7" />
+      <path d="M18 6h3v3" />
+    </svg>
+  );
+}
+
+function niceStep(rawStep: number): number {
+  if (!Number.isFinite(rawStep) || rawStep <= 0) return 1;
+  const power = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const normalized = rawStep / power;
+  if (normalized <= 1) return power;
+  if (normalized <= 2) return 2 * power;
+  if (normalized <= 5) return 5 * power;
+  return 10 * power;
+}
+
+function buildTicks(min: number, max: number, count: number): number[] {
+  const step = niceStep((max - min) / Math.max(1, count - 1));
+  const start = Math.floor(min / step) * step;
+  const end = Math.ceil(max / step) * step;
+  const ticks: number[] = [];
+  for (let value = start; value <= end + step * 0.5; value += step) {
+    ticks.push(value);
+  }
+  return ticks.slice(0, 8);
+}
+
+function formatCompactCurrency(value: number): string {
+  if (Math.abs(value) >= 1000) return `$${Math.round(value / 1000)}k`;
+  return formatCurrency(value);
+}
+
+function formatCompactMiles(value: number): string {
+  return Math.abs(value) >= 1000 ? `${Math.round(value / 1000)}k` : value.toLocaleString();
+}
+
+function MarketMetricCard({ icon, value, label, sublabel, highlight = false }: {
+  icon: React.ReactNode;
+  value: number | null | undefined;
+  label: string;
+  sublabel?: string;
+  highlight?: boolean;
+}) {
+  return (
+    <article className={`vdp-market-metric${highlight ? " highlight" : ""}`}>
+      <span className="vdp-market-metric-icon">{icon}</span>
+      <div>
+        <strong>{value == null ? "N/A" : value.toLocaleString()}</strong>
+        <span>{label}</span>
+        {sublabel ? <em>{sublabel}</em> : null}
+      </div>
+    </article>
+  );
+}
+
+function ValueComparisonDemandCard({ data, loading }: { data: MarketComparisonData | null; loading: boolean }) {
+  if (loading && !data) {
+    return (
+      <section className="card vdp-market-card vdp-market-loading">
+        <div className="vdp-market-heading">
+          <span className="vdp-market-title-badge"><IconTrend /></span>
+          <h2>Value Comparison &amp; Demand</h2>
+        </div>
+        <p>Loading market comparison...</p>
+      </section>
+    );
+  }
+
+  if (!data || !data.this_vehicle?.price || !data.this_vehicle?.miles) return null;
+
+  const comparablePoints = (data.comparables || []).filter((point) => point.price > 0 && point.miles >= 0);
+  const nationalPoint = data.national_average?.price && data.national_average?.miles != null
+    ? data.national_average
+    : null;
+  const allPoints = [data.this_vehicle, ...comparablePoints, ...(nationalPoint ? [nationalPoint] : [])];
+  const milesValues = allPoints.map((point) => point.miles);
+  const priceValues = allPoints.map((point) => point.price);
+  const minMiles = Math.min(...milesValues);
+  const maxMiles = Math.max(...milesValues);
+  const minPrice = Math.min(...priceValues);
+  const maxPrice = Math.max(...priceValues);
+  const milesPadding = Math.max((maxMiles - minMiles) * 0.12, 5000);
+  const pricePadding = Math.max((maxPrice - minPrice) * 0.16, 1500);
+  const xMin = Math.max(0, minMiles - milesPadding);
+  const xMax = maxMiles + milesPadding;
+  const yMin = Math.max(0, minPrice - pricePadding);
+  const yMax = maxPrice + pricePadding;
+  const xTicks = buildTicks(xMin, xMax, 6);
+  const yTicks = buildTicks(yMin, yMax, 6);
+  const width = 760;
+  const height = 430;
+  const pad = { top: 28, right: 22, bottom: 58, left: 74 };
+  const plotWidth = width - pad.left - pad.right;
+  const plotHeight = height - pad.top - pad.bottom;
+  const xScale = (miles: number) => pad.left + ((miles - xMin) / Math.max(1, xMax - xMin)) * plotWidth;
+  const yScale = (price: number) => pad.top + (1 - ((price - yMin) / Math.max(1, yMax - yMin))) * plotHeight;
+  const similarLabel = comparablePoints.length ? `${comparablePoints.length} Similar Cars` : "Similar Cars";
+
+  return (
+    <section className="card vdp-market-card">
+      <div className="vdp-market-heading">
+        <span className="vdp-market-title-badge"><IconTrend /></span>
+        <h2>Value Comparison &amp; Demand</h2>
+      </div>
+
+      <div className="vdp-market-layout">
+        <div className="vdp-market-chart-panel">
+          <div className="vdp-market-legend" aria-hidden="true">
+            {nationalPoint ? <span><i className="national" /> {nationalPoint.label || "National Market Value"}</span> : null}
+            <span><i className="similar" /> {similarLabel}</span>
+            <span><i className="current" /> This Car</span>
+          </div>
+
+          <svg className="vdp-market-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Price and mileage comparison chart">
+            {xTicks.map((tick) => (
+              <g key={`x-${tick}`}>
+                <line className="vdp-market-grid-line" x1={xScale(tick)} x2={xScale(tick)} y1={pad.top} y2={height - pad.bottom} />
+                <text className="vdp-market-axis-text" x={xScale(tick)} y={height - 25} textAnchor="middle">{formatCompactMiles(tick)}</text>
+              </g>
+            ))}
+            {yTicks.map((tick) => (
+              <g key={`y-${tick}`}>
+                <line className="vdp-market-grid-line" x1={pad.left} x2={width - pad.right} y1={yScale(tick)} y2={yScale(tick)} />
+                <text className="vdp-market-axis-text" x={pad.left - 14} y={yScale(tick) + 5} textAnchor="end">{formatCompactCurrency(tick)}</text>
+              </g>
+            ))}
+            <line className="vdp-market-axis-line" x1={pad.left} x2={width - pad.right} y1={height - pad.bottom} y2={height - pad.bottom} />
+            <line className="vdp-market-axis-line" x1={pad.left} x2={pad.left} y1={pad.top} y2={height - pad.bottom} />
+            <text className="vdp-market-axis-label" x={pad.left + plotWidth / 2} y={height - 5} textAnchor="middle">Miles</text>
+            <text className="vdp-market-axis-label" transform={`translate(20 ${pad.top + plotHeight / 2}) rotate(-90)`} textAnchor="middle">Price</text>
+
+            {comparablePoints.map((point, index) => {
+              const cx = xScale(point.miles);
+              const cy = yScale(point.price);
+              const title = `${point.label}: ${formatCurrency(point.price)}, ${point.miles.toLocaleString()} miles`;
+              const dot = (
+                <>
+                  <title>{point.is_vch_listing ? `${title}. Opens this VirtualCarHub listing.` : title}</title>
+                  <circle className={`vdp-market-dot similar${point.is_vch_listing ? " owned" : ""}`} cx={cx} cy={cy} r={point.is_vch_listing ? 7.5 : 6.2} />
+                </>
+              );
+              return point.href ? (
+                <a key={`${point.vin || "comp"}-${index}`} href={point.href} target="_blank" rel="noreferrer" aria-label={`Open ${point.label}`}>
+                  {dot}
+                </a>
+              ) : (
+                <g key={`${point.vin || "comp"}-${index}`}>{dot}</g>
+              );
+            })}
+
+            {nationalPoint ? (
+              <g>
+                <title>{`${nationalPoint.label}: ${formatCurrency(nationalPoint.price)}, ${nationalPoint.miles.toLocaleString()} miles`}</title>
+                <circle className="vdp-market-dot national" cx={xScale(nationalPoint.miles)} cy={yScale(nationalPoint.price)} r="9" />
+              </g>
+            ) : null}
+
+            <g>
+              <title>{`This car: ${formatCurrency(data.this_vehicle.price)}, ${data.this_vehicle.miles.toLocaleString()} miles`}</title>
+              <circle className="vdp-market-dot current" cx={xScale(data.this_vehicle.miles)} cy={yScale(data.this_vehicle.price)} r="9" />
+            </g>
+          </svg>
+        </div>
+
+        <aside className="vdp-market-metrics">
+          <MarketMetricCard icon={<IconVehicleMetric />} value={data.metrics.available_units} label="Available Units" />
+          <MarketMetricCard icon={<IconCalendarMetric />} value={data.metrics.market_days_supply} label="Market Days" sublabel="Supply" />
+          <MarketMetricCard icon={<IconSalesMetric />} value={data.metrics.sold_units_45_days} label="Sold Units" sublabel="past 45 days" highlight />
+        </aside>
+      </div>
+    </section>
+  );
+}
+
 export function VehicleDetailPanel({ vin }: { vin: string }) {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -363,6 +603,19 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   const [showPriceModal, setShowPriceModal] = useState(false);
   const [selectedCreditTier, setSelectedCreditTier] = useState<CreditTierId>(DEFAULT_CREDIT_TIER);
   const [downPaymentInput, setDownPaymentInput] = useState("");
+  const [marketComparison, setMarketComparison] = useState<MarketComparisonData | null>(null);
+  const [marketComparisonLoading, setMarketComparisonLoading] = useState(false);
+  const photoTouchStartX = useRef<number | null>(null);
+  const topResetVin = useRef<string | null>(null);
+
+  useEffect(() => {
+    topResetVin.current = null;
+    if (typeof window === "undefined") return;
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [vin]);
 
   useEffect(() => {
     let cancelled = false;
@@ -439,6 +692,19 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     setSimilar([]);
   }
 
+  async function loadMarketComparison(currentVehicle: VehicleDetail) {
+    setMarketComparisonLoading(true);
+    const response = await apiFetch<MarketComparisonData>(
+      `/inventory/${encodeURIComponent(currentVehicle.vin)}/market-comparison`,
+    );
+    if (response.status === "ok") {
+      setMarketComparison(response.data);
+    } else {
+      setMarketComparison(null);
+    }
+    setMarketComparisonLoading(false);
+  }
+
   useEffect(() => {
     async function loadVehicle() {
       setLoading(true);
@@ -460,12 +726,23 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
       setPhotoModalIndex(null);
       setShowAllFeatures(false);
       setDownPaymentInput("");
+      setMarketComparison(null);
       setReportStatus(response.data.has_inspection_report ? "available" : "none");
       setLoading(false);
       void loadSimilarListings(response.data);
+      void loadMarketComparison(response.data);
     }
     void loadVehicle();
   }, [vin, auth]);
+
+  useEffect(() => {
+    if (loading || topResetVin.current === vin || typeof window === "undefined") return;
+    topResetVin.current = vin;
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, vin]);
 
   useEffect(() => {
     if (photoModalIndex === null && !showPriceModal) return;
@@ -595,6 +872,21 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     setPhotoModalIndex((current) => getNextIndex(current ?? 0, displayImages.length));
   }
 
+  function handlePhotoTouchStart(event: TouchEvent<HTMLDivElement>) {
+    photoTouchStartX.current = event.touches[0]?.clientX ?? null;
+  }
+
+  function handlePhotoTouchEnd(event: TouchEvent<HTMLDivElement>) {
+    if (displayImages.length < 2 || photoTouchStartX.current === null) return;
+    const endX = event.changedTouches[0]?.clientX;
+    if (endX === undefined) return;
+    const deltaX = endX - photoTouchStartX.current;
+    photoTouchStartX.current = null;
+    if (Math.abs(deltaX) < 40) return;
+    if (deltaX > 0) prevModalImage();
+    else nextModalImage();
+  }
+
   async function addToGarage(tokenOverride?: string) {
     const token = tokenOverride || auth?.accessToken;
     if (!token) {
@@ -617,8 +909,8 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     setActionMessage(
       response.data.ove_detail_refresh?.queued
         ? response.data.ove_detail_refresh.deduplicated
-          ? "Vehicle saved. Auction detail refresh was already in progress."
-          : "Vehicle saved. Auction detail refresh queued for the back office."
+          ? "Vehicle saved. Inspection details are already being refreshed."
+          : "Vehicle saved. Inspection details have been requested."
         : "Vehicle saved to My Garage."
     );
     setActionLoading(null);
@@ -651,11 +943,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     );
     if (handleUnauthorized(response)) { setActionLoading(null); return; }
     if (response.status !== "ok") {
-      setActionError(response.error?.message || "Unable to start acquisition.");
+      setActionError(response.error?.message || "Unable to start purchase.");
       setActionLoading(null);
       return;
     }
-    setActionMessage("Acquisition started. Redirecting to My Garage.");
+    setActionMessage("Purchase started. Redirecting to My Garage.");
     setActionLoading(null);
     window.location.href = `/dashboard?vin=${encodeURIComponent(currentVehicle.vin)}`;
   }
@@ -683,7 +975,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     );
     if (handleUnauthorized(response)) { setActionLoading(null); return; }
     if (response.status !== "ok") {
-      setActionError(response.error?.message || "Unable to request condition report.");
+      setActionError(response.error?.message || "Unable to request inspection report.");
       setActionLoading(null);
       return;
     }
@@ -696,8 +988,8 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     setActionMessage(
       response.data.message ||
         (response.data.already_available
-          ? "Condition report is already available for this vehicle."
-          : "Condition report requested. Refresh this page after the scraper sync completes.")
+          ? "Inspection report is already available for this vehicle."
+          : "Inspection report requested. Refresh this page after the report is ready.")
     );
     setActionLoading(null);
   }
@@ -725,14 +1017,15 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 <img
                   src={galleryMain}
                   alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`}
+                  className={showroomImageClassName(galleryMain)}
                   style={showroomImageStyle(galleryMain)}
                 />
                 {displayImages.length > 1 ? (
                   <>
-                    <button className="vdp-gallery-arrow vdp-gallery-arrow-left" onClick={(event) => { event.stopPropagation(); prevGallery(); }}>
-                      &lsaquo;
-                    </button>
-                    <button className="vdp-gallery-arrow vdp-gallery-arrow-right" onClick={(event) => { event.stopPropagation(); nextGallery(); }}>
+                  <button className="vdp-gallery-arrow vdp-gallery-arrow-left" type="button" aria-label="Previous photo" onClick={(event) => { event.stopPropagation(); prevGallery(); }}>
+                    &lsaquo;
+                  </button>
+                    <button className="vdp-gallery-arrow vdp-gallery-arrow-right" type="button" aria-label="Next photo" onClick={(event) => { event.stopPropagation(); nextGallery(); }}>
                       &rsaquo;
                     </button>
                   </>
@@ -753,6 +1046,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                         src={image}
                         alt={`Vehicle preview ${index + 1}`}
                         loading="lazy"
+                        className={showroomImageClassName(image)}
                         style={showroomImageStyle(image)}
                       />
                     </button>
@@ -845,7 +1139,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
             </p>
 
             <div className="vdp-disclosure-card">
-              <h3>Virtual CarHub Disclosure</h3>
+              <h3>VirtualCarHub Disclosure</h3>
               <p>{disclosureText}</p>
             </div>
           </aside>
@@ -887,28 +1181,28 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 )}
 
                 <button className="vdp-action-btn vdp-action-dark" onClick={() => startAcquisition()} disabled={actionLoading !== null}>
-                  {actionLoading === "acquire" ? "Starting..." : "Start Acquisition"}
+                  {actionLoading === "acquire" ? "Starting..." : "Start Purchase"}
                 </button>
 
                 {auth && !vehicle.has_inspection_report && reportStatus !== "pending" ? (
                   <button className="vdp-action-btn vdp-action-accent" onClick={() => requestConditionReport()} disabled={actionLoading !== null}>
-                    {actionLoading === "condition-report" ? "Requesting..." : "Order CR"}
+                    {actionLoading === "condition-report" ? "Requesting..." : "Request Inspection Report"}
                   </button>
                 ) : null}
 
                 {auth && reportStatus === "pending" ? (
-                  <button className="vdp-action-btn vdp-action-outline" disabled>CR Pending</button>
+                  <button className="vdp-action-btn vdp-action-outline" disabled>Inspection Report Pending</button>
                 ) : null}
 
                 {auth && (vehicle.has_inspection_report || reportStatus === "available") ? (
                   <Link className="vdp-action-btn vdp-action-outline" href={`/vinventory/${encodeURIComponent(vehicle.public_slug || vehicle.vin)}/condition-report` as any}>
-                    View Condition Report
+                    View Inspection Report
                   </Link>
                 ) : null}
 
                 {vehicle.source_url ? (
                   <a className="vdp-action-btn vdp-action-outline" href={vehicle.source_url} target="_blank" rel="noreferrer">
-                    Source Listing
+                    Original Listing
                   </a>
                 ) : null}
               </div>
@@ -947,10 +1241,10 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
               <section className="card vdp-summary-card">
                 <div className="vdp-summary-header">
                   <div>
-                    <h3>Virtual CarHub Listing Summary</h3>
+                    <h3>VirtualCarHub Listing Summary</h3>
                     <p>
                       {vehicle.seller_comments
-                        ? "Curated from listing data for Virtual CarHub shoppers."
+                        ? "Curated from listing data for VirtualCarHub shoppers."
                         : "Generated from verified vehicle data."}
                     </p>
                   </div>
@@ -967,6 +1261,8 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 <p className="vdp-summary-copy">{sellerSummary}</p>
               </section>
             ) : null}
+
+            <ValueComparisonDemandCard data={marketComparison} loading={marketComparisonLoading} />
 
             {vehicle.display_context?.dealer_photos_gated ? (
               <section className="card vdp-gated-card">
@@ -1070,7 +1366,6 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
             role="dialog"
             aria-modal="true"
             onClick={(event) => event.stopPropagation()}
-            style={{ width: "90vw", maxWidth: "90vw", height: "90vh", maxHeight: "90vh", display: "flex", flexDirection: "column" }}
           >
             <header className="vdp-modal-header">
               <div>
@@ -1080,21 +1375,22 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
               <button className="button ghost" onClick={closePhotoModal}>Close</button>
             </header>
 
-            <div className="vdp-photo-stage" style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", ...showroomContainerStyle(activeModalImage) }}>
+            <div
+              className="vdp-photo-stage"
+              style={showroomContainerStyle(activeModalImage)}
+              onTouchStart={handlePhotoTouchStart}
+              onTouchEnd={handlePhotoTouchEnd}
+            >
               <img
                 src={activeModalImage}
                 alt={`${vehicle.year} ${vehicle.make} ${vehicle.model}`}
-                style={{
-                  ...(isChromeDataExterior(activeModalImage)
-                    ? { width: "100%", height: "100%" }
-                    : { maxWidth: "100%", maxHeight: "100%" }),
-                  ...showroomImageStyle(activeModalImage),
-                }}
+                className={showroomImageClassName(activeModalImage)}
+                style={showroomImageStyle(activeModalImage)}
               />
               {displayImages.length > 1 ? (
                 <>
-                  <button className="vdp-gallery-nav vdp-gallery-prev" onClick={prevModalImage}>&lsaquo;</button>
-                  <button className="vdp-gallery-nav vdp-gallery-next" onClick={nextModalImage}>&rsaquo;</button>
+                  <button className="vdp-gallery-nav vdp-gallery-prev" type="button" aria-label="Previous photo" onClick={prevModalImage}>&lsaquo;</button>
+                  <button className="vdp-gallery-nav vdp-gallery-next" type="button" aria-label="Next photo" onClick={nextModalImage}>&rsaquo;</button>
                 </>
               ) : null}
             </div>
@@ -1144,11 +1440,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 <strong>{formatCurrency(pricingDetails.detailShopFee)}</strong>
               </div>
               <div className="vdp-price-line">
-                <span>VCH Fee</span>
+                <span>VirtualCarHub Service Fee</span>
                 <strong>{formatCurrency(pricingDetails.vchFee)}</strong>
               </div>
               <div className="vdp-price-line">
-                <span>Marketing Fee</span>
+                <span>Marketing & Referral Fund</span>
                 <strong>{formatCurrency(pricingDetails.marketingFee)}</strong>
               </div>
               <div className="vdp-price-line total">
@@ -1158,7 +1454,10 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
             </div>
 
             <p className="vdp-price-footnote">
-              * Transport not included. Taxes, title, registration, and lender-specific fees are separate.
+              * Transport not included. Taxes, title, registration, and lender-specific fees are separate. The Marketing
+              & Referral Fund helps cover the cost of finding and closing buyers. When an advocate referral leads to a
+              completed purchase, VirtualCarHub shares value back through the Danny Dollar program; more organic and
+              referral-driven deals help reduce marketing pressure for everyone.
             </p>
           </section>
         </div>
@@ -1571,7 +1870,7 @@ function buildFallbackSellerSummary(vehicle: VehicleDetail): string {
   const parts: string[] = [];
   const title = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
   if (title) {
-    parts.push(`This ${title} is presented by Virtual CarHub as a wholesale-direct opportunity.`);
+    parts.push(`This ${title} is presented by VirtualCarHub as a wholesale-direct opportunity.`);
   }
 
   const specFacts = [
@@ -1580,7 +1879,7 @@ function buildFallbackSellerSummary(vehicle: VehicleDetail): string {
     vehicle.fuel_type,
   ].filter(Boolean);
   if (specFacts.length) {
-    parts.push(`Configured with ${specFacts.join(", ")}, this listing reflects the latest verified data currently available to Virtual CarHub.`);
+    parts.push(`Configured with ${specFacts.join(", ")}, this listing reflects the latest verified data currently available to VirtualCarHub.`);
   }
 
   const colorFacts = [vehicle.exterior_color ? `${vehicle.exterior_color} exterior` : null, vehicle.interior_color ? `${vehicle.interior_color} interior` : null]
@@ -1590,10 +1889,10 @@ function buildFallbackSellerSummary(vehicle: VehicleDetail): string {
   }
 
   if (vehicle.odometer != null) {
-    parts.push(`Reported mileage is ${vehicle.odometer.toLocaleString()} ${vehicle.odometer_units || "mi"}, and that figure is preserved directly from the source inventory record.`);
+    parts.push(`Reported mileage is ${vehicle.odometer.toLocaleString()} ${vehicle.odometer_units || "mi"}, based on the current inventory record.`);
   }
 
-  parts.push("Feature content may continue to improve as additional upstream listing data and inspection inputs are synchronized.");
+  parts.push("Feature and inspection details may update as more verified vehicle data becomes available.");
   return parts.join(" ");
 }
 
@@ -1793,5 +2092,5 @@ function resolvePricingBadge(vehicle: VehicleDetail, displayedPrice: number): st
 }
 
 function buildDisclosureText(): string {
-  return "Please note that we can not publish actual wholesale dealer inventory images to the general public. These images are generated based on year, make, model and trim. Color is approximated as is condition. To see actual vehicle images, order a condition report or begin the acquisition process you will need to register and login to your personal garage and complete the onboarding process.";
+  return "Some wholesale inventory images cannot be shown publicly. When that happens, VirtualCarHub may use reference images based on year, make, model, and trim. Color and condition may be approximate. Sign in, save the vehicle to My Garage, and request an inspection report to see the most accurate vehicle details available.";
 }

@@ -52,7 +52,7 @@ export function ConditionReportCard({
   pickupLocation,
   inventoryStatus,
   mmr,
-  title = "VCH Condition Report",
+  title = "VirtualCarHub Inspection Report",
 }: ConditionReportCardProps) {
   const normalizedReport = report || {};
   const announcements = toStringList(normalizedReport.announcements).filter((item) => !containsMarketplaceMention(item));
@@ -108,7 +108,7 @@ export function ConditionReportCard({
           <span className="badge" style={{ background: "#e74c3c", color: "#fff" }}>{vehicleHistory.accidents} Accident{vehicleHistory.accidents !== 1 ? "s" : ""}</span>
         )}
         {totalIssues > 0 && (
-          <span className="badge" style={{ background: "#e7a33e", color: "#fff" }}>{totalIssues} CR Issue{totalIssues !== 1 ? "s" : ""}</span>
+          <span className="badge" style={{ background: "#e7a33e", color: "#fff" }}>{totalIssues} Inspection Issue{totalIssues !== 1 ? "s" : ""}</span>
         )}
       </div>
 

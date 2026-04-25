@@ -3,7 +3,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { AuthModal } from "@/components/AuthModal";
@@ -207,6 +207,8 @@ type InventoryFacetPayload = {
     lookup?: {
       models_by_make?: Record<string, string[]>;
       trims_by_make_model?: Record<string, string[]>;
+      body_types_by_make_model?: Record<string, string[]>;
+      body_types_by_make_model_trim?: Record<string, string[]>;
     };
   };
 };
@@ -241,10 +243,10 @@ type GarageItem = {
 
 type FilterState = {
   q: string;
-  make: string;
-  model: string;
-  trim: string;
-  body_type: string;
+  make: string[];
+  model: string[];
+  trim: string[];
+  body_type: string[];
   source_type: string;
   state: string;
   zip_code: string;
@@ -255,8 +257,8 @@ type FilterState = {
   max_year: string;
   min_miles: string;
   max_miles: string;
-  exterior_color: string;
-  interior_color: string;
+  exterior_color: string[];
+  interior_color: string[];
   has_images: boolean;
   live_sync: boolean;
   sort_by: "updated_at" | "price_asking" | "year" | "odometer";
@@ -265,22 +267,22 @@ type FilterState = {
 
 const INITIAL_FILTERS: FilterState = {
   q: "",
-  make: "",
-  model: "",
-  trim: "",
-  body_type: "",
+  make: [],
+  model: [],
+  trim: [],
+  body_type: [],
   source_type: "",
   state: "",
   zip_code: "",
-  radius: "250",
+  radius: "500",
   min_price: "",
   max_price: "",
   min_year: "",
   max_year: "",
   min_miles: "",
   max_miles: "",
-  exterior_color: "",
-  interior_color: "",
+  exterior_color: [],
+  interior_color: [],
   has_images: false,
   live_sync: true,
   sort_by: "updated_at",
@@ -296,6 +298,29 @@ const EXTERIOR_COLOR_OPTIONS = [
 const INTERIOR_COLOR_OPTIONS = [
   "Black", "Gray", "Beige/Tan", "Brown", "White/Ivory", "Red", "Blue",
   "Green", "Orange", "Burgundy/Maroon", "Other",
+];
+
+const STACKED_INVENTORY_QUERY = "(max-width: 1080px)";
+
+const FACET_REFRESH_KEYS: (keyof FilterState)[] = [
+  "q",
+  "make",
+  "model",
+  "trim",
+  "body_type",
+  "source_type",
+  "state",
+  "zip_code",
+  "radius",
+  "min_price",
+  "max_price",
+  "min_year",
+  "max_year",
+  "min_miles",
+  "max_miles",
+  "exterior_color",
+  "interior_color",
+  "has_images",
 ];
 
 const EMPTY_PAGINATION: Pagination = {
@@ -337,7 +362,7 @@ function isChromeDataExterior(url: string | null | undefined): boolean {
 }
 const SEARCH_CONTEXT_KEY = "vch:inventory:search-context";
 const SEARCH_FILTERS_KEY = "vch:inventory:filters";
-const LIVE_SYNC_FALLBACK_MESSAGE = "Live wholesale sync is temporarily unavailable. Showing saved inventory results.";
+const LIVE_SYNC_FALLBACK_MESSAGE = "Current wholesale updates are temporarily unavailable. Showing saved inventory results.";
 
 const PROGRESS_MESSAGES = [
   "Checking surplus inventory listings\u2026",
@@ -411,8 +436,270 @@ type InventoryExplorerProps = {
   initialTrim?: string;
 };
 
+function mergeFacetOptions(base: FacetBucket[] = [], counted: FacetBucket[] = []): FacetBucket[] {
+  const seen = new Set<string>();
+  const byKey = new Map(counted.map((item) => [item.item.toLowerCase(), item]));
+  const merged: FacetBucket[] = [];
+
+  counted.forEach((item) => {
+    const key = item.item.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(item);
+  });
+
+  base.forEach((item) => {
+    const key = item.item.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(byKey.get(key) || item);
+  });
+
+  return merged;
+}
+
+function optionBuckets(values: string[], counted: FacetBucket[] = []): { item: string; count?: number }[] {
+  const counts = new Map(counted.map((item) => [item.item.toLowerCase(), item.count]));
+  const seen = new Set<string>();
+  return values
+    .filter((value) => {
+      const key = value.toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => a.localeCompare(b))
+    .map((item) => ({ item, count: counts.get(item.toLowerCase()) }));
+}
+
+function hasSelectedBodyType(
+  bodyTypesByKey: Record<string, string[]> | undefined,
+  key: string,
+  selectedBodyTypes: string[],
+): boolean {
+  if (selectedBodyTypes.length === 0) return true;
+  const available = bodyTypesByKey?.[key];
+  if (!available || available.length === 0) return false;
+  const selected = new Set(selectedBodyTypes.map((value) => value.toLowerCase()));
+  return available.some((value) => selected.has(value.toLowerCase()));
+}
+
+function makeModelPairKey(make: string, model: string): string {
+  return `${make}|||${model}`;
+}
+
+function makeModelTrimKey(make: string, model: string, trim: string): string {
+  return `${makeModelPairKey(make, model)}|||${trim}`;
+}
+
+function buildModelOptions(
+  taxonomy: InventoryFacetPayload["taxonomy"] | null,
+  facets: Record<string, FacetBucket[]>,
+  filters: FilterState,
+): { item: string; count?: number }[] {
+  const lookup = taxonomy?.lookup;
+  const modelsByMake = lookup?.models_by_make || {};
+  const selectedMakes = new Set(filters.make.map((value) => value.toLowerCase()));
+  const selectedBodyTypes = filters.body_type.length > 0;
+  const facetModels = facets.model || [];
+  const models = selectedBodyTypes && facetModels.length > 0 ? facetModels.map((bucket) => bucket.item) : [];
+
+  if (!selectedBodyTypes || facetModels.length === 0) {
+    Object.entries(modelsByMake).forEach(([make, values]) => {
+      if (selectedMakes.size > 0 && !selectedMakes.has(make.toLowerCase())) return;
+      values.forEach((model) => {
+        const key = makeModelPairKey(make, model);
+        if (hasSelectedBodyType(lookup?.body_types_by_make_model, key, filters.body_type)) {
+          models.push(model);
+        }
+      });
+    });
+  }
+
+  if (models.length === 0) {
+    return selectedBodyTypes ? facetModels : mergeFacetOptions(taxonomy?.model || [], facetModels);
+  }
+  return optionBuckets(models, facetModels);
+}
+
+function buildTrimOptions(
+  taxonomy: InventoryFacetPayload["taxonomy"] | null,
+  facets: Record<string, FacetBucket[]>,
+  filters: FilterState,
+): { item: string; count?: number }[] {
+  const lookup = taxonomy?.lookup;
+  const trimsByMakeModel = lookup?.trims_by_make_model || {};
+  const selectedMakes = new Set(filters.make.map((value) => value.toLowerCase()));
+  const selectedModels = new Set(filters.model.map((value) => value.toLowerCase()));
+  const trims: string[] = [];
+
+  Object.entries(trimsByMakeModel).forEach(([key, values]) => {
+    const [make, model] = key.split("|||");
+    if (!make || !model) return;
+    if (selectedMakes.size > 0 && !selectedMakes.has(make.toLowerCase())) return;
+    if (selectedModels.size > 0 && !selectedModels.has(model.toLowerCase())) return;
+    values.forEach((trim) => {
+      const trimKey = makeModelTrimKey(make, model, trim);
+      if (hasSelectedBodyType(lookup?.body_types_by_make_model_trim, trimKey, filters.body_type)) {
+        trims.push(trim);
+      }
+    });
+  });
+
+  if (trims.length === 0) {
+    return mergeFacetOptions(taxonomy?.trim || [], facets.trim || []);
+  }
+  return optionBuckets(trims, facets.trim || []);
+}
+
+function buildMakeModelPairs(
+  taxonomy: InventoryFacetPayload["taxonomy"] | null,
+  filters: FilterState,
+): string[] {
+  if (filters.make.length === 0 || filters.model.length === 0) return [];
+  const lookup = taxonomy?.lookup?.models_by_make || {};
+  const selectedMakes = new Set(filters.make.map((value) => value.toLowerCase()));
+  const selectedModels = new Set(filters.model.map((value) => value.toLowerCase()));
+  const pairs: string[] = [];
+
+  Object.entries(lookup).forEach(([make, models]) => {
+    if (!selectedMakes.has(make.toLowerCase())) return;
+    models.forEach((model) => {
+      if (selectedModels.has(model.toLowerCase())) {
+        pairs.push(makeModelPairKey(make, model));
+      }
+    });
+  });
+
+  if (pairs.length > 0) return pairs;
+  return filters.make.flatMap((make) => filters.model.map((model) => makeModelPairKey(make, model)));
+}
+
+function MultiSelectList({
+  label,
+  options,
+  selected,
+  onChange,
+  maxVisible = 80,
+  showLabel = true,
+}: {
+  label: string;
+  options: { item: string; count?: number }[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  maxVisible?: number;
+  showLabel?: boolean;
+}) {
+  const normalizedSelected = useMemo(() => new Set(selected), [selected]);
+  const visibleOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: { item: string; count?: number }[] = [];
+
+    selected.forEach((value) => {
+      const match = options.find((opt) => opt.item.toLowerCase() === value);
+      seen.add(value);
+      merged.push(match || { item: value });
+    });
+
+    options.forEach((opt) => {
+      const key = opt.item.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      merged.push(opt);
+    });
+
+    return merged.slice(0, maxVisible);
+  }, [maxVisible, options, selected]);
+
+  function toggle(value: string) {
+    const lower = value.toLowerCase();
+    if (selected.includes(lower)) {
+      onChange(selected.filter((s) => s !== lower));
+    } else {
+      onChange([...selected, lower]);
+    }
+  }
+  return (
+    <label>
+      {showLabel ? (
+        <>
+          {label}
+          {selected.length > 0 && <span className="multi-select-count">{selected.length}</span>}
+        </>
+      ) : null}
+      <div className="multi-select-list">
+        {visibleOptions.length === 0 && <span className="multi-select-empty">No options available</span>}
+        {visibleOptions.map((opt) => (
+          <button
+            key={opt.item}
+            type="button"
+            className={`multi-select-item${normalizedSelected.has(opt.item.toLowerCase()) ? " selected" : ""}`}
+            onClick={() => toggle(opt.item)}
+            title={opt.item}
+          >
+            <span>{opt.item}</span>
+            {opt.count != null ? <small>{opt.count.toLocaleString()}</small> : null}
+          </button>
+        ))}
+      </div>
+    </label>
+  );
+}
+
+function ChevronDownIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      className={`filter-section-icon${open ? " open" : ""}`}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="m6 9 6 6 6-6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function FilterSection({
+  id,
+  title,
+  selectedCount = 0,
+  openId,
+  onToggle,
+  children,
+}: {
+  id: string;
+  title: string;
+  selectedCount?: number;
+  openId: string | null;
+  onToggle: (id: string) => void;
+  children: ReactNode;
+}) {
+  const open = openId === id;
+
+  return (
+    <section className={`filter-section${open ? " open" : ""}`}>
+      <button className="filter-section-trigger" type="button" onClick={() => onToggle(id)} aria-expanded={open}>
+        <span>
+          {title}
+          {selectedCount > 0 && <span className="multi-select-count">{selectedCount}</span>}
+        </span>
+        <ChevronDownIcon open={open} />
+      </button>
+      {open ? <div className="filter-section-body">{children}</div> : null}
+    </section>
+  );
+}
+
 export function InventoryExplorer({ initialMake, initialModel, initialTrim }: InventoryExplorerProps = {}) {
   const searchParams = useSearchParams();
+  const resultsRef = useRef<HTMLElement | null>(null);
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [pendingActionType, setPendingActionType] = useState<"garage" | "remove" | "acquire" | "cr" | null>(null);
@@ -426,6 +713,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   const [pagination, setPagination] = useState<Pagination>(EMPTY_PAGINATION);
   const [syncMeta, setSyncMeta] = useState<SyncMeta>(EMPTY_SYNC);
   const [taxonomy, setTaxonomy] = useState<InventoryFacetPayload["taxonomy"] | null>(null);
+  const [facets, setFacets] = useState<Record<string, FacetBucket[]>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -439,9 +727,54 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   const [garageLoading, setGarageLoading] = useState(false);
   const [isPreapproved, setIsPreapproved] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [openFilter, setOpenFilter] = useState<string | null>(null);
   const [garageActionVin, setGarageActionVin] = useState<string | null>(null);
   const [garageError, setGarageError] = useState<string | null>(null);
   const [garageNotice, setGarageNotice] = useState<string | null>(null);
+  const [pendingResultsScroll, setPendingResultsScroll] = useState(false);
+
+  const facetRefreshKey = useMemo(
+    () =>
+      FACET_REFRESH_KEYS.map((key) => {
+        const value = filters[key];
+        return Array.isArray(value) ? value.join(",") : String(value);
+      }).join("|"),
+    [filters],
+  );
+
+  const makeOptions = useMemo(
+    () => mergeFacetOptions(taxonomy?.make || [], facets.make || []),
+    [facets.make, taxonomy?.make],
+  );
+
+  const modelOptions = useMemo(
+    () => buildModelOptions(taxonomy, facets, filters),
+    [facets, filters, taxonomy],
+  );
+
+  const trimOptions = useMemo(
+    () => buildTrimOptions(taxonomy, facets, filters),
+    [facets, filters, taxonomy],
+  );
+
+  function toggleFilterSection(id: string) {
+    setOpenFilter((current) => (current === id ? null : id));
+  }
+
+  function isStackedInventoryLayout() {
+    return typeof window !== "undefined" && window.matchMedia(STACKED_INVENTORY_QUERY).matches;
+  }
+
+  function queueMobileResultsScroll() {
+    if (!isStackedInventoryLayout()) return;
+    setPendingResultsScroll(true);
+  }
+
+  function collapseMobileFilters() {
+    if (!isStackedInventoryLayout()) return;
+    setFiltersOpen(false);
+    setOpenFilter(null);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -460,13 +793,16 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   }, []);
 
   useEffect(() => {
+    // Helper: split comma-separated URL param into lowercased array
+    const csvToArr = (v: string | null) => (v || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+
     // SEO route props take priority when no explicit URL search params are set
     if (initialMake && !searchParams.has("make")) {
       const nextFilters: FilterState = {
         ...INITIAL_FILTERS,
-        make: initialMake,
-        ...(initialModel ? { model: initialModel } : {}),
-        ...(initialTrim ? { trim: initialTrim } : {}),
+        make: [initialMake.toLowerCase()],
+        ...(initialModel ? { model: [initialModel.toLowerCase()] } : {}),
+        ...(initialTrim ? { trim: [initialTrim.toLowerCase()] } : {}),
       };
       setFilters(nextFilters);
       setAppliedFilters(nextFilters);
@@ -484,18 +820,18 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       const vinParam = searchParams.get("vin") || "";
       const q = vinParam || searchParams.get("q") || "";
       const sourceType = normalizeSourceFilterValue(searchParams.get("source_type"));
-      const make = searchParams.get("make") || "";
-      const model = searchParams.get("model") || "";
-      const trim = searchParams.get("trim") || "";
-      const bodyType = searchParams.get("body_type") || "";
+      const make = csvToArr(searchParams.get("make"));
+      const model = csvToArr(searchParams.get("model"));
+      const trim = csvToArr(searchParams.get("trim"));
+      const bodyType = csvToArr(searchParams.get("body_type"));
       const minYear = searchParams.get("min_year") || "";
       const maxYear = searchParams.get("max_year") || "";
       const minPrice = searchParams.get("min_price") || "";
       const maxPrice = searchParams.get("max_price") || "";
       const minMiles = searchParams.get("min_miles") || "";
       const maxMiles = searchParams.get("max_miles") || "";
-      const exteriorColor = searchParams.get("exterior_color") || "";
-      const interiorColor = searchParams.get("interior_color") || "";
+      const exteriorColor = csvToArr(searchParams.get("exterior_color"));
+      const interiorColor = csvToArr(searchParams.get("interior_color"));
       const state = searchParams.get("state") || "";
       const zipCode = searchParams.get("zip_code") || "";
 
@@ -541,7 +877,13 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       const savedFilters = window.sessionStorage.getItem(SEARCH_FILTERS_KEY);
       if (savedFilters) {
         const restored = JSON.parse(savedFilters) as FilterState;
-        const hasFilters = restored.make || restored.model || restored.q
+        // Ensure array fields from older sessions are normalized
+        for (const k of ["make", "model", "trim", "body_type", "exterior_color", "interior_color"] as const) {
+          if (typeof restored[k] === "string") {
+            (restored as Record<string, unknown>)[k] = (restored[k] as unknown as string).split(",").filter(Boolean);
+          }
+        }
+        const hasFilters = restored.make?.length || restored.model?.length || restored.q
           || restored.min_year || restored.max_year || restored.min_price
           || restored.max_price || restored.min_miles || restored.max_miles
           || restored.zip_code;
@@ -570,12 +912,29 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   useEffect(() => {
     void loadFacets(filters);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.make, filters.model, filters.min_year, filters.max_year, filters.has_images]);
+  }, [facetRefreshKey]);
 
   useEffect(() => {
     if (!filtersReady) return;
     void loadInventory(appliedFilters, page);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtersReady, appliedFilters, page]);
+
+  useEffect(() => {
+    if (!pendingResultsScroll || loading) return;
+    if (!isStackedInventoryLayout()) {
+      setPendingResultsScroll(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setPendingResultsScroll(false);
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingResultsScroll, loading, rows.length, error, pagination.page]);
 
   // Lazy-fetch factory reference thumbnails once rows land.
   useEffect(() => {
@@ -626,6 +985,8 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
             }>("/me/profile", {}, auth.accessToken);
             if (res.status !== "ok" || !res.data?.bfv_json || !res.data.is_complete) return;
             const bfv = res.data.bfv_json;
+            const toArr = (v: unknown) =>
+              Array.isArray(v) ? v.map((s) => String(s).toLowerCase()) : [];
             const seed: Partial<FilterState> = {};
             if (bfv.delivery_zip) seed.zip_code = String(bfv.delivery_zip);
             if (bfv.year_min) seed.min_year = String(bfv.year_min);
@@ -634,6 +995,10 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
             if (bfv.budget_max) seed.max_price = String(bfv.budget_max);
             if (bfv.mileage_min) seed.min_miles = String(bfv.mileage_min);
             if (bfv.mileage_max) seed.max_miles = String(bfv.mileage_max);
+            const bodyTypes = toArr(bfv.body_types_included);
+            if (bodyTypes.length) seed.body_type = bodyTypes;
+            const brands = toArr(bfv.brands_included);
+            if (brands.length) seed.make = brands;
             if (Object.keys(seed).length) {
               setFilters((prev) => ({ ...prev, ...seed }));
               setAppliedFilters((prev) => ({ ...prev, ...seed }));
@@ -678,7 +1043,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
         SEARCH_CONTEXT_KEY,
         JSON.stringify({
           zip_code: nextFilters.zip_code,
-          radius: nextFilters.radius || "250",
+          radius: nextFilters.radius || "500",
         })
       );
       // Save full filter state to sessionStorage so it survives navigation
@@ -698,12 +1063,17 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
 
   async function loadFacets(currentFilters: FilterState) {
     const params = new URLSearchParams();
-    if (currentFilters.make.trim()) params.set("make", currentFilters.make.trim());
-    if (currentFilters.model.trim()) params.set("model", currentFilters.model.trim());
-    if (currentFilters.trim.trim()) params.set("trim", currentFilters.trim.trim());
+    if (currentFilters.q.trim()) params.set("q", currentFilters.q.trim());
+    if (currentFilters.make.length) params.set("make", currentFilters.make.join(","));
+    if (currentFilters.min_price.trim()) params.set("min_price", currentFilters.min_price.trim());
+    if (currentFilters.max_price.trim()) params.set("max_price", currentFilters.max_price.trim());
     if (currentFilters.min_year.trim()) params.set("min_year", currentFilters.min_year.trim());
     if (currentFilters.max_year.trim()) params.set("max_year", currentFilters.max_year.trim());
-    if (currentFilters.body_type.trim()) params.set("body_type", currentFilters.body_type.trim());
+    if (currentFilters.min_miles.trim()) params.set("min_miles", currentFilters.min_miles.trim());
+    if (currentFilters.max_miles.trim()) params.set("max_miles", currentFilters.max_miles.trim());
+    if (currentFilters.body_type.length) params.set("body_type", currentFilters.body_type.join(","));
+    if (currentFilters.exterior_color.length) params.set("exterior_color", currentFilters.exterior_color.join(","));
+    if (currentFilters.interior_color.length) params.set("interior_color", currentFilters.interior_color.join(","));
     if (currentFilters.state.trim()) params.set("state", currentFilters.state.trim().toUpperCase());
     if (currentFilters.source_type.trim()) {
       params.set("source_type", normalizeSourceFilterValue(currentFilters.source_type));
@@ -718,50 +1088,45 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       return;
     }
     setTaxonomy(response.data.taxonomy);
+    setFacets(response.data.facets || {});
   }
 
   async function loadInventory(currentFilters: FilterState, currentPage: number) {
     setLoading(true);
     setError(null);
 
-    // ZIP is optional for auction searches, VIN lookups, and specific make/model queries
-    const isAuctionSearch = currentFilters.source_type === "auction";
-    const isVinSearch = currentFilters.q.trim().length === 17 && /^[A-HJ-NPR-Z0-9]+$/i.test(currentFilters.q.trim());
-    const hasStructuredFilters = Boolean(currentFilters.make.trim() || currentFilters.model.trim());
-
-    if (!isAuctionSearch && !isVinSearch && !hasStructuredFilters && !currentFilters.zip_code.trim()) {
+    if (!currentFilters.zip_code.trim() || !currentFilters.radius.trim()) {
       setRows([]);
       setPagination(EMPTY_PAGINATION);
       setSyncMeta(EMPTY_SYNC);
-      setError("Enter a ZIP code, VIN, or specify a make/model to search inventory.");
+      setError("ZIP code and radius are required before searching inventory.");
       setLoading(false);
       return;
     }
 
     const params = new URLSearchParams();
+    const makeModelPairs = buildMakeModelPairs(taxonomy, currentFilters);
     if (currentFilters.q.trim()) params.set("q", currentFilters.q.trim());
-    if (currentFilters.make.trim()) params.set("make", currentFilters.make.trim());
-    if (currentFilters.model.trim()) params.set("model", currentFilters.model.trim());
-    if (currentFilters.trim.trim()) params.set("trim", currentFilters.trim.trim());
-    if (currentFilters.body_type.trim()) params.set("body_type", currentFilters.body_type.trim());
+    if (currentFilters.make.length) params.set("make", currentFilters.make.join(","));
+    if (currentFilters.model.length) params.set("model", currentFilters.model.join(","));
+    if (makeModelPairs.length) params.set("make_model_pairs", makeModelPairs.join(","));
+    if (currentFilters.trim.length) params.set("trim", currentFilters.trim.join(","));
+    if (currentFilters.body_type.length) params.set("body_type", currentFilters.body_type.join(","));
     if (currentFilters.source_type.trim()) {
       params.set("source_type", normalizeSourceFilterValue(currentFilters.source_type));
     }
     if (currentFilters.state.trim()) params.set("state", currentFilters.state.trim().toUpperCase());
 
-    // Only add ZIP and radius for non-auction searches or if ZIP is provided
-    if (currentFilters.zip_code.trim()) {
-      params.set("zip_code", currentFilters.zip_code.trim());
-      if (currentFilters.radius.trim()) params.set("radius", currentFilters.radius.trim());
-    }
+    params.set("zip_code", currentFilters.zip_code.trim());
+    params.set("radius", currentFilters.radius.trim());
     if (currentFilters.min_price.trim()) params.set("min_price", currentFilters.min_price.trim());
     if (currentFilters.max_price.trim()) params.set("max_price", currentFilters.max_price.trim());
     if (currentFilters.min_year.trim()) params.set("min_year", currentFilters.min_year.trim());
     if (currentFilters.max_year.trim()) params.set("max_year", currentFilters.max_year.trim());
     if (currentFilters.min_miles.trim()) params.set("min_miles", currentFilters.min_miles.trim());
     if (currentFilters.max_miles.trim()) params.set("max_miles", currentFilters.max_miles.trim());
-    if (currentFilters.exterior_color.trim()) params.set("exterior_color", currentFilters.exterior_color.trim());
-    if (currentFilters.interior_color.trim()) params.set("interior_color", currentFilters.interior_color.trim());
+    if (currentFilters.exterior_color.length) params.set("exterior_color", currentFilters.exterior_color.join(","));
+    if (currentFilters.interior_color.length) params.set("interior_color", currentFilters.interior_color.join(","));
     params.set("has_images", currentFilters.has_images ? "true" : "false");
     params.set("live_sync", currentFilters.live_sync ? "true" : "false");
     params.set("sync_limit", "72");
@@ -821,23 +1186,35 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   async function submitFilters(event: FormEvent) {
     event.preventDefault();
 
-    // For auction searches, ZIP code is optional
-    const isAuctionSearch = filters.source_type === "auction";
-
-    if (!isAuctionSearch && !filters.zip_code.trim()) {
-      setError("ZIP code is required to search inventory (except for auction vehicles).");
+    if (!filters.zip_code.trim() || !filters.radius.trim()) {
+      setError("ZIP code and radius are required before searching inventory.");
+      setOpenFilter(null);
       return;
     }
     await loadFacets(filters);
     persistSearchContext(filters);
     setPage(1);
     setAppliedFilters({ ...filters });
+    collapseMobileFilters();
+    queueMobileResultsScroll();
+  }
+
+  function goToPage(nextPage: number | ((current: number) => number)) {
+    setPage(nextPage);
+    queueMobileResultsScroll();
   }
 
   function resetFilters() {
+    try {
+      window.sessionStorage.removeItem(SEARCH_FILTERS_KEY);
+      window.localStorage.removeItem(SEARCH_CONTEXT_KEY);
+      window.history.replaceState(null, "", window.location.pathname);
+    } catch {
+      // Browser storage/history can fail in private modes; state reset still works.
+    }
     setFilters(INITIAL_FILTERS);
     setAppliedFilters(INITIAL_FILTERS);
-    persistSearchContext(INITIAL_FILTERS);
+    setError(null);
     setPage(1);
   }
 
@@ -917,8 +1294,8 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     } else if (response.data.ove_detail_refresh?.queued) {
       setGarageNotice(
         response.data.ove_detail_refresh.deduplicated
-          ? "Auction detail refresh was already queued for this vehicle."
-          : "Auction detail refresh queued. Images and condition data will update when the scraper responds."
+          ? "Inspection details are already being refreshed for this vehicle."
+          : "Inspection details requested. Images and condition data will update when they are ready."
       );
     } else {
       setGarageNotice("Vehicle saved to My Garage.");
@@ -969,7 +1346,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       return;
     }
     if (response.status !== "ok") {
-      setGarageError(response.error?.message || "Unable to start acquisition.");
+      setGarageError(response.error?.message || "Unable to start purchase.");
       setGarageActionVin(null);
       return;
     }
@@ -981,9 +1358,9 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     setGarageNotice(
       response.data.ove_detail_refresh?.queued
         ? response.data.ove_detail_refresh.deduplicated
-          ? "Acquisition started. Auction detail refresh was already in progress."
-          : "Acquisition started and auction detail refresh queued for the back office."
-        : "Acquisition started."
+          ? "Purchase started. Inspection details are already being refreshed."
+          : "Purchase started. Inspection details have been requested."
+        : "Purchase started."
     );
     setGarageActionVin(null);
     window.location.href = `/dashboard?vin=${encodeURIComponent(vin)}`;
@@ -1008,7 +1385,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       return;
     }
     if (response.status !== "ok") {
-      setGarageError(response.error?.message || "Unable to request condition report.");
+      setGarageError(response.error?.message || "Unable to request inspection report.");
       setGarageActionVin(null);
       return;
     }
@@ -1017,8 +1394,8 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     setGarageNotice(
       response.data.message ||
         (response.data.already_available
-          ? "Condition report is already available for this vehicle."
-          : "Condition report requested. The back office scraper queue has been updated.")
+          ? "Inspection report is already available for this vehicle."
+          : "Inspection report requested. We will update My Garage when it is ready.")
     );
     setGarageActionVin(null);
   }
@@ -1053,281 +1430,319 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
           </div>
 
           <form onSubmit={submitFilters} className="inventory-filter-form">
-            <label>
+            <div className="inventory-required-location">
+              <div className="inventory-mini-grid">
+                <label>
+                  ZIP Code
+                  <input
+                    className="input"
+                    inputMode="numeric"
+                    maxLength={5}
+                    placeholder="33028"
+                    required
+                    value={filters.zip_code}
+                    onChange={(event) =>
+                      updateFilters((prev) => ({
+                        ...prev,
+                        zip_code: event.target.value.replace(/\D/g, "").slice(0, 5),
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  Radius
+                  <select
+                    className="select"
+                    required
+                    value={filters.radius}
+                    onChange={(event) => updateFilters((prev) => ({ ...prev, radius: event.target.value }))}
+                  >
+                    {[25, 50, 75, 100, 150, 200, 250, 300, 400, 500].map((value) => (
+                      <option key={value} value={String(value)}>
+                        {value} miles
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <p className="inventory-required-note">* Required</p>
+            </div>
+
+            <label className="inventory-search-field">
               Search
               <input
                 className="input"
                 placeholder="VIN, make, model, trim"
                 value={filters.q}
-                onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))}
+                onChange={(event) => updateFilters((prev) => ({ ...prev, q: event.target.value }))}
               />
             </label>
 
-            <div className="inventory-mini-grid">
-              <label>
-                Make
-                <select
-                  className="select"
-                  value={filters.make}
-                  onChange={(event) =>
-                    updateFilters((prev) => ({
-                      ...prev,
-                      make: event.target.value,
-                      model: "",
-                      trim: "",
-                    }))
-                  }
-                >
-                  <option value="">Any Make</option>
-                  {(taxonomy?.make || []).map((bucket) => (
-                    <option key={bucket.item} value={bucket.item}>
-                      {bucket.item}
-                      {bucket.count ? ` (${bucket.count.toLocaleString()})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Model
-                <select
-                  className="select"
-                  value={filters.model}
-                  onChange={(event) =>
-                    updateFilters((prev) => ({
-                      ...prev,
-                      model: event.target.value,
-                      trim: "",
-                    }))
-                  }
-                  disabled={!filters.make}
-                >
-                  <option value="">{filters.make ? "Select Model" : "Choose Make First"}</option>
-                  {(taxonomy?.model || []).map((bucket) => (
-                    <option key={bucket.item} value={bucket.item}>
-                      {bucket.item}
-                      {bucket.count ? ` (${bucket.count.toLocaleString()})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="inventory-mini-grid">
-              <label>
-                Trim
-                <select
-                  className="select"
-                  value={filters.trim}
-                  onChange={(event) => updateFilters((prev) => ({ ...prev, trim: event.target.value }))}
-                  disabled={!filters.make || !filters.model}
-                >
-                  <option value="">{filters.model ? "Any Trim" : "Choose Model First"}</option>
-                  {(taxonomy?.trim || []).map((bucket) => (
-                    <option key={bucket.item} value={bucket.item}>
-                      {bucket.item}
-                      {bucket.count ? ` (${bucket.count.toLocaleString()})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Body Type
-                <input
-                  className="input"
-                  placeholder="SUV, Truck, Sed"
-                  value={filters.body_type}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, body_type: event.target.value }))}
-                />
-              </label>
-            </div>
-
-            <div className="inventory-mini-grid">
-              <label>
-                ZIP Code
-                <input
-                  className="input"
-                  inputMode="numeric"
-                  maxLength={5}
-                  placeholder="33028"
-                  value={filters.zip_code}
-                  onChange={(event) =>
-                    updateFilters((prev) => ({
-                      ...prev,
-                      zip_code: event.target.value.replace(/\D/g, "").slice(0, 5),
-                    }))
-                  }
-                />
-              </label>
-              <label>
-                Radius
-                <select
-                  className="select"
-                  value={filters.radius}
-                  onChange={(event) => updateFilters((prev) => ({ ...prev, radius: event.target.value }))}
-                >
-                  {[25, 50, 75, 100, 150, 200, 250].map((value) => (
-                    <option key={value} value={String(value)}>
-                      {value} miles
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="inventory-mini-grid">
-              <label>
-                Min Price
-                <input
-                  className="input"
-                  type="number"
-                  value={filters.min_price}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, min_price: event.target.value }))}
-                />
-              </label>
-              <label>
-                Max Price
-                <input
-                  className="input"
-                  type="number"
-                  value={filters.max_price}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, max_price: event.target.value }))}
-                />
-              </label>
-            </div>
-
-            <div className="inventory-mini-grid">
-              <label>
-                Min Year
-                <input
-                  className="input"
-                  type="number"
-                  value={filters.min_year}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, min_year: event.target.value }))}
-                />
-              </label>
-              <label>
-                Max Year
-                <input
-                  className="input"
-                  type="number"
-                  value={filters.max_year}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, max_year: event.target.value }))}
-                />
-              </label>
-            </div>
-
-            <div className="inventory-mini-grid">
-              <label>
-                Min Miles
-                <input
-                  className="input"
-                  type="number"
-                  value={filters.min_miles}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, min_miles: event.target.value }))}
-                />
-              </label>
-              <label>
-                Max Miles
-                <input
-                  className="input"
-                  type="number"
-                  value={filters.max_miles}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, max_miles: event.target.value }))}
-                />
-              </label>
-            </div>
-
-            <div className="inventory-mini-grid">
-              <label>
-                Exterior Color
-                <select
-                  className="select"
-                  value={filters.exterior_color}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, exterior_color: event.target.value }))}
-                >
-                  <option value="">Chose Color</option>
-                  {EXTERIOR_COLOR_OPTIONS.map((color) => (
-                    <option key={color} value={color}>{color}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Interior Color
-                <select
-                  className="select"
-                  value={filters.interior_color}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, interior_color: event.target.value }))}
-                >
-                  <option value="">Chose Color</option>
-                  {INTERIOR_COLOR_OPTIONS.map((color) => (
-                    <option key={color} value={color}>{color}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <label>
-              Source
-              <select
-                className="select"
-                value={filters.source_type}
-                onChange={(event) => setFilters((prev) => ({ ...prev, source_type: event.target.value }))}
-              >
-                <option value="">Any</option>
-                <option value="auction">Wholesale Direct</option>
-                <option value="wholesale">Surplus Inventory</option>
-                <option value="dealer_partner">Partner Network</option>
-              </select>
-            </label>
-
-            <div className="inventory-mini-grid">
-              <label>
-                Sort By
-                <select
-                  className="select"
-                  value={filters.sort_by}
-                  onChange={(event) =>
-                    setFilters((prev) => ({ ...prev, sort_by: event.target.value as FilterState["sort_by"] }))
-                  }
-                >
-                  <option value="updated_at">Recently Updated</option>
-                  <option value="price_asking">Price</option>
-                  <option value="year">Year</option>
-                  <option value="odometer">Mileage</option>
-                </select>
-              </label>
-              <label>
-                Direction
-                <select
-                  className="select"
-                  value={filters.sort_dir}
-                  onChange={(event) =>
-                    setFilters((prev) => ({ ...prev, sort_dir: event.target.value as FilterState["sort_dir"] }))
-                  }
-                >
-                  <option value="desc">Descending</option>
-                  <option value="asc">Ascending</option>
-                </select>
-              </label>
-            </div>
-
-            <label className="inventory-toggle">
-              <input
-                type="checkbox"
-                checked={filters.has_images}
-                onChange={(event) => setFilters((prev) => ({ ...prev, has_images: event.target.checked }))}
+            <FilterSection
+              id="body_type"
+              title="Body Type"
+              selectedCount={filters.body_type.length}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <MultiSelectList
+                label="Body Type"
+                options={facets.body_type || []}
+                selected={filters.body_type}
+                onChange={(next) => updateFilters((prev) => ({ ...prev, body_type: next }))}
+                showLabel={false}
               />
-              Only show vehicles with photos
-            </label>
+            </FilterSection>
 
-            <label className="inventory-toggle">
-              <input
-                type="checkbox"
-                checked={filters.live_sync}
-                onChange={(event) => setFilters((prev) => ({ ...prev, live_sync: event.target.checked }))}
+            <FilterSection
+              id="make"
+              title="Make"
+              selectedCount={filters.make.length}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <MultiSelectList
+                label="Make"
+                options={makeOptions}
+                selected={filters.make}
+                onChange={(next) => updateFilters((prev) => ({ ...prev, make: next, model: [], trim: [] }))}
+                showLabel={false}
               />
-              Trigger live wholesale sync on search
-            </label>
+            </FilterSection>
+
+            <FilterSection
+              id="model"
+              title="Model"
+              selectedCount={filters.model.length}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <MultiSelectList
+                label="Model"
+                options={modelOptions}
+                selected={filters.model}
+                onChange={(next) => updateFilters((prev) => ({ ...prev, model: next, trim: [] }))}
+                showLabel={false}
+              />
+            </FilterSection>
+
+            <FilterSection
+              id="trim"
+              title="Trim"
+              selectedCount={filters.trim.length}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <MultiSelectList
+                label="Trim"
+                options={trimOptions}
+                selected={filters.trim}
+                onChange={(next) => updateFilters((prev) => ({ ...prev, trim: next }))}
+                showLabel={false}
+              />
+            </FilterSection>
+
+            <FilterSection
+              id="price"
+              title="Price"
+              selectedCount={[filters.min_price, filters.max_price].filter((value) => value.trim()).length}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <div className="inventory-mini-grid">
+                <label>
+                  Min Price
+                  <input
+                    className="input"
+                    type="number"
+                    value={filters.min_price}
+                    onChange={(event) => setFilters((prev) => ({ ...prev, min_price: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  Max Price
+                  <input
+                    className="input"
+                    type="number"
+                    value={filters.max_price}
+                    onChange={(event) => setFilters((prev) => ({ ...prev, max_price: event.target.value }))}
+                  />
+                </label>
+              </div>
+            </FilterSection>
+
+            <FilterSection
+              id="year"
+              title="Year"
+              selectedCount={[filters.min_year, filters.max_year].filter((value) => value.trim()).length}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <div className="inventory-mini-grid">
+                <label>
+                  Min Year
+                  <input
+                    className="input"
+                    type="number"
+                    value={filters.min_year}
+                    onChange={(event) => setFilters((prev) => ({ ...prev, min_year: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  Max Year
+                  <input
+                    className="input"
+                    type="number"
+                    value={filters.max_year}
+                    onChange={(event) => setFilters((prev) => ({ ...prev, max_year: event.target.value }))}
+                  />
+                </label>
+              </div>
+            </FilterSection>
+
+            <FilterSection
+              id="mileage"
+              title="Mileage"
+              selectedCount={[filters.min_miles, filters.max_miles].filter((value) => value.trim()).length}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <div className="inventory-mini-grid">
+                <label>
+                  Min Miles
+                  <input
+                    className="input"
+                    type="number"
+                    value={filters.min_miles}
+                    onChange={(event) => setFilters((prev) => ({ ...prev, min_miles: event.target.value }))}
+                  />
+                </label>
+                <label>
+                  Max Miles
+                  <input
+                    className="input"
+                    type="number"
+                    value={filters.max_miles}
+                    onChange={(event) => setFilters((prev) => ({ ...prev, max_miles: event.target.value }))}
+                  />
+                </label>
+              </div>
+            </FilterSection>
+
+            <FilterSection
+              id="exterior_color"
+              title="Exterior Color"
+              selectedCount={filters.exterior_color.length}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <MultiSelectList
+                label="Exterior Color"
+                options={EXTERIOR_COLOR_OPTIONS.map((c) => ({ item: c }))}
+                selected={filters.exterior_color}
+                onChange={(next) => setFilters((prev) => ({ ...prev, exterior_color: next }))}
+                maxVisible={EXTERIOR_COLOR_OPTIONS.length}
+                showLabel={false}
+              />
+            </FilterSection>
+
+            <FilterSection
+              id="interior_color"
+              title="Interior Color"
+              selectedCount={filters.interior_color.length}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <MultiSelectList
+                label="Interior Color"
+                options={INTERIOR_COLOR_OPTIONS.map((c) => ({ item: c }))}
+                selected={filters.interior_color}
+                onChange={(next) => setFilters((prev) => ({ ...prev, interior_color: next }))}
+                maxVisible={INTERIOR_COLOR_OPTIONS.length}
+                showLabel={false}
+              />
+            </FilterSection>
+
+            <FilterSection
+              id="source"
+              title="Source"
+              selectedCount={filters.source_type ? 1 : 0}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <label>
+                Source
+                <select
+                  className="select"
+                  value={filters.source_type}
+                  onChange={(event) => setFilters((prev) => ({ ...prev, source_type: event.target.value }))}
+                >
+                  <option value="">Any</option>
+                  <option value="auction">Wholesale Direct</option>
+                  <option value="wholesale">Surplus Inventory</option>
+                  <option value="dealer_partner">Partner Network</option>
+                </select>
+              </label>
+            </FilterSection>
+
+            <FilterSection id="sort" title="Sort" openId={openFilter} onToggle={toggleFilterSection}>
+              <div className="inventory-mini-grid">
+                <label>
+                  Sort By
+                  <select
+                    className="select"
+                    value={filters.sort_by}
+                    onChange={(event) =>
+                      setFilters((prev) => ({ ...prev, sort_by: event.target.value as FilterState["sort_by"] }))
+                    }
+                  >
+                    <option value="updated_at">Recently Updated</option>
+                    <option value="price_asking">Price</option>
+                    <option value="year">Year</option>
+                    <option value="odometer">Mileage</option>
+                  </select>
+                </label>
+                <label>
+                  Direction
+                  <select
+                    className="select"
+                    value={filters.sort_dir}
+                    onChange={(event) =>
+                      setFilters((prev) => ({ ...prev, sort_dir: event.target.value as FilterState["sort_dir"] }))
+                    }
+                  >
+                    <option value="desc">Descending</option>
+                    <option value="asc">Ascending</option>
+                  </select>
+                </label>
+              </div>
+            </FilterSection>
+
+            <FilterSection
+              id="options"
+              title="Options"
+              selectedCount={[filters.has_images, filters.live_sync].filter(Boolean).length}
+              openId={openFilter}
+              onToggle={toggleFilterSection}
+            >
+              <label className="inventory-toggle">
+                <input
+                  type="checkbox"
+                  checked={filters.has_images}
+                  onChange={(event) => setFilters((prev) => ({ ...prev, has_images: event.target.checked }))}
+                />
+                Only show vehicles with photos
+              </label>
+
+              <label className="inventory-toggle">
+                <input
+                  type="checkbox"
+                  checked={filters.live_sync}
+                  onChange={(event) => setFilters((prev) => ({ ...prev, live_sync: event.target.checked }))}
+                />
+                Refresh current inventory on search
+              </label>
+            </FilterSection>
 
             <div className="inventory-actions">
               <button className="button" type="submit" disabled={loading}>
@@ -1340,7 +1755,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
           </form>
         </aside>
 
-        <section className="inventory-main">
+        <section className="inventory-main" ref={resultsRef}>
           <header className="card inventory-results-header">
             <div>
               <h3 style={{ marginTop: 0, marginBottom: 6 }}>Vehicle Listings</h3>
@@ -1353,11 +1768,10 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
               <span className="badge">Garage: {garageItems.length}</span>
               {syncMeta.requested ? (
                 <span className="badge">
-                  {syncWarning ? "Local DB fallback" : `Sync ${syncMeta.executed ? syncMeta.mode : "pending"}`} | +
-                  {syncMeta.inserted} new / {syncMeta.updated} upd
+                  {syncWarning ? "Saved results" : syncMeta.executed ? "Inventory refreshed" : "Checking inventory"}
                 </span>
               ) : (
-                <span className="badge">Local DB search</span>
+                <span className="badge">Saved inventory</span>
               )}
               {auth?.accessToken ? (
                 <>
@@ -1454,8 +1868,8 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                       {item.features_preview?.length
                         ? item.features_preview.join(" • ")
                         : item.source_type === "ove" || item.source_type === "auction"
-                          ? "Auction listing with live pricing. Condition reports unlock as the buyer workflow advances."
-                          : `${toPublicSourceLabel(item.source_label, item.source_filter_value || item.source_type)} listing with synced specs and media.`}
+                          ? "Wholesale listing with live pricing. Inspection reports unlock as you get closer to buying."
+                          : `${toPublicSourceLabel(item.source_label, item.source_filter_value || item.source_type)} listing with current specs and media.`}
                     </p>
 
                     <div className="inventory-actions inventory-card-actions">
@@ -1477,7 +1891,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
             <section className="card inventory-pagination">
               <button
                 className="button ghost"
-                onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                onClick={() => goToPage((prev) => Math.max(1, prev - 1))}
                 disabled={!pagination.has_prev || loading}
               >
                 Previous
@@ -1486,7 +1900,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                 <button
                   key={value}
                   className={`button ${value === pagination.page ? "" : "ghost"}`}
-                  onClick={() => setPage(value)}
+                  onClick={() => goToPage(value)}
                   disabled={loading}
                 >
                   {value}
@@ -1494,7 +1908,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
               ))}
               <button
                 className="button ghost"
-                onClick={() => setPage((prev) => prev + 1)}
+                onClick={() => goToPage((prev) => prev + 1)}
                 disabled={!pagination.has_next || loading}
               >
                 Next
@@ -1659,7 +2073,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                         onClick={() => requestConditionReport(selectedVehicle.vin)}
                         disabled={garageActionVin === selectedVehicle.vin}
                       >
-                        {garageActionVin === selectedVehicle.vin ? "Requesting..." : "Request Condition Report"}
+                        {garageActionVin === selectedVehicle.vin ? "Requesting..." : "Request Inspection Report"}
                       </button>
                     ) : null}
                     {canAccessConditionReports(auth, { isPreapproved }) && selectedVehicle.has_inspection_report ? (
@@ -1675,14 +2089,14 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                       onClick={() => startAcquisition(selectedVehicle.vin)}
                       disabled={garageActionVin === selectedVehicle.vin}
                     >
-                      {garageActionVin === selectedVehicle.vin ? "Starting..." : "Start Acquisition"}
+                      {garageActionVin === selectedVehicle.vin ? "Starting..." : "Start Purchase"}
                     </button>
                     <Link className="button ghost" href={`/vinventory/${encodeURIComponent(publicIdentifier(selectedVehicle))}` as any}>
                       Full Detail Page
                     </Link>
                     {selectedVehicle.source_url ? (
                       <a className="button ghost" href={selectedVehicle.source_url} target="_blank" rel="noreferrer">
-                        Open Source Listing
+                        Open Original Listing
                       </a>
                     ) : null}
                   </div>

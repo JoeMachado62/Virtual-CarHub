@@ -2,17 +2,17 @@
 const CONTACT_OPTIONS = [
   {
     title: "Buyer support",
-    body: "Questions about inventory, My Garage, condition reports, or how the buying process works.",
+    body: "Questions about inventory, My Garage, inspection reports, or how the buying process works.",
     action: "info@virtualcarhub.com"
   },
   {
-    title: "Talk to Danny",
-    body: "Use the assistant-driven flow when you want help describing the vehicle and deal you are trying to build.",
+    title: "Ask Danny",
+    body: "Ask Danny, your AI deal advisor, to help describe the vehicle and deal you want.",
     action: "+1 833-EZ-AUTOS"
   },
   {
-    title: "Delivery + acquisition",
-    body: "Once you are deep in the purchase loop, logistics and handoff questions should stay in the same workflow.",
+    title: "Purchase + delivery",
+    body: "Once you are moving forward, logistics and delivery questions stay connected to the same buying process.",
     action: "VirtualCarHub operations"
   }
 ];
@@ -23,10 +23,10 @@ export default function ContactPage() {
       <section className="section-shell page-hero compact" id="talk-to-danny">
         <div className="section-heading">
           <p className="section-eyebrow">Contact</p>
-          <h1>Talk to a real system with a real workflow behind it.</h1>
+          <h1>Need help with a car, financing, or delivery?</h1>
           <p className="muted-copy">
-            The goal is to keep buyers inside one coherent experience instead of bouncing between forms, inboxes, and
-            disconnected dealership departments.
+            Ask Danny or reach the VirtualCarHub team. We keep your questions, saved vehicles, inspection reports,
+            and purchase steps in one place.
           </p>
         </div>
       </section>

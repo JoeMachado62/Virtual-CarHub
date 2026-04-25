@@ -7,6 +7,17 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { ThemeToggle } from "@/components/ThemeToggle";
+import {
+  FaInstagram,
+  FaThreads,
+  FaTiktok,
+  FaXTwitter,
+  FaPinterest,
+  FaTumblr,
+  FaYoutube,
+  FaLinkedinIn,
+  FaFacebookF,
+} from "react-icons/fa6";
 
 const NAV_ITEMS: Array<{ href: Route; label: string }> = [
   { href: "/", label: "Home" },
@@ -63,12 +74,15 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
               <a href="mailto:info@virtualcarhub.com">info@virtualcarhub.com</a>
             </div>
             <div className="topbar-tools">
-              <a href="https://www.linkedin.com" target="_blank" rel="noreferrer">
-                LinkedIn
-              </a>
-              <a href="https://www.facebook.com" target="_blank" rel="noreferrer">
-                Facebook
-              </a>
+              <a href="https://www.instagram.com/virtual_carhub" target="_blank" rel="noreferrer" aria-label="Instagram"><FaInstagram /></a>
+              <a href="https://www.threads.com/@virtual_carhub" target="_blank" rel="noreferrer" aria-label="Threads"><FaThreads /></a>
+              <a href="https://www.tiktok.com/@virtual_carhub" target="_blank" rel="noreferrer" aria-label="TikTok"><FaTiktok /></a>
+              <a href="https://x.com/virtualcarhub" target="_blank" rel="noreferrer" aria-label="X"><FaXTwitter /></a>
+              <a href="https://www.pinterest.com/virtualcarhub" target="_blank" rel="noreferrer" aria-label="Pinterest"><FaPinterest /></a>
+              <a href="https://www.tumblr.com/virtualcarhub" target="_blank" rel="noreferrer" aria-label="Tumblr"><FaTumblr /></a>
+              <a href="https://www.youtube.com/@virtualcarhub" target="_blank" rel="noreferrer" aria-label="YouTube"><FaYoutube /></a>
+              <a href="https://www.linkedin.com/company/virtualcarhub" target="_blank" rel="noreferrer" aria-label="LinkedIn"><FaLinkedinIn /></a>
+              <a href="https://www.facebook.com/virtualcarhub" target="_blank" rel="noreferrer" aria-label="Facebook"><FaFacebookF /></a>
               <ThemeToggle />
             </div>
           </div>
@@ -85,7 +99,7 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
                 My Garage
               </Link>
               <Link href="/contact#talk-to-danny" className="button">
-                Talk to Danny
+                Ask Danny
               </Link>
             </div>
 
@@ -119,7 +133,7 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
                 My Garage
               </Link>
               <Link href="/contact#talk-to-danny" className="button">
-                Talk to Danny
+                Ask Danny
               </Link>
             </div>
           </div>
@@ -147,7 +161,7 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
               My Garage
             </Link>
             <Link href="/contact#talk-to-danny" className="button" onClick={() => setMobileMenuOpen(false)}>
-              Talk to Danny
+              Ask Danny
             </Link>
           </div>
         </nav>
@@ -162,8 +176,8 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
           <section>
             <img src={logoPath} alt="VirtualCarHub" className="footer-logo" />
             <p className="footer-copy">
-              VirtualCarHub is the AI-first wholesale buying experience built around transparency, speed, and buyer
-              control.
+              VirtualCarHub helps buyers access wholesale channels, compare the real deal math, and avoid commissioned
+              sales pressure.
             </p>
           </section>
           <section>
@@ -179,8 +193,8 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
             <h3>Buyer Tools</h3>
             <div className="footer-links">
               <Link href="/dashboard">My Garage</Link>
-              <Link href="/vinventory">Order Condition Report</Link>
-              <Link href="/contact#talk-to-danny">Talk to Danny</Link>
+              <Link href="/vinventory">Request Inspection Report</Link>
+              <Link href="/contact#talk-to-danny">Ask Danny</Link>
               <Link href="/blog">Latest Insights</Link>
             </div>
           </section>

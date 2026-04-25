@@ -441,8 +441,8 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
         .map((item) => garageTitle(item));
       setGarageMessage(
         completedTitles.length === 1
-          ? `${completedTitles[0]} condition report is ready.`
-          : `${completedTitles.length} condition reports are now ready.`,
+          ? `${completedTitles[0]} inspection report is ready.`
+          : `${completedTitles.length} inspection reports are now ready.`,
       );
     }
   }
@@ -520,7 +520,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       auth.accessToken
     );
     if (response.status !== "ok") {
-      setGarageError(response.error?.message || "Unable to request condition report.");
+      setGarageError(response.error?.message || "Unable to request inspection report.");
       setGarageActionVin(null);
       return;
     }
@@ -550,11 +550,11 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     setGarageMessage(null);
     const response = await apiFetch(`/me/garage/${vin}/acquire`, { method: "POST" }, auth.accessToken);
     if (response.status !== "ok") {
-      setGarageError(response.error?.message || "Unable to start acquisition.");
+      setGarageError(response.error?.message || "Unable to start purchase.");
       setGarageActionVin(null);
       return;
     }
-    setGarageMessage("Acquisition started. Returning the latest garage state.");
+    setGarageMessage("Purchase started. Returning the latest garage state.");
     await refreshData();
     setGarageActionVin(null);
   }
@@ -597,13 +597,13 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
         <div className="dashboard-onboarding-header">
           <span className="section-eyebrow">Welcome to My Garage</span>
           <h2>You&apos;re all set, {regFirstName || "there"}!</h2>
-          <p>Your account has been created. Let Danny help find your ideal vehicle — or jump straight into browsing.</p>
+          <p>Your account has been created. Let Danny help find the right wholesale deal, or jump straight into browsing.</p>
         </div>
 
         <div className="dashboard-onboarding-choices">
           <div className="dashboard-onboarding-option dashboard-onboarding-option-primary">
             <h3>Danny&apos;s Onboarding</h3>
-            <p>Answer a few quick questions about what you&apos;re looking for — body type, budget, priorities — and Danny will start matching you with the best vehicles right away.</p>
+            <p>Answer a few quick questions about body type, budget, and priorities. Danny will start matching you with better-fit vehicles right away.</p>
             <p className="badge">Takes about 60 seconds</p>
             <button
               className="button"
@@ -763,7 +763,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
           <div className="dashboard-onboarding-header">
             <span className="section-eyebrow">Danny&apos;s Onboarding</span>
             <h2>Let&apos;s find your ideal vehicle</h2>
-            <p>Fill out the Quick Match below, and Danny will immediately start matching you with vehicles that fit your criteria.</p>
+            <p>Fill out Quick Match below, and Danny will start matching you with vehicles that fit your budget and priorities.</p>
           </div>
           <QuickMatchForm
             accessToken={accessToken}
@@ -785,10 +785,9 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
         <div className="dashboard-overview-head">
           <div className="dashboard-overview-copy">
             <p className="section-eyebrow">Deal Workspace</p>
-            <h2>Track your buying journey, keep saved units organized, and move the active car forward in the buying process.</h2>
+            <h2>Track your buying journey, keep saved cars organized, and move the right vehicle forward.</h2>
             <p className="muted-copy">
-              The dashboard uses the same account session as VInventory. Saved vehicles, Condition Reports (CR&apos;s), and
-              acquisition stage stay in sync here.
+              My Garage keeps saved vehicles, inspection reports, messages, and purchase status in one place.
             </p>
           </div>
           <div className="dashboard-toolbar">
@@ -821,7 +820,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
           </article>
           <article className="metric">
             <strong>{selectedGarageItem ? garageTitle(selectedGarageItem) : "None selected"}</strong>
-            <span>Current acquisition target</span>
+            <span>Current purchase target</span>
           </article>
         </div>
 
@@ -831,7 +830,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
         ) : null}
         {deal && !deal.condition_report_eligible ? (
           <p className="dashboard-muted-note">
-            Condition reports are gated at the current deal stage. {deal.condition_report_eligibility_reason}
+            Inspection reports become available later in the buying process. {deal.condition_report_eligibility_reason}
           </p>
         ) : null}
         {normalizedRequestedVin && !garageItems.some((item) => item.vin === normalizedRequestedVin) ? (
@@ -843,7 +842,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
 
       <section className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <h2 style={{ margin: 0 }}>Deal Lifecycle Tracker</h2>
+          <h2 style={{ margin: 0 }}>Purchase Status</h2>
           {deal?.assigned_agent ? <span className="badge">Assigned agent: {deal.assigned_agent}</span> : null}
         </div>
         <DealTracker stage={deal?.stage || "LEAD"} />
@@ -855,7 +854,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
             <div>
               <h2 style={{ margin: 0 }}>My Garage</h2>
               <p className="dashboard-muted-note" style={{ marginBottom: 0 }}>
-                Saved auction and inventory vehicles stay attached to the active deal.
+                Saved wholesale and inventory vehicles stay connected to your buying journey.
               </p>
             </div>
             <span className="badge">{garageItems.length} saved</span>
@@ -912,13 +911,13 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                       </Link>
                       {item.has_inspection_report ? (
                         <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}/condition-report`}>
-                          CR Available
+                          Inspection Report Ready
                         </Link>
                       ) : null}
                       {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
                       !item.has_inspection_report && pendingReportVins.has(item.vin) ? (
                         <button className="button ghost-mint" disabled>
-                          CR Pending
+                          Inspection Report Pending
                         </button>
                       ) : null}
                       {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
@@ -928,11 +927,11 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                           onClick={() => requestConditionReport(item.vin)}
                           disabled={itemActionLoading}
                         >
-                          {itemActionLoading ? "Requesting..." : item.cr_request_status === "terminal" ? "Retry CR" : "Order CR"}
+                          {itemActionLoading ? "Requesting..." : item.cr_request_status === "terminal" ? "Retry Report" : "Request Inspection Report"}
                         </button>
                       ) : null}
                       <button className="button" onClick={() => startGarageAcquisition(item.vin)} disabled={itemActionLoading}>
-                        {itemActionLoading ? "Starting..." : "Start Acquisition"}
+                        {itemActionLoading ? "Starting..." : "Start Purchase"}
                       </button>
                       <button className="button ghost-danger" onClick={() => removeFromGarage(item.vin)} disabled={itemActionLoading}>
                         Remove
@@ -951,7 +950,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
               <p className="section-eyebrow">Garage Spotlight</p>
               <h2>{spotlightItem ? garageTitle(spotlightItem) : "Waiting for a saved vehicle"}</h2>
             </div>
-            {spotlightItem?.vin === deal?.selected_vin ? <span className="badge">Primary acquisition target</span> : null}
+            {spotlightItem?.vin === deal?.selected_vin ? <span className="badge">Primary purchase target</span> : null}
           </div>
 
           {spotlightItem ? (
@@ -995,7 +994,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                 <p className="dashboard-muted-note">
                   Added {formatDate(spotlightItem.added_at)}
                   {spotlightItem.acquisition_started_at
-                    ? ` • Acquisition started ${formatDate(spotlightItem.acquisition_started_at)}`
+                    ? ` • Purchase started ${formatDate(spotlightItem.acquisition_started_at)}`
                     : ""}
                 </p>
               </div>
@@ -1005,7 +1004,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                 </Link>
                 {canAccessConditionReports(auth, { isPreapproved }) && spotlightItem.has_inspection_report ? (
                   <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(spotlightItem.public_slug || spotlightItem.vin)}/condition-report`}>
-                    CR Available
+                    Inspection Report Ready
                   </Link>
                 ) : null}
                 <button
@@ -1013,7 +1012,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                   onClick={() => startGarageAcquisition(spotlightItem.vin)}
                   disabled={garageActionVin === spotlightItem.vin}
                 >
-                  {garageActionVin === spotlightItem.vin ? "Starting..." : "Start Acquisition"}
+                  {garageActionVin === spotlightItem.vin ? "Starting..." : "Start Purchase"}
                 </button>
               </div>
             </>
@@ -1061,20 +1060,20 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
             <div className="dashboard-cr-modal-media">
               <img src={crRequestModal.imageUrl} alt={crRequestModal.title} />
               <div className="dashboard-cr-modal-badge">
-                {crRequestModal.alreadyAvailable ? "CR Ready" : "CR In Progress"}
+                {crRequestModal.alreadyAvailable ? "Report Ready" : "Report In Progress"}
               </div>
             </div>
             <div className="dashboard-cr-modal-copy">
               <p className="section-eyebrow" style={{ marginBottom: 8 }}>
-                Condition Report
+                Inspection Report
               </p>
               <h3 id="dashboard-cr-modal-title">
-                {crRequestModal.alreadyAvailable ? "Your report is already available." : "We’re generating your report now."}
+                {crRequestModal.alreadyAvailable ? "Your report is already available." : "We’re preparing your report now."}
               </h3>
               <p>
                 {crRequestModal.alreadyAvailable
-                  ? `${crRequestModal.title} already has a condition report ready in your garage.`
-                  : `${crRequestModal.title} has been queued for condition-report generation. We’ll notify you when it’s complete, and this page will automatically update from Order CR to CR Available.`}
+                  ? `${crRequestModal.title} already has an inspection report ready in your garage.`
+                  : `${crRequestModal.title} has been queued for inspection report preparation. We’ll notify you when it’s complete, and this page will automatically update when the report is ready.`}
               </p>
               <div className="dashboard-cr-modal-actions">
                 {crRequestModal.alreadyAvailable ? (

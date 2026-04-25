@@ -10,6 +10,9 @@ function sanitizeApiBase(configuredBase?: string): string {
 
   try {
     const url = new URL(value, window.location.origin);
+    if (isLocalHostname(url.hostname) && url.port === "8000") {
+      return url.pathname.replace(/\/$/, "") || "/v1";
+    }
     if (isLocalHostname(url.hostname) && !isLocalHostname(window.location.hostname)) {
       return "/v1";
     }

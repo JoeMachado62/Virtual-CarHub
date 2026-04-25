@@ -97,3 +97,22 @@ class MarketCheckClient(ExternalServiceClient):
                 "sample_count": len(prices),
                 "source": "search_fallback",
             }
+
+    def get_marketcheck_price(self, params: dict) -> dict:
+        """GET /v2/predict/car/us/marketcheck_price — model-based market value."""
+        if not self.live:
+            return {"marketcheck_price": None, "source": "stub"}
+        payload = self._with_api_key(params, use_price_key=True)
+        return self._request("GET", "/predict/car/us/marketcheck_price", params=payload)
+
+    def get_market_days_supply(self, params: dict) -> dict:
+        """GET /v2/mds/car — market days supply and 45-day inferred sales."""
+        if not self.live:
+            return {
+                "mds": None,
+                "total_active_cars_for_ymmt": 0,
+                "total_cars_sold_in_last_45_days": 0,
+                "source": "stub",
+            }
+        payload = self._with_api_key(params)
+        return self._request("GET", "/mds/car", params=payload)

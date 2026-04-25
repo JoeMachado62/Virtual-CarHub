@@ -334,7 +334,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   if (loading || authorized === null) {
     return (
       <main className="page-stack">
-        <section className="card">Loading condition report...</section>
+        <section className="card">Loading inspection report...</section>
       </main>
     );
   }
@@ -345,7 +345,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vin)}` as any}>
           Back to Vehicle
         </Link>
-        <section className="card">Condition reports are only available to administrative users.</section>
+        <section className="card">Inspection reports are available after buyer approval or administrator review.</section>
       </main>
     );
   }
@@ -356,7 +356,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vin)}` as any}>
           Back to Vehicle
         </Link>
-        <section className="card">{error || "Condition report unavailable."}</section>
+        <section className="card">{error || "Inspection report unavailable."}</section>
       </main>
     );
   }
@@ -367,14 +367,14 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         {/* ── HEADER ── */}
         <section className="cr-doc-header">
           <div className="cr-doc-header-inner">
-            <h2 className="cr-doc-brand">VCH Condition Report</h2>
+            <h2 className="cr-doc-brand">VirtualCarHub Inspection Report</h2>
             <div className="cr-doc-header-actions">
               <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vehicle.public_slug || vehicle.vin)}` as any}>
                 Back to Vehicle
               </Link>
               {isAdmin && crUrl && (
                 <button className="button" onClick={() => window.open(crUrl, "_blank", "noopener,noreferrer")}>
-                  See Original CR
+                  See Original Report
                 </button>
               )}
               <button className="button ghost" onClick={() => window.print()}>Print</button>
@@ -703,7 +703,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
                   <strong>AutoCheck data temporarily unavailable</strong>
                   <p>
                     {autocheck.failure_message ||
-                      "We could not retrieve the Experian AutoCheck history on this pass. The rest of the condition report is still available."}
+                      "We could not retrieve the Experian AutoCheck history on this pass. The rest of the inspection report is still available."}
                   </p>
                 </div>
                 {autocheck.attempted_at && (
@@ -804,7 +804,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         {isAdmin && crUrl && (
           <section className="cr-section" style={{ textAlign: "center", padding: "20px 0" }}>
             <button className="button" onClick={() => window.open(crUrl, "_blank", "noopener,noreferrer")} style={{ fontSize: 16, padding: "12px 32px" }}>
-              See Original Condition Report
+              See Original Inspection Report
             </button>
           </section>
         )}

@@ -620,9 +620,35 @@ def test_search_applies_zip_radius_to_auction_inventory() -> None:
 def test_inventory_taxonomy_cache_sync_and_facets() -> None:
     init_db()
     client = StubMarketCheckTaxonomyClient()
+    taxonomy_vins = ["TAXONOMY-CIVIC-EX", "TAXONOMY-CIVIC-ST"]
 
     with SessionLocal() as db:
         db.execute(delete(VehicleTaxonomyCache))
+        db.execute(delete(Vehicle).where(Vehicle.vin.in_(taxonomy_vins)))
+        db.add_all(
+            [
+                Vehicle(
+                    vin=taxonomy_vins[0],
+                    year=2024,
+                    make="Honda",
+                    model="Civic",
+                    trim="EX",
+                    body_type="Sedan",
+                    price_asking=24500,
+                    available=True,
+                ),
+                Vehicle(
+                    vin=taxonomy_vins[1],
+                    year=2025,
+                    make="Honda",
+                    model="Civic",
+                    trim="Sport Touring",
+                    body_type="Hatchback",
+                    price_asking=31500,
+                    available=True,
+                ),
+            ]
+        )
         db.commit()
 
         report = sync_marketcheck_taxonomy_cache(db, client=client, start_year=2024, end_year=2025)
@@ -630,8 +656,29 @@ def test_inventory_taxonomy_cache_sync_and_facets() -> None:
 
         assert report.inserted == 5
         assert report.deleted == 0
+        civic_ex = db.scalar(
+            select(VehicleTaxonomyCache).where(
+                VehicleTaxonomyCache.year == 2024,
+                VehicleTaxonomyCache.make == "Honda",
+                VehicleTaxonomyCache.model == "Civic",
+                VehicleTaxonomyCache.trim == "EX",
+            )
+        )
+        civic_sport_touring = db.scalar(
+            select(VehicleTaxonomyCache).where(
+                VehicleTaxonomyCache.year == 2025,
+                VehicleTaxonomyCache.make == "Honda",
+                VehicleTaxonomyCache.model == "Civic",
+                VehicleTaxonomyCache.trim == "Sport Touring",
+            )
+        )
+        assert civic_ex is not None
+        assert civic_ex.body_type == "Sedan"
+        assert civic_sport_touring is not None
+        assert civic_sport_touring.body_type == "Hatchback"
 
         response = inventory_facets(
+            q=None,
             make="Honda",
             model="Civic",
             trim=None,
@@ -639,10 +686,14 @@ def test_inventory_taxonomy_cache_sync_and_facets() -> None:
             state=None,
             inventory_type=None,
             source_type=None,
+            exterior_color=None,
+            interior_color=None,
             min_price=None,
             max_price=None,
             min_year=2024,
             max_year=2025,
+            min_miles=None,
+            max_miles=None,
             has_images=False,
             use_marketcheck=False,
             db=db,
@@ -655,6 +706,9 @@ def test_inventory_taxonomy_cache_sync_and_facets() -> None:
     assert [bucket["item"] for bucket in taxonomy["make"]] == ["Honda", "Toyota"]
     assert [bucket["item"] for bucket in taxonomy["model"]] == ["Accord", "Civic"]
     assert [bucket["item"] for bucket in taxonomy["trim"]] == ["EX", "Sport", "Sport Touring"]
+    lookup = taxonomy["lookup"]
+    assert lookup["body_types_by_make_model"]["Honda|||Civic"] == ["Hatchback", "Sedan"]
+    assert lookup["body_types_by_make_model_trim"]["Honda|||Civic|||EX"] == ["Sedan"]
 
 
 def test_wordpress_export_json_contract() -> None:
