@@ -21,7 +21,7 @@ import {
 
 const NAV_ITEMS: Array<{ href: Route; label: string }> = [
   { href: "/", label: "Home" },
-  { href: "/vinventory", label: "VInventory" },
+  { href: "/vinventory", label: "Wholesale Search" },
   { href: "/financing", label: "Financing" },
   { href: "/blog", label: "Blog" },
   { href: "/about", label: "About Us" },
@@ -176,14 +176,14 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
           <section>
             <img src={logoPath} alt="VirtualCarHub" className="footer-logo" />
             <p className="footer-copy">
-              VirtualCarHub helps buyers access wholesale channels, compare the real deal math, and avoid commissioned
-              sales pressure.
+              VirtualCarHub is a buyer-side wholesale acquisition service that helps consumers access dealer-only
+              vehicle channels without traditional retail overhead.
             </p>
           </section>
           <section>
             <h3>Explore</h3>
             <div className="footer-links">
-              <Link href="/vinventory">Browse VInventory</Link>
+              <Link href="/vinventory">Start Wholesale Search</Link>
               <Link href="/financing">Financing</Link>
               <Link href="/about">How It Works</Link>
               <Link href="/contact">Contact</Link>

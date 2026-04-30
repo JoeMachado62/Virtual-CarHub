@@ -14,7 +14,8 @@ export const metadata: Metadata = {
     default: "VirtualCarHub",
     template: "%s | VirtualCarHub",
   },
-  description: "Buy from wholesale channels, compare the real deal math, and avoid commissioned sales pressure.",
+  description:
+    "VirtualCarHub helps consumers acquire vehicles through dealer-only wholesale channels without traditional retail overhead.",
   icons: {
     icon: "/assets/images/logo/logo.svg",
   },

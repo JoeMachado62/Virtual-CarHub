@@ -84,6 +84,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
   const [pendingReportVins, setPendingReportVins] = useState<Set<string>>(new Set());
   const [crRequestModal, setCrRequestModal] = useState<CrRequestModalState | null>(null);
   const [profileBfv, setProfileBfv] = useState<Record<string, unknown> | null>(null);
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -334,7 +335,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       apiFetch<{ id: string; message: string }[]>("/me/notifications", {}, auth.accessToken),
       apiFetch<GarageItem[]>("/me/garage", {}, auth.accessToken),
       apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken),
-      apiFetch<{ bfv_json: Record<string, unknown> | null }>("/me/profile", {}, auth.accessToken)
+      apiFetch<{ first_name: string | null; last_name: string | null; bfv_json: Record<string, unknown> | null }>("/me/profile", {}, auth.accessToken)
     ]);
 
     if ([dealResponse, recs, notes, garage].some(isUnauthorized)) {
@@ -366,8 +367,14 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       setIsPreapproved(false);
     }
 
-    if (profileResponse.status === "ok" && profileResponse.data?.bfv_json) {
-      setProfileBfv(profileResponse.data.bfv_json);
+    if (profileResponse.status === "ok") {
+      if (profileResponse.data?.bfv_json) {
+        setProfileBfv(profileResponse.data.bfv_json);
+      }
+      const fn = profileResponse.data?.first_name?.trim() || "";
+      const ln = profileResponse.data?.last_name?.trim() || "";
+      const full = [fn, ln].filter(Boolean).join(" ");
+      setDisplayName(full);
     }
 
     if (garage.status === "ok") {
@@ -758,6 +765,14 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
 
   return (
     <div className="dashboard-shell">
+      <section className="section-shell page-hero compact">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
+          <p className="section-eyebrow">My Garage</p>
+          <p className="dashboard-greeting">Hello: {displayName || auth?.email || ""}</p>
+        </div>
+        <h1>Saved vehicles, inspection reports, and purchase status in one place.</h1>
+      </section>
+
       {authView === "onboarding" ? (
         <section className="card dashboard-onboarding-banner">
           <div className="dashboard-onboarding-header">

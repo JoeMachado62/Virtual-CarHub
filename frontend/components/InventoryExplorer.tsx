@@ -83,6 +83,39 @@ type InventoryItem = {
   inspection_status?: InspectionStatus;
   has_inspection_report?: boolean;
   badges?: { type: string; label: string; color: string; ratio?: string }[];
+  hot_deal?: {
+    mmr_value: number;
+    deal_delta: number;
+    deal_label: string;
+    auction_end_at: string;
+  };
+};
+
+type HotDealFeedItem = {
+  id: string;
+  vin: string;
+  public_slug?: string | null;
+  year: number;
+  make: string;
+  model: string;
+  trim?: string | null;
+  price_asking: number;
+  location_state?: string | null;
+  location_zip?: string | null;
+  source_type?: string | null;
+  source_label?: string | null;
+  thumbnail?: string | null;
+  deal_label: string;
+  deal_delta: number;
+  mmr_value: number;
+  auction_end_at: string;
+  vdp_path?: string | null;
+  image_display_mode?: DisplayMode | null;
+  inspection_status?: InspectionStatus | null;
+  has_inspection_report?: boolean;
+  reference_pending?: boolean;
+  dealer_photos_gated?: boolean;
+  gated_photo_count?: number;
 };
 
 type VehicleDetail = {
@@ -362,32 +395,47 @@ function isChromeDataExterior(url: string | null | undefined): boolean {
 }
 const SEARCH_CONTEXT_KEY = "vch:inventory:search-context";
 const SEARCH_FILTERS_KEY = "vch:inventory:filters";
+const SEARCH_FILTERS_LOCAL_KEY = "vch:inventory:last-filters";
+const HOT_DEALS_CACHE_KEY = "vch:inventory:hot-deals-cache:v2";
+const HOT_DEALS_CACHE_TTL_MS = 5 * 60 * 1000;
 const LIVE_SYNC_FALLBACK_MESSAGE = "Current wholesale updates are temporarily unavailable. Showing saved inventory results.";
 
 const PROGRESS_MESSAGES = [
-  "Checking surplus inventory listings\u2026",
-  "Contacting wholesale sources\u2026",
-  "Scanning dealer networks\u2026",
-  "Vetting inventory quality\u2026",
-  "Verifying vehicle history\u2026",
-  "Matching factory specifications\u2026",
-  "Preparing color-matched images\u2026",
-  "Validating pricing information\u2026",
-  "Cross-referencing market data\u2026",
-  "Finalizing listing details\u2026",
+  "Checking surplus inventory listings",
+  "Contacting wholesale sources",
+  "Scanning dealer networks",
+  "Vetting inventory quality",
+  "Verifying vehicle history",
+  "Matching factory specifications",
+  "Preparing color-matched images",
+  "Validating pricing information",
+  "Cross-referencing market data",
+  "Finalizing listing details",
 ];
+const PROGRESS_STEP_MS = 6200;
+const PROGRESS_DOT_MS = 650;
 
 function SearchProgressOverlay() {
   const [step, setStep] = useState(0);
+  const [dotCount, setDotCount] = useState(1);
 
   useEffect(() => {
     const interval = setInterval(() => {
       setStep((prev) => (prev < PROGRESS_MESSAGES.length - 1 ? prev + 1 : prev));
-    }, 2200);
+      setDotCount(1);
+    }, PROGRESS_STEP_MS);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setDotCount((prev) => (prev >= 4 ? 1 : prev + 1));
+    }, PROGRESS_DOT_MS);
     return () => clearInterval(interval);
   }, []);
 
   const pct = Math.min(((step + 1) / PROGRESS_MESSAGES.length) * 100, 95);
+  const dots = ".".repeat(dotCount);
 
   return (
     <div className="card" style={{ textAlign: "center", padding: "3rem 2rem" }}>
@@ -398,7 +446,7 @@ function SearchProgressOverlay() {
       </div>
       <h3 style={{ margin: "0 0 0.75rem", fontSize: "1.15rem" }}>Searching Wholesale Inventory</h3>
       <p style={{ margin: "0 0 1.5rem", opacity: 0.8, minHeight: "1.4em", transition: "opacity 0.3s" }}>
-        {PROGRESS_MESSAGES[step]}
+        {PROGRESS_MESSAGES[step]}{dots}
       </p>
       <div style={{ background: "rgba(255,255,255,0.1)", borderRadius: 8, height: 6, overflow: "hidden", maxWidth: 320, margin: "0 auto" }}>
         <div
@@ -575,6 +623,49 @@ function buildMakeModelPairs(
   return filters.make.flatMap((make) => filters.model.map((model) => makeModelPairKey(make, model)));
 }
 
+function mapHotDealToInventoryItem(item: HotDealFeedItem): InventoryItem {
+  return {
+    vin: item.vin,
+    public_slug: item.public_slug,
+    year: item.year,
+    make: item.make,
+    model: item.model,
+    trim: item.trim,
+    price_asking: item.price_asking,
+    location_state: item.location_state,
+    location_zip: item.location_zip,
+    source_type: item.source_type || "ove",
+    source_filter_value: "auction",
+    source_label: item.source_label || "Hot Deal",
+    thumbnail: item.thumbnail,
+    images_count: item.thumbnail ? 1 : 0,
+    reference_pending: Boolean(item.reference_pending),
+    dealer_photos_gated: Boolean(item.dealer_photos_gated),
+    gated_photo_count: item.gated_photo_count || 0,
+    display_mode: item.image_display_mode || "MARKETING",
+    inspection_status: item.inspection_status || "VERIFIED",
+    has_inspection_report: Boolean(item.has_inspection_report),
+    badges: [
+      {
+        type: "hot_deal",
+        label: `${item.deal_label || "Hot"} Deal`,
+        color: "green",
+      },
+      {
+        type: "deal_delta",
+        label: `${formatMoney(item.deal_delta)} below MMR`,
+        color: "orange",
+      },
+    ],
+    hot_deal: {
+      mmr_value: item.mmr_value,
+      deal_delta: item.deal_delta,
+      deal_label: item.deal_label,
+      auction_end_at: item.auction_end_at,
+    },
+  };
+}
+
 function MultiSelectList({
   label,
   options,
@@ -701,6 +792,8 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   const searchParams = useSearchParams();
   const resultsRef = useRef<HTMLElement | null>(null);
   const [auth, setAuth] = useState<AuthState | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [searchMode, setSearchMode] = useState<"inventory" | "hot_deals">("inventory");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [pendingActionType, setPendingActionType] = useState<"garage" | "remove" | "acquire" | "cr" | null>(null);
   const [pendingActionVin, setPendingActionVin] = useState<string | null>(null);
@@ -708,6 +801,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   const [filters, setFilters] = useState<FilterState>(INITIAL_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<FilterState>(INITIAL_FILTERS);
   const [filtersReady, setFiltersReady] = useState(false);
+  const [readyToSearchMessage, setReadyToSearchMessage] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<InventoryItem[]>([]);
   const [pagination, setPagination] = useState<Pagination>(EMPTY_PAGINATION);
@@ -770,6 +864,13 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     setPendingResultsScroll(true);
   }
 
+  function scrollMobileResultsIntoView(behavior: ScrollBehavior = "smooth") {
+    if (!isStackedInventoryLayout()) return;
+    window.setTimeout(() => {
+      resultsRef.current?.scrollIntoView({ behavior, block: "start" });
+    }, 120);
+  }
+
   function collapseMobileFilters() {
     if (!isStackedInventoryLayout()) return;
     setFiltersOpen(false);
@@ -780,9 +881,13 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     let cancelled = false;
 
     async function restoreSession() {
-      const saved = await loadValidAuthState();
-      if (cancelled || !saved) return;
-      setAuth(saved);
+      if (cancelled) return;
+      try {
+        const saved = await loadValidAuthState();
+        if (!cancelled) setAuth(saved);
+      } finally {
+        if (!cancelled) setAuthChecked(true);
+      }
     }
 
     void restoreSession();
@@ -793,8 +898,45 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   }, []);
 
   useEffect(() => {
+    if (!authChecked) return;
+    let cancelled = false;
+
     // Helper: split comma-separated URL param into lowercased array
     const csvToArr = (v: string | null) => (v || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const hasVehicleIntentFilters = (candidate: Partial<FilterState>) =>
+      Boolean(
+        candidate.make?.length || candidate.model?.length || candidate.trim?.length || candidate.body_type?.length ||
+        candidate.exterior_color?.length || candidate.interior_color?.length || candidate.q ||
+        candidate.min_year || candidate.max_year || candidate.min_price || candidate.max_price ||
+        candidate.min_miles || candidate.max_miles
+      );
+    const normalizeRestoredFilters = (restored: FilterState) => {
+      for (const k of ["make", "model", "trim", "body_type", "exterior_color", "interior_color"] as const) {
+        if (typeof restored[k] === "string") {
+          (restored as Record<string, unknown>)[k] = (restored[k] as unknown as string).split(",").filter(Boolean);
+        }
+      }
+      return restored;
+    };
+    const applyInitialFilters = (
+      nextFilters: FilterState,
+      mode: "inventory" | "hot_deals" = "inventory",
+      options: { autoLoad?: boolean; message?: string } = {},
+    ) => {
+      if (cancelled) return;
+      const autoLoad = options.autoLoad ?? mode === "hot_deals";
+      setSearchMode(mode);
+      setFilters(nextFilters);
+      setAppliedFilters(nextFilters);
+      setFiltersReady(autoLoad);
+      setReadyToSearchMessage(autoLoad ? null : options.message || "Review the selected filters, then click Search to load matching inventory.");
+      if (!autoLoad) {
+        setRows([]);
+        setPagination(EMPTY_PAGINATION);
+        setSyncMeta(EMPTY_SYNC);
+        setError(null);
+      }
+    };
 
     // SEO route props take priority when no explicit URL search params are set
     if (initialMake && !searchParams.has("make")) {
@@ -804,9 +946,10 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
         ...(initialModel ? { model: [initialModel.toLowerCase()] } : {}),
         ...(initialTrim ? { trim: [initialTrim.toLowerCase()] } : {}),
       };
-      setFilters(nextFilters);
-      setAppliedFilters(nextFilters);
-      setFiltersReady(true);
+      applyInitialFilters(nextFilters, "inventory", {
+        autoLoad: false,
+        message: "Review the selected route filters, then click Search to load matching inventory.",
+      });
       return;
     }
 
@@ -816,6 +959,12 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     );
 
     if (hasUrlParams) {
+      if (searchParams.get("hot_deals") === "true") {
+        applyInitialFilters({ ...INITIAL_FILTERS, live_sync: false, sort_by: "updated_at", sort_dir: "desc" }, "hot_deals");
+        scrollMobileResultsIntoView("auto");
+        return;
+      }
+
       // ── URL params present: build filters from URL ──
       const vinParam = searchParams.get("vin") || "";
       const q = vinParam || searchParams.get("q") || "";
@@ -866,48 +1015,68 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
         state,
         ...(resolvedZip ? { zip_code: resolvedZip } : {}),
       };
-      setFilters(nextFilters);
-      setAppliedFilters(nextFilters);
-      setFiltersReady(true);
+      applyInitialFilters(nextFilters, "inventory", {
+        autoLoad: false,
+        message: "Review the selected filters, then click Search to load matching inventory.",
+      });
       return;
     }
 
-    // ── No URL params: restore from sessionStorage or localStorage ──
-    try {
-      const savedFilters = window.sessionStorage.getItem(SEARCH_FILTERS_KEY);
-      if (savedFilters) {
-        const restored = JSON.parse(savedFilters) as FilterState;
-        // Ensure array fields from older sessions are normalized
-        for (const k of ["make", "model", "trim", "body_type", "exterior_color", "interior_color"] as const) {
-          if (typeof restored[k] === "string") {
-            (restored as Record<string, unknown>)[k] = (restored[k] as unknown as string).split(",").filter(Boolean);
+    void (async () => {
+      if (auth?.accessToken) {
+        try {
+          const res = await apiFetch<{
+            bfv_json: Record<string, unknown> | null;
+            is_complete: boolean;
+          }>("/me/profile", {}, auth.accessToken);
+          if (!cancelled && res.status === "ok" && res.data?.bfv_json && res.data.is_complete) {
+            const bfv = res.data.bfv_json;
+            const toArr = (v: unknown) =>
+              Array.isArray(v) ? v.map((s) => String(s).toLowerCase()) : [];
+            const profileFilters: FilterState = { ...INITIAL_FILTERS, live_sync: false };
+            if (bfv.delivery_zip) profileFilters.zip_code = String(bfv.delivery_zip);
+            if (bfv.year_min) profileFilters.min_year = String(bfv.year_min);
+            if (bfv.year_max) profileFilters.max_year = String(bfv.year_max);
+            if (bfv.budget_min) profileFilters.min_price = String(bfv.budget_min);
+            if (bfv.budget_max) profileFilters.max_price = String(bfv.budget_max);
+            if (bfv.mileage_min) profileFilters.min_miles = String(bfv.mileage_min);
+            if (bfv.mileage_max) profileFilters.max_miles = String(bfv.mileage_max);
+            const bodyTypes = toArr(bfv.body_types_included);
+            if (bodyTypes.length) profileFilters.body_type = bodyTypes;
+            const brands = toArr(bfv.brands_included);
+            if (brands.length) profileFilters.make = brands;
+            if (profileFilters.zip_code && hasVehicleIntentFilters(profileFilters)) {
+              applyInitialFilters(profileFilters, "inventory", {
+                autoLoad: false,
+                message: "Your Quick Match profile has prefilled the filters. Review them, then click Search to load inventory.",
+              });
+              return;
+            }
           }
-        }
-        const hasFilters = restored.make?.length || restored.model?.length || restored.q
-          || restored.min_year || restored.max_year || restored.min_price
-          || restored.max_price || restored.min_miles || restored.max_miles
-          || restored.zip_code;
-        if (hasFilters) {
-          setFilters(restored);
-          setAppliedFilters(restored);
-          setFiltersReady(true);
-          return;
-        }
+        } catch { /* profile fetch is best-effort */ }
+
+        try {
+          const savedFilters =
+            window.sessionStorage.getItem(SEARCH_FILTERS_KEY) ||
+            window.localStorage.getItem(SEARCH_FILTERS_LOCAL_KEY);
+          if (savedFilters) {
+            const restored = normalizeRestoredFilters(JSON.parse(savedFilters) as FilterState);
+            if (hasVehicleIntentFilters(restored)) {
+              applyInitialFilters(restored, "inventory", {
+                autoLoad: false,
+                message: "Your last selected filters are ready. Review them, then click Search to load inventory.",
+              });
+              return;
+            }
+          }
+        } catch { /* ignore */ }
       }
 
-      const raw = window.localStorage.getItem(SEARCH_CONTEXT_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Partial<Pick<FilterState, "zip_code" | "radius">>;
-        if (parsed.zip_code || parsed.radius) {
-          setFilters((prev) => ({ ...prev, ...parsed }));
-          setAppliedFilters((prev) => ({ ...prev, ...parsed }));
-        }
-      }
-    } catch { /* ignore */ }
-
-    setFiltersReady(true);
+      applyInitialFilters({ ...INITIAL_FILTERS, live_sync: false }, "hot_deals");
+    })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [searchParams, authChecked, auth?.accessToken]);
 
   useEffect(() => {
     void loadFacets(filters);
@@ -918,7 +1087,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     if (!filtersReady) return;
     void loadInventory(appliedFilters, page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtersReady, appliedFilters, page]);
+  }, [filtersReady, appliedFilters, page, searchMode]);
 
   useEffect(() => {
     if (!pendingResultsScroll || loading) return;
@@ -971,41 +1140,6 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     if (auth?.accessToken) {
       void loadGarage(auth.accessToken);
       void loadAccountStatus(auth.accessToken);
-
-      // Pre-populate filters from saved Quick Match profile when the user
-      // lands on /vinventory without explicit search params or session filters.
-      const hasExplicitFilters =
-        searchParams.size > 0 || Boolean(window.sessionStorage.getItem(SEARCH_FILTERS_KEY));
-      if (!hasExplicitFilters) {
-        void (async () => {
-          try {
-            const res = await apiFetch<{
-              bfv_json: Record<string, unknown> | null;
-              is_complete: boolean;
-            }>("/me/profile", {}, auth.accessToken);
-            if (res.status !== "ok" || !res.data?.bfv_json || !res.data.is_complete) return;
-            const bfv = res.data.bfv_json;
-            const toArr = (v: unknown) =>
-              Array.isArray(v) ? v.map((s) => String(s).toLowerCase()) : [];
-            const seed: Partial<FilterState> = {};
-            if (bfv.delivery_zip) seed.zip_code = String(bfv.delivery_zip);
-            if (bfv.year_min) seed.min_year = String(bfv.year_min);
-            if (bfv.year_max) seed.max_year = String(bfv.year_max);
-            if (bfv.budget_min) seed.min_price = String(bfv.budget_min);
-            if (bfv.budget_max) seed.max_price = String(bfv.budget_max);
-            if (bfv.mileage_min) seed.min_miles = String(bfv.mileage_min);
-            if (bfv.mileage_max) seed.max_miles = String(bfv.mileage_max);
-            const bodyTypes = toArr(bfv.body_types_included);
-            if (bodyTypes.length) seed.body_type = bodyTypes;
-            const brands = toArr(bfv.brands_included);
-            if (brands.length) seed.make = brands;
-            if (Object.keys(seed).length) {
-              setFilters((prev) => ({ ...prev, ...seed }));
-              setAppliedFilters((prev) => ({ ...prev, ...seed }));
-            }
-          } catch { /* profile fetch is best-effort */ }
-        })();
-      }
     } else {
       setGarageItems([]);
       setGarageError(null);
@@ -1048,6 +1182,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       );
       // Save full filter state to sessionStorage so it survives navigation
       window.sessionStorage.setItem(SEARCH_FILTERS_KEY, JSON.stringify(nextFilters));
+      window.localStorage.setItem(SEARCH_FILTERS_LOCAL_KEY, JSON.stringify(nextFilters));
     } catch {
       return;
     }
@@ -1094,6 +1229,45 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   async function loadInventory(currentFilters: FilterState, currentPage: number) {
     setLoading(true);
     setError(null);
+
+    if (searchMode === "hot_deals") {
+      try {
+        const cached = window.sessionStorage.getItem(HOT_DEALS_CACHE_KEY);
+        if (cached) {
+          const parsed = JSON.parse(cached) as { cached_at?: number; items?: HotDealFeedItem[] };
+          if (parsed.cached_at && Date.now() - parsed.cached_at < HOT_DEALS_CACHE_TTL_MS && Array.isArray(parsed.items)) {
+            const cachedRows = parsed.items.map(mapHotDealToInventoryItem);
+            setRows(cachedRows);
+            setPagination({ page: 1, per_page: cachedRows.length || 18, total: cachedRows.length, total_pages: cachedRows.length ? 1 : 0, has_next: false, has_prev: false });
+            setSyncMeta(EMPTY_SYNC);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch { /* ignore stale cache */ }
+
+      const response = await apiFetch<{ items: HotDealFeedItem[] }>("/inventory/hot-deals/active?limit=50");
+      if (response.status !== "ok") {
+        setRows([]);
+        setPagination(EMPTY_PAGINATION);
+        setSyncMeta(EMPTY_SYNC);
+        setError(response.error?.message || "Failed to load Hot Deals.");
+        setLoading(false);
+        return;
+      }
+      const items = response.data.items || [];
+      if (items.length) {
+        try {
+          window.sessionStorage.setItem(HOT_DEALS_CACHE_KEY, JSON.stringify({ cached_at: Date.now(), items }));
+        } catch { /* ignore cache failures */ }
+      }
+      const mappedRows = items.map(mapHotDealToInventoryItem);
+      setRows(mappedRows);
+      setPagination({ page: 1, per_page: mappedRows.length || 18, total: mappedRows.length, total_pages: mappedRows.length ? 1 : 0, has_next: false, has_prev: false });
+      setSyncMeta(EMPTY_SYNC);
+      setLoading(false);
+      return;
+    }
 
     if (!currentFilters.zip_code.trim() || !currentFilters.radius.trim()) {
       setRows([]);
@@ -1191,8 +1365,18 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       setOpenFilter(null);
       return;
     }
+    setSearchMode("inventory");
+    try {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete("hot_deals");
+      window.history.replaceState(null, "", `${nextUrl.pathname}${nextUrl.search}`);
+    } catch {
+      // History updates are cosmetic; the submitted search still runs.
+    }
     await loadFacets(filters);
     persistSearchContext(filters);
+    setReadyToSearchMessage(null);
+    setFiltersReady(true);
     setPage(1);
     setAppliedFilters({ ...filters });
     collapseMobileFilters();
@@ -1208,12 +1392,16 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     try {
       window.sessionStorage.removeItem(SEARCH_FILTERS_KEY);
       window.localStorage.removeItem(SEARCH_CONTEXT_KEY);
+      window.localStorage.removeItem(SEARCH_FILTERS_LOCAL_KEY);
       window.history.replaceState(null, "", window.location.pathname);
     } catch {
       // Browser storage/history can fail in private modes; state reset still works.
     }
     setFilters(INITIAL_FILTERS);
     setAppliedFilters(INITIAL_FILTERS);
+    setSearchMode("hot_deals");
+    setReadyToSearchMessage(null);
+    setFiltersReady(true);
     setError(null);
     setPage(1);
   }
@@ -1758,10 +1946,15 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
         <section className="inventory-main" ref={resultsRef}>
           <header className="card inventory-results-header">
             <div>
-              <h3 style={{ marginTop: 0, marginBottom: 6 }}>Vehicle Listings</h3>
+              <h3 style={{ marginTop: 0, marginBottom: 6 }}>
+                {searchMode === "hot_deals" ? "Hot Deals" : filtersReady ? "Vehicle Listings" : "Search Ready"}
+              </h3>
               <p style={{ margin: 0 }}>
-                {pagination.total.toLocaleString()} matches | Page {pagination.page} of{" "}
-                {Math.max(pagination.total_pages, 1)}
+                {searchMode === "hot_deals"
+                  ? "Danny's Picks from the current VHC Marketing List"
+                  : !filtersReady
+                    ? "Review the filters and click Search when you are ready."
+                  : `${pagination.total.toLocaleString()} matches | Page ${pagination.page} of ${Math.max(pagination.total_pages, 1)}`}
               </p>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -1797,7 +1990,13 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
           {syncWarning && rows.length === 0 ? <div className="card">{syncWarning}</div> : null}
           {error ? <div className="card">{error}</div> : null}
           {!error && loading ? <SearchProgressOverlay /> : null}
-          {!loading && !error && rows.length === 0 ? (
+          {!loading && !error && readyToSearchMessage ? (
+            <div className="card">
+              <h3 style={{ marginTop: 0 }}>Validate Your Filters</h3>
+              <p style={{ marginBottom: 0 }}>{readyToSearchMessage}</p>
+            </div>
+          ) : null}
+          {!loading && !error && !readyToSearchMessage && rows.length === 0 ? (
             <div className="card">No vehicles match your current filters.</div>
           ) : null}
 
@@ -1830,6 +2029,9 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                       ) : (
                         <img src={FALLBACK_IMAGE} alt={`${item.year} ${item.make} ${item.model}`} loading="lazy" />
                       )}
+                      {item.hot_deal?.auction_end_at ? (
+                        <span className="hot-deal-countdown">{formatHotDealCountdown(item.hot_deal.auction_end_at)}</span>
+                      ) : null}
                       {!item.reference_pending && item.dealer_photos_gated && !garageVins.has(item.vin) ? (
                         <div className="gated-photos-overlay">
                           <span>More Images Available</span>
@@ -2171,6 +2373,19 @@ function formatMiles(value: number | null | undefined): string {
 function formatMoney(value: number | null | undefined): string {
   if (value === null || value === undefined) return "N/A";
   return `$${value.toLocaleString()}`;
+}
+
+function formatHotDealCountdown(value: string | null | undefined): string {
+  if (!value) return "Auction ending soon";
+  const end = new Date(value).getTime();
+  if (Number.isNaN(end)) return "Auction ending soon";
+  const totalSeconds = Math.floor(Math.max(0, end - Date.now()) / 1000);
+  if (totalSeconds <= 0) return "Expired";
+  if (totalSeconds < 60) return "Ending now";
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  if (hours < 1) return `Ends in ${minutes}m`;
+  return `Ends in ${hours}h ${minutes}m`;
 }
 
 function formatDate(value: string | null | undefined): string {

@@ -63,7 +63,7 @@ export function vehicleCanonical(identifier: string, year: number, make: string,
 
 export function makePageMetadata(make: string): Metadata {
   const title = `${make} Vehicles for Sale`;
-  const description = `Browse ${make} cars, trucks, and SUVs available at ${SITE_NAME}. Find competitive wholesale pricing on ${make} inventory.`;
+  const description = `Find ${make} cars, trucks, and SUVs that ${SITE_NAME} can help you acquire through wholesale channels.`;
   const canonical = makeCanonical(make);
   return {
     title,
@@ -77,7 +77,7 @@ export function makePageMetadata(make: string): Metadata {
 
 export function makeModelPageMetadata(make: string, model: string): Metadata {
   const title = `${make} ${model} for Sale`;
-  const description = `Find ${make} ${model} vehicles at competitive wholesale pricing. Browse available inventory, photos, and details at ${SITE_NAME}.`;
+  const description = `Review ${make} ${model} opportunities that ${SITE_NAME} can help source, inspect, and acquire through wholesale channels.`;
   const canonical = makeModelCanonical(make, model);
   return {
     title,
@@ -134,7 +134,8 @@ export function autoDealerJsonLd(overrides?: Record<string, unknown>): Record<st
     "@type": "AutoDealer",
     name: SITE_NAME,
     url: SITE_URL,
-    description: "Buy from wholesale channels, compare the real deal math, and avoid commissioned sales pressure.",
+    description:
+      "Buyer-side wholesale vehicle acquisition service helping consumers access dealer-only channels without traditional retail overhead.",
     ...overrides,
   };
 }

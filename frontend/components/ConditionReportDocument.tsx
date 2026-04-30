@@ -88,8 +88,13 @@ type AutoCheckReport = {
   scrape_status: "success" | "partial" | "failed" | "not_attempted";
   attempted_at?: string | null;
   autocheck_score?: number | null;
+  score_range_low?: number | null;
+  score_range_high?: number | null;
+  historical_event_count?: number | null;
   owner_count?: number | null;
   accident_count?: number | null;
+  last_reported_event_date?: string | null;
+  last_reported_mileage?: number | null;
   title_brand_check?: string | null;
   odometer_check?: string | null;
   accident_check?: string | null;
@@ -609,53 +614,61 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
             {autocheck && autocheck.scrape_status !== "failed" && (
               <div className="cr-autocheck-wrap">
                 <div className="cr-autocheck-hero">
-                  <article className="cr-autocheck-summary-card">
-                    <div className="cr-autocheck-summary-head">
-                      <span className="cr-autocheck-mini-label">Experian AutoCheck</span>
-                      <span className={`cr-autocheck-status cr-autocheck-status-${autoCheckSummary.statusTone}`}>
-                        {autoCheckSummary.statusLabel}
-                      </span>
-                    </div>
-                    <h4 className="cr-autocheck-title">History snapshot for {vehicle.year} {vehicle.make} {vehicle.model}</h4>
-                    <div className="cr-autocheck-summary-grid">
-                      {renderAutoCheckSummaryValue("Owners", autocheck.owner_count)}
-                      {renderAutoCheckSummaryValue("Accidents", autocheck.accident_count)}
-                      {renderAutoCheckSummaryValue("Title Brand", autocheck.title_brand_check || "N/A")}
-                      {renderAutoCheckSummaryValue("Odometer", autocheck.odometer_check || "N/A")}
-                    </div>
-                    {autocheck.attempted_at && (
-                      <p className="cr-autocheck-meta">Captured {formatTimestamp(autocheck.attempted_at)}</p>
+                  <article className="cr-autocheck-vehicle-card">
+                    <h4 className="cr-autocheck-vehicle-title">
+                      {vehicle.year} {vehicle.make} {vehicle.model}{vehicle.trim ? ` ${vehicle.trim}` : ""}
+                    </h4>
+                    {(vehicle.body_type || vehicleInfo.engine || vehicle.fuel_type) && (
+                      <p className="cr-autocheck-vehicle-subtitle">
+                        {[vehicle.body_type, vehicleInfo.engine, vehicle.fuel_type].filter(Boolean).join(" ")}
+                      </p>
+                    )}
+                    <p className="cr-autocheck-vin">VIN: {maskVin(vehicle.vin, authorized || canRevealVin)}</p>
+                    <dl className="cr-autocheck-facts">
+                      {renderAutoCheckFact("No. of Historical Events", autocheck.historical_event_count)}
+                      {renderAutoCheckFact("Calculated Owners", autocheck.owner_count)}
+                      {renderAutoCheckFact("Number of Accidents", autocheck.accident_count)}
+                    </dl>
+                    {(autocheck.last_reported_event_date || autocheck.last_reported_mileage != null || autocheck.attempted_at) && (
+                      <div className="cr-autocheck-reported">
+                        {autocheck.last_reported_event_date && (
+                          <p>Last Reported Event Date: {formatAutoCheckDate(autocheck.last_reported_event_date)}</p>
+                        )}
+                        {autocheck.last_reported_mileage != null && (
+                          <p>Last Reported Mileage: {fmtMiles(autocheck.last_reported_mileage)}</p>
+                        )}
+                        {!autocheck.last_reported_event_date && autocheck.attempted_at && (
+                          <p>AutoCheck Captured: {formatTimestamp(autocheck.attempted_at)}</p>
+                        )}
+                      </div>
                     )}
                   </article>
 
                   <article className="cr-autocheck-score-card">
-                    <div className="cr-autocheck-score-topline">
-                      <span className="cr-autocheck-mini-label">AutoCheck Score</span>
-                      {autocheck.autocheck_score != null && (
-                        <span className={`cr-autocheck-score-band cr-autocheck-score-band-${autoCheckSummary.scoreTone}`}>
-                          {autoCheckSummary.scoreBand}
-                        </span>
-                      )}
-                    </div>
                     {autocheck.autocheck_score != null ? (
                       <>
-                        <div className="cr-autocheck-gauge">
+                        <div className="cr-autocheck-meter">
+                          <div className="cr-autocheck-meter-arc" />
                           <div
-                            className="cr-autocheck-gauge-arc"
-                            style={{
-                              background: `conic-gradient(from 180deg, ${autoCheckSummary.scoreColor} 0deg ${Math.max(0, Math.min(180, (autocheck.autocheck_score / 100) * 180))}deg, rgba(255,255,255,0.08) ${Math.max(0, Math.min(180, (autocheck.autocheck_score / 100) * 180))}deg 180deg, transparent 180deg 360deg)`,
-                            }}
-                          />
-                          <div className="cr-autocheck-gauge-cutout" />
-                          <div className="cr-autocheck-gauge-center">
-                            <strong>{autocheck.autocheck_score}</strong>
-                            <span>/ 100</span>
+                            className="cr-autocheck-meter-pointer"
+                            style={{ transform: `translateX(-50%) rotate(${autoCheckSummary.pointerAngle}deg)` }}
+                          >
+                            <span />
                           </div>
+                          <span className="cr-autocheck-meter-low">{autoCheckSummary.scoreRangeLow}</span>
+                          <span className="cr-autocheck-meter-high">{autoCheckSummary.scoreRangeHigh}</span>
+                          <strong className="cr-autocheck-meter-score">{autocheck.autocheck_score}</strong>
                         </div>
-                        <div className="cr-autocheck-scale">
-                          <span>0</span><span>50</span><span>100</span>
-                        </div>
-                        <p className="cr-autocheck-score-copy">{autoCheckSummary.scoreDescription}</p>
+                        <p className="cr-autocheck-score-heading">This vehicle&apos;s AutoCheck Score: {autocheck.autocheck_score}</p>
+                        <p className="cr-autocheck-score-copy">
+                          Other comparable {vehicle.year} vehicles{vehicle.body_type ? <> in the <strong>{vehicle.body_type}</strong></> : ""} typically
+                          score between <strong>{autoCheckSummary.scoreRangeLow}-{autoCheckSummary.scoreRangeHigh}</strong>.
+                        </p>
+                        {autocheck.view_report_href && isAdmin && (
+                          <button className="cr-autocheck-learn" onClick={() => window.open(autocheck.view_report_href!, "_blank", "noopener,noreferrer")}>
+                            Learn more about the AutoCheck Score
+                          </button>
+                        )}
                       </>
                     ) : (
                       <p className="cr-comments">AutoCheck score not provided for this vehicle.</p>
@@ -663,13 +676,27 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
                   </article>
                 </div>
 
-                <div className="cr-autocheck-check-grid">
+                <div className="cr-autocheck-carfax">
+                  <span className="cr-autocheck-carfax-icon" aria-hidden="true" />
+                  <span className="cr-autocheck-carfax-copy">Show me the <strong>CARFAX</strong></span>
+                  {autocheck.view_report_href && isAdmin && (
+                    <button className="cr-autocheck-carfax-button" onClick={() => window.open(autocheck.view_report_href!, "_blank", "noopener,noreferrer")}>
+                      View now
+                    </button>
+                  )}
+                  {(!autocheck.view_report_href || !isAdmin) && (
+                    <span className="cr-autocheck-carfax-button cr-autocheck-carfax-button-static">View now</span>
+                  )}
+                </div>
+
+                <div className="cr-autocheck-check-list">
                   {renderAutoCheckCheck("Major State Title Brand Check", autocheck.title_brand_check)}
-                  {renderAutoCheckCheck("Odometer Check", autocheck.odometer_check)}
                   {renderAutoCheckCheck("Accident Check", autocheck.accident_check)}
                   {renderAutoCheckCheck("Damage Check", autocheck.damage_check)}
+                  {renderAutoCheckCheck("Odometer Check", autocheck.odometer_check)}
+                  {renderAutoCheckCheck("Other Title Brand and Specific Event Check", autocheck.title_brand_check)}
                   {renderAutoCheckCheck("Vehicle Usage Check", autocheck.vehicle_use)}
-                  {renderAutoCheckCheck("Buyback Protection", autocheck.buyback_protection)}
+                  {renderAutoCheckCheck("AutoCheck Buyback Protection", autocheck.buyback_protection)}
                 </div>
 
                 {(autocheck.full_report_text || autocheck.view_report_href) && (
@@ -1045,79 +1072,137 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
 
         /* ── AutoCheck ── */
         .cr-autocheck-wrap { display: grid; gap: 14px; }
-        .cr-autocheck-hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr); gap: 14px; }
-        .cr-autocheck-summary-card,
+        .cr-autocheck-hero { display: grid; grid-template-columns: minmax(300px, 0.86fr) minmax(320px, 1fr); gap: 18px; }
+        .cr-autocheck-vehicle-card,
         .cr-autocheck-score-card,
-        .cr-autocheck-check-card,
         .cr-autocheck-unavailable,
         .cr-autocheck-details {
-          border: 1px solid #3d3d52; border-radius: 10px;
-          background: rgba(255,255,255,0.025);
+          border: 1px solid rgba(113,138,205,0.5); border-radius: 16px;
+          background:
+            radial-gradient(circle at 18% 0%, rgba(87,112,189,0.18), transparent 32%),
+            rgba(14,18,32,0.84);
+          box-shadow: 0 16px 34px rgba(0,0,0,0.2);
         }
-        .cr-autocheck-summary-card,
-        .cr-autocheck-score-card { padding: 16px; }
-        .cr-autocheck-summary-head,
-        .cr-autocheck-score-topline {
-          display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+        .cr-autocheck-vehicle-card { padding: 28px 28px 24px; }
+        .cr-autocheck-vehicle-title { margin: 0 0 12px; color: #f5f7ff; font-size: 28px; line-height: 1.1; }
+        .cr-autocheck-vehicle-subtitle { margin: 0 0 12px; color: #7aa0ff; font-size: 19px; line-height: 1.35; }
+        .cr-autocheck-vin { margin: 0 0 18px; color: #f8faff; font-size: 19px; font-weight: 800; }
+        .cr-autocheck-facts { display: grid; gap: 10px; margin: 0; max-width: 360px; }
+        .cr-autocheck-fact { display: grid; grid-template-columns: 1fr auto; gap: 18px; margin: 0; color: #f2f5ff; font-size: 18px; line-height: 1.25; }
+        .cr-autocheck-fact dt { font-weight: 700; }
+        .cr-autocheck-fact dd { margin: 0; min-width: 42px; text-align: left; }
+        .cr-autocheck-reported { display: grid; gap: 12px; margin-top: 28px; padding-top: 24px; border-top: 1px solid rgba(180,190,220,0.28); color: #f1f4ff; font-size: 18px; }
+        .cr-autocheck-reported p { margin: 0; }
+        .cr-autocheck-score-card { padding: 22px 28px 26px; text-align: center; display: grid; align-content: start; justify-items: center; }
+        .cr-autocheck-meter { position: relative; width: min(100%, 470px); height: 250px; margin: 0 auto -6px; }
+        .cr-autocheck-meter-arc {
+          position: absolute; left: 50%; top: 28px; width: min(82vw, 370px); height: 185px;
+          transform: translateX(-50%);
+          border: 34px solid rgba(204,208,218,0.38); border-bottom: 0;
+          border-radius: 370px 370px 0 0;
+          box-shadow: inset 0 1px 1px rgba(255,255,255,0.24);
         }
-        .cr-autocheck-mini-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: #9da8c3; font-weight: 700; }
-        .cr-autocheck-status,
-        .cr-autocheck-score-band {
-          display: inline-flex; align-items: center; justify-content: center;
-          padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700;
-          text-transform: uppercase; letter-spacing: 0.5px;
+        .cr-autocheck-meter-pointer {
+          position: absolute; left: 50%; bottom: 35px; width: 0; height: 180px;
+          transform-origin: 50% 100%; transition: transform 0.18s ease;
         }
-        .cr-autocheck-status-good,
-        .cr-autocheck-score-band-strong { background: rgba(69,138,92,0.2); color: #8fe0a6; border: 1px solid rgba(69,138,92,0.45); }
-        .cr-autocheck-status-warning,
-        .cr-autocheck-score-band-watch { background: rgba(201,164,74,0.16); color: #f1cb76; border: 1px solid rgba(201,164,74,0.38); }
-        .cr-autocheck-status-muted,
-        .cr-autocheck-score-band-muted { background: rgba(113,126,152,0.14); color: #c6cfdf; border: 1px solid rgba(113,126,152,0.32); }
-        .cr-autocheck-title { margin: 12px 0 14px; font-size: 20px; line-height: 1.15; }
-        .cr-autocheck-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-        .cr-autocheck-summary-stat {
-          border: 1px solid #33384c; border-radius: 8px; padding: 12px;
-          background: rgba(15,20,32,0.55); display: grid; gap: 6px;
+        .cr-autocheck-meter-pointer span {
+          position: absolute; top: 2px; left: 50%; width: 68px; height: 68px;
+          transform: translateX(-50%);
+          border-radius: 50%; border: 8px solid #6b3d92; background: #fbf9ff;
+          box-shadow: 0 4px 10px rgba(0,0,0,0.32), inset 0 0 0 1px rgba(255,255,255,0.72);
         }
-        .cr-autocheck-summary-stat span { font-size: 11px; color: #a9b2c1; text-transform: uppercase; letter-spacing: 0.5px; }
-        .cr-autocheck-summary-stat strong { font-size: 20px; color: #f4f6fa; }
-        .cr-autocheck-meta { margin: 12px 0 0; color: #9fa8bb; font-size: 12px; }
-        .cr-autocheck-gauge {
-          position: relative; width: 100%; max-width: 260px;
-          aspect-ratio: 1.8 / 1.1; margin: 14px auto 6px;
+        .cr-autocheck-meter-low,
+        .cr-autocheck-meter-high {
+          position: absolute; top: 132px; color: #d9dfec; font-size: 29px;
         }
-        .cr-autocheck-gauge-arc {
-          position: absolute; inset: 0;
-          border-radius: 260px 260px 0 0; clip-path: inset(0 0 50% 0);
+        .cr-autocheck-meter-low { left: 4%; }
+        .cr-autocheck-meter-high { right: 4%; }
+        .cr-autocheck-meter-score {
+          position: absolute; left: 50%; top: 134px; transform: translateX(-50%);
+          color: #6f8dff; font-size: 104px; line-height: 0.9;
         }
-        .cr-autocheck-gauge-cutout {
-          position: absolute; inset: 20px 20px 0 20px;
-          border-radius: 220px 220px 0 0; background: #151b29;
-          clip-path: inset(0 0 50% 0);
+        .cr-autocheck-score-heading { margin: 0 0 12px; color: #7395ff; font-size: 25px; font-weight: 800; }
+        .cr-autocheck-score-copy { margin: 0; color: #f2f5ff; font-size: 17px; line-height: 1.45; max-width: 560px; }
+        .cr-autocheck-score-copy strong { color: #fff; }
+        .cr-autocheck-learn {
+          margin-top: 14px; border: 0; background: transparent; color: #7aa0ff;
+          font: inherit; cursor: pointer;
         }
-        .cr-autocheck-gauge-center {
-          position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
-          display: grid; justify-items: center; gap: 2px;
+        .cr-autocheck-learn:hover { color: #a9c1ff; }
+        .cr-autocheck-carfax {
+          min-height: 112px; padding: 18px 34px; border: 1px solid rgba(125,113,205,0.62); border-radius: 10px;
+          display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 30px;
+          background:
+            radial-gradient(circle at 45% 50%, rgba(255,255,255,0.14), transparent 1px) 0 0 / 11px 11px,
+            linear-gradient(105deg, #283589 0%, #5b357f 45%, #b33878 100%);
+          color: #fff; overflow: hidden;
         }
-        .cr-autocheck-gauge-center strong { font-size: 48px; line-height: 1; color: #f3f6fd; }
-        .cr-autocheck-gauge-center span { font-size: 12px; color: #a7b2c7; letter-spacing: 0.5px; text-transform: uppercase; }
-        .cr-autocheck-scale { display: flex; justify-content: space-between; gap: 12px; color: #96a1b7; font-size: 12px; }
-        .cr-autocheck-score-copy { margin: 12px 0 0; color: #d9e1f2; line-height: 1.6; }
-        .cr-autocheck-check-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-        .cr-autocheck-check-card { padding: 14px; display: grid; gap: 10px; }
-        .cr-autocheck-check-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-        .cr-autocheck-check-label { font-size: 13px; color: #dce3f1; font-weight: 700; }
-        .cr-autocheck-check-value { color: #c1cbde; font-size: 13px; line-height: 1.5; }
-        .cr-autocheck-chip {
-          display: inline-flex; align-items: center; justify-content: center;
-          min-width: 94px; padding: 4px 10px; border-radius: 999px;
-          font-size: 11px; font-weight: 700; text-transform: uppercase;
-          letter-spacing: 0.5px; white-space: nowrap;
+        .cr-autocheck-carfax-icon {
+          position: relative; width: 72px; height: 82px; border: 4px solid rgba(255,255,255,0.94); border-radius: 12px;
         }
-        .cr-autocheck-chip-ok { background: rgba(69,138,92,0.2); color: #92e2a9; border: 1px solid rgba(69,138,92,0.45); }
-        .cr-autocheck-chip-issue { background: rgba(194,100,88,0.18); color: #f4a095; border: 1px solid rgba(194,100,88,0.38); }
-        .cr-autocheck-chip-info { background: rgba(90,119,177,0.18); color: #9cc5ff; border: 1px solid rgba(90,119,177,0.38); }
-        .cr-autocheck-chip-muted { background: rgba(113,126,152,0.14); color: #c6cfdf; border: 1px solid rgba(113,126,152,0.32); }
+        .cr-autocheck-carfax-icon::before {
+          content: ""; position: absolute; left: 14px; top: 16px; width: 32px; height: 4px; border-radius: 999px;
+          background: #fff; box-shadow: 0 12px 0 #fff, 0 24px 0 #fff, 0 36px 0 #fff;
+        }
+        .cr-autocheck-carfax-icon::after {
+          content: ""; position: absolute; right: -16px; top: 16px; width: 24px; height: 48px;
+          border-right: 7px solid #fff; border-bottom: 7px solid #fff; transform: rotate(38deg);
+        }
+        .cr-autocheck-carfax-copy { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; font-size: 44px; font-weight: 900; line-height: 1; }
+        .cr-autocheck-carfax-copy strong {
+          display: inline-flex; gap: 2px; padding: 2px 7px 4px; background: #111; color: #fff;
+          font-size: 35px; line-height: 1; border: 1px solid rgba(255,255,255,0.72);
+          box-shadow: inset 0 0 0 1px rgba(255,255,255,0.28);
+        }
+        .cr-autocheck-carfax-button {
+          min-width: 236px; padding: 16px 28px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.82);
+          background: rgba(255,255,255,0.08); color: #fff; font-size: 21px; font-weight: 800; cursor: pointer;
+          text-align: center;
+        }
+        .cr-autocheck-carfax-button:hover { background: rgba(255,255,255,0.18); }
+        .cr-autocheck-carfax-button-static { cursor: default; }
+        .cr-autocheck-carfax-button-static:hover { background: rgba(255,255,255,0.08); }
+        .cr-autocheck-check-list {
+          border: 1px solid rgba(113,138,205,0.76); border-radius: 18px; padding: 16px 22px;
+          background: rgba(14,18,32,0.78);
+        }
+        .cr-autocheck-check-row {
+          display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 18px;
+          min-height: 72px; border-bottom: 1px solid rgba(193,202,226,0.15);
+          color: #f7f9ff; font-size: 23px;
+        }
+        .cr-autocheck-check-row:last-child { border-bottom: 0; }
+        .cr-autocheck-check-label { min-width: 0; }
+        .cr-autocheck-check-value { color: #9fe176; font-weight: 800; }
+        .cr-autocheck-check-value-info { color: #6f93ff; }
+        .cr-autocheck-check-value-issue { color: #ff9a8f; }
+        .cr-autocheck-check-value-muted { color: #b5bfd2; }
+        .cr-autocheck-check-more { color: #7da0ff; font-size: 16px; white-space: nowrap; }
+        .cr-autocheck-check-more::after { content: "›"; margin-left: 18px; font-size: 24px; line-height: 0; }
+        .cr-autocheck-check-icon {
+          position: relative; width: 42px; height: 42px; border-radius: 50%;
+          border: 2px solid rgba(255,255,255,0.72); box-shadow: inset 0 0 0 2px rgba(0,0,0,0.16), 0 2px 7px rgba(0,0,0,0.25);
+        }
+        .cr-autocheck-check-icon-ok { background: linear-gradient(135deg, #9dcf72, #52762e); }
+        .cr-autocheck-check-icon-info,
+        .cr-autocheck-check-icon-muted { background: linear-gradient(135deg, #7796df, #304b90); }
+        .cr-autocheck-check-icon-issue { background: linear-gradient(135deg, #e68b83, #9b3d37); }
+        .cr-autocheck-check-icon-ok::after {
+          content: ""; position: absolute; left: 12px; top: 8px; width: 12px; height: 21px;
+          border-right: 5px solid #fff; border-bottom: 5px solid #fff; transform: rotate(45deg);
+        }
+        .cr-autocheck-check-icon-info::after,
+        .cr-autocheck-check-icon-muted::after {
+          content: "i"; position: absolute; inset: 0; display: grid; place-items: center;
+          color: #fff; font-size: 28px; font-weight: 900; font-family: Georgia, serif;
+        }
+        .cr-autocheck-check-icon-issue::before,
+        .cr-autocheck-check-icon-issue::after {
+          content: ""; position: absolute; left: 12px; right: 12px; top: 19px; height: 5px;
+          border-radius: 999px; background: #fff;
+        }
+        .cr-autocheck-check-icon-issue::after { transform: rotate(90deg); }
         .cr-autocheck-unavailable {
           padding: 16px; display: flex; justify-content: space-between;
           align-items: flex-start; gap: 14px;
@@ -1198,7 +1283,29 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           .cr-inspection-grid { grid-template-columns: 1fr; }
           .cr-image-grid { grid-template-columns: repeat(2, 1fr); }
           .cr-equipment-grid { grid-template-columns: 1fr; }
-          .cr-autocheck-hero, .cr-autocheck-check-grid, .cr-autocheck-summary-grid { grid-template-columns: 1fr; }
+          .cr-autocheck-hero { grid-template-columns: 1fr; }
+          .cr-autocheck-vehicle-card { padding: 22px 18px; }
+          .cr-autocheck-vehicle-title { font-size: 23px; }
+          .cr-autocheck-vehicle-subtitle,
+          .cr-autocheck-vin,
+          .cr-autocheck-fact,
+          .cr-autocheck-reported { font-size: 16px; }
+          .cr-autocheck-meter { height: 210px; }
+          .cr-autocheck-meter-arc { width: min(78vw, 300px); height: 150px; border-width: 26px; }
+          .cr-autocheck-meter-pointer { height: 146px; bottom: 43px; }
+          .cr-autocheck-meter-pointer span { width: 54px; height: 54px; border-width: 7px; }
+          .cr-autocheck-meter-score { top: 118px; font-size: 76px; }
+          .cr-autocheck-meter-low,
+          .cr-autocheck-meter-high { top: 118px; font-size: 22px; }
+          .cr-autocheck-score-heading { font-size: 21px; }
+          .cr-autocheck-carfax { grid-template-columns: 1fr; justify-items: start; padding: 20px; gap: 16px; }
+          .cr-autocheck-carfax-copy { font-size: 34px; }
+          .cr-autocheck-carfax-copy strong { font-size: 27px; }
+          .cr-autocheck-carfax-button { min-width: 0; width: 100%; }
+          .cr-autocheck-check-list { padding: 10px 12px; }
+          .cr-autocheck-check-row { grid-template-columns: 40px minmax(0, 1fr); gap: 14px; font-size: 18px; padding: 12px 0; }
+          .cr-autocheck-check-icon { width: 36px; height: 36px; }
+          .cr-autocheck-check-more { grid-column: 2; font-size: 14px; }
           .cr-autocheck-unavailable { flex-direction: column; }
           .cr-field-cell { border-right: none; }
           .cr-overlay-arrow { width: 40px; height: 40px; font-size: 24px; }
@@ -1253,24 +1360,30 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         :global(:root[data-theme="light"]) .cr-equipment-title { color: #1a2a40; }
         :global(:root[data-theme="light"]) .cr-equipment-detail { color: var(--muted); }
         :global(:root[data-theme="light"]) .cr-grid-thumb { border-color: #ccc; }
-        :global(:root[data-theme="light"]) .cr-autocheck-summary-card,
+        :global(:root[data-theme="light"]) .cr-autocheck-vehicle-card,
         :global(:root[data-theme="light"]) .cr-autocheck-score-card,
-        :global(:root[data-theme="light"]) .cr-autocheck-check-card,
         :global(:root[data-theme="light"]) .cr-autocheck-unavailable,
-        :global(:root[data-theme="light"]) .cr-autocheck-details { border-color: var(--line); background: var(--surface-soft); }
-        :global(:root[data-theme="light"]) .cr-autocheck-mini-label { color: var(--muted); }
-        :global(:root[data-theme="light"]) .cr-autocheck-title { color: #1a2a40; }
-        :global(:root[data-theme="light"]) .cr-autocheck-summary-stat { border-color: var(--line); background: var(--surface-strong); }
-        :global(:root[data-theme="light"]) .cr-autocheck-summary-stat span { color: var(--muted); }
-        :global(:root[data-theme="light"]) .cr-autocheck-summary-stat strong { color: #1a2a40; }
-        :global(:root[data-theme="light"]) .cr-autocheck-meta { color: var(--muted); }
-        :global(:root[data-theme="light"]) .cr-autocheck-gauge-cutout { background: #fff; }
-        :global(:root[data-theme="light"]) .cr-autocheck-gauge-center strong { color: #1a2a40; }
-        :global(:root[data-theme="light"]) .cr-autocheck-gauge-center span { color: var(--muted); }
-        :global(:root[data-theme="light"]) .cr-autocheck-scale { color: var(--muted); }
-        :global(:root[data-theme="light"]) .cr-autocheck-score-copy { color: #334155; }
-        :global(:root[data-theme="light"]) .cr-autocheck-check-label { color: #1a2a40; }
-        :global(:root[data-theme="light"]) .cr-autocheck-check-value { color: #334155; }
+        :global(:root[data-theme="light"]) .cr-autocheck-details {
+          border-color: rgba(71,91,160,0.62);
+          background: #f1f1f1;
+          box-shadow: 0 14px 28px rgba(15,23,42,0.08);
+        }
+        :global(:root[data-theme="light"]) .cr-autocheck-vehicle-title,
+        :global(:root[data-theme="light"]) .cr-autocheck-vin,
+        :global(:root[data-theme="light"]) .cr-autocheck-fact,
+        :global(:root[data-theme="light"]) .cr-autocheck-reported { color: #101827; }
+        :global(:root[data-theme="light"]) .cr-autocheck-vehicle-subtitle { color: #3f579e; }
+        :global(:root[data-theme="light"]) .cr-autocheck-score-card { background: #f1f1f1; }
+        :global(:root[data-theme="light"]) .cr-autocheck-meter-arc { border-color: #c9c9c9; box-shadow: none; }
+        :global(:root[data-theme="light"]) .cr-autocheck-meter-low,
+        :global(:root[data-theme="light"]) .cr-autocheck-meter-high { color: #444; }
+        :global(:root[data-theme="light"]) .cr-autocheck-meter-score,
+        :global(:root[data-theme="light"]) .cr-autocheck-score-heading,
+        :global(:root[data-theme="light"]) .cr-autocheck-learn { color: #566fae; }
+        :global(:root[data-theme="light"]) .cr-autocheck-score-copy { color: #101827; }
+        :global(:root[data-theme="light"]) .cr-autocheck-check-list { background: #fff; border-color: #7383d1; }
+        :global(:root[data-theme="light"]) .cr-autocheck-check-row { color: #101827; border-bottom-color: rgba(71,91,160,0.12); }
+        :global(:root[data-theme="light"]) .cr-autocheck-check-more { color: #40599f; }
         :global(:root[data-theme="light"]) .cr-autocheck-attempted { color: var(--muted); }
         :global(:root[data-theme="light"]) .cr-autocheck-details summary { color: #1a2a40; }
         :global(:root[data-theme="light"]) .cr-autocheck-details-hint { color: var(--muted); }
@@ -1285,12 +1398,12 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
 
 /* ── Helpers ── */
 
-function renderAutoCheckSummaryValue(label: string, value: string | number | null | undefined) {
+function renderAutoCheckFact(label: string, value: string | number | null | undefined) {
   if (value === null || value === undefined || value === "") return null;
   return (
-    <div className="cr-autocheck-summary-stat">
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <div className="cr-autocheck-fact">
+      <dt>{label}</dt>
+      <dd>{value}</dd>
     </div>
   );
 }
@@ -1298,14 +1411,15 @@ function renderAutoCheckSummaryValue(label: string, value: string | number | nul
 function renderAutoCheckCheck(label: string, value: string | null | undefined) {
   if (!value) return null;
   const tone = classifyAutoCheckValue(value);
+  const displayValue = formatAutoCheckCheckValue(value, tone);
   return (
-    <article className="cr-autocheck-check-card">
-      <div className="cr-autocheck-check-head">
-        <span className="cr-autocheck-check-label">{label}</span>
-        <span className={`cr-autocheck-chip cr-autocheck-chip-${tone}`}>{autoCheckToneLabel(tone)}</span>
-      </div>
-      <div className="cr-autocheck-check-value">{value}</div>
-    </article>
+    <div className="cr-autocheck-check-row">
+      <span className={`cr-autocheck-check-icon cr-autocheck-check-icon-${tone}`} aria-hidden="true" />
+      <span className="cr-autocheck-check-label">
+        {label} - <strong className={`cr-autocheck-check-value cr-autocheck-check-value-${tone}`}>{displayValue}</strong>
+      </span>
+      <span className="cr-autocheck-check-more">More info</span>
+    </div>
   );
 }
 
@@ -1606,8 +1720,13 @@ function normalizeAutoCheck(value: unknown): AutoCheckReport | null {
     scrape_status: scrapeStatus,
     attempted_at: typeof raw.attempted_at === "string" ? raw.attempted_at : null,
     autocheck_score: toFiniteInt(raw.autocheck_score),
+    score_range_low: firstFiniteInt(raw.score_range_low, raw.scoreRangeLow, raw.score_min, raw.scoreMin, raw.low_score),
+    score_range_high: firstFiniteInt(raw.score_range_high, raw.scoreRangeHigh, raw.score_max, raw.scoreMax, raw.high_score),
+    historical_event_count: firstFiniteInt(raw.historical_event_count, raw.historical_events, raw.event_count, raw.number_of_historical_events),
     owner_count: toFiniteInt(raw.owner_count),
     accident_count: toFiniteInt(raw.accident_count),
+    last_reported_event_date: normalizeString(raw.last_reported_event_date) || normalizeString(raw.last_event_date),
+    last_reported_mileage: firstFiniteInt(raw.last_reported_mileage, raw.last_reported_odometer, raw.last_mileage),
     title_brand_check: normalizeString(raw.title_brand_check),
     odometer_check: normalizeString(raw.odometer_check),
     accident_check: normalizeString(raw.accident_check),
@@ -1643,40 +1762,59 @@ function toFiniteInt(value: unknown): number | null {
   return null;
 }
 
-function summarizeAutoCheck(autocheck: AutoCheckReport | null) {
-  if (!autocheck) {
-    return { statusLabel: "Unavailable", statusTone: "muted", scoreBand: "Unavailable", scoreTone: "muted", scoreColor: "#7f8aa3", scoreDescription: "AutoCheck score data is not available for this vehicle." } as const;
+function firstFiniteInt(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = toFiniteInt(value);
+    if (parsed !== null) return parsed;
   }
-  const statusTone = autocheck.scrape_status === "success" ? "good" : autocheck.scrape_status === "partial" ? "warning" : "muted";
+  return null;
+}
+
+function summarizeAutoCheck(autocheck: AutoCheckReport | null) {
+  const fallback = { scoreRangeLow: 0, scoreRangeHigh: 100, pointerAngle: 0 };
+  if (!autocheck) {
+    return fallback;
+  }
   const score = autocheck.autocheck_score;
   if (score == null) {
-    return { statusLabel: autocheck.scrape_status.replaceAll("_", " "), statusTone, scoreBand: "Unavailable", scoreTone: "muted", scoreColor: "#7f8aa3", scoreDescription: "AutoCheck score was not included in this report payload." } as const;
+    return fallback;
   }
-  if (score >= 85) {
-    return { statusLabel: autocheck.scrape_status.replaceAll("_", " "), statusTone, scoreBand: "Strong", scoreTone: "strong", scoreColor: "#6d85ff", scoreDescription: "This score sits in the stronger end of AutoCheck's 0-100 scale." } as const;
+  const low = clampScore(autocheck.score_range_low ?? score - 3);
+  const high = clampScore(Math.max(autocheck.score_range_high ?? score + 2, low + 1));
+  const scorePosition = Math.max(0, Math.min(1, (score - low) / Math.max(1, high - low)));
+  return {
+    scoreRangeLow: low,
+    scoreRangeHigh: high,
+    pointerAngle: -90 + scorePosition * 180,
+  };
+}
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function formatAutoCheckCheckValue(value: string, tone: "ok" | "issue" | "info" | "muted"): string {
+  const normalized = value.trim().toLowerCase();
+  if (tone === "ok") {
+    if (normalized.includes("eligible")) return "Qualifies";
+    return "OK";
   }
-  if (score >= 70) {
-    return { statusLabel: autocheck.scrape_status.replaceAll("_", " "), statusTone, scoreBand: "Watch", scoreTone: "watch", scoreColor: "#d5a54b", scoreDescription: "This score is worth a closer look alongside the check results below." } as const;
+  if (normalized.includes("other use")) return "Other Use Reported";
+  const countMatch = normalized.match(/\((\d+)\)|\b(\d+)\b/);
+  if (tone === "info") {
+    return countMatch?.[1] || countMatch?.[2] ? `Information Reported(${countMatch[1] || countMatch[2]})` : "Information Reported";
   }
-  return { statusLabel: autocheck.scrape_status.replaceAll("_", " "), statusTone, scoreBand: "Watch", scoreTone: "watch", scoreColor: "#d96b63", scoreDescription: "This score falls on the lower end of AutoCheck's 0-100 scale and should be reviewed carefully." } as const;
+  return value;
 }
 
 function classifyAutoCheckValue(value: string): "ok" | "issue" | "info" | "muted" {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return "muted";
-  if (normalized === "ok" || normalized.includes("no accidents reported") || normalized.includes("no damage reported") || normalized.includes("no problem") || normalized.includes("no issues") || normalized.includes("clear") || normalized.includes("eligible")) return "ok";
-  if (normalized.includes("problem reported") || normalized.includes("information reported") || normalized.includes("reported") || normalized.includes("other use") || normalized.includes("accident") || normalized.includes("damage") || normalized.includes("brand") || normalized.includes("not eligible")) return "issue";
+  if (normalized === "ok" || normalized.includes("no accidents reported") || normalized.includes("no damage reported") || normalized.includes("no problem") || normalized.includes("no issues") || normalized.includes("clear") || normalized.includes("eligible") || normalized.includes("qualifies")) return "ok";
+  if (normalized.includes("not eligible") || normalized.includes("severe") || normalized.includes("salvage") || normalized.includes("junk") || normalized.includes("branded title")) return "issue";
+  if (normalized.includes("information reported") || normalized.includes("reported") || normalized.includes("other use") || normalized.includes("accident") || normalized.includes("damage") || normalized.includes("brand")) return "info";
   if (normalized.includes("unknown") || normalized.includes("not attempted")) return "muted";
   return "info";
-}
-
-function autoCheckToneLabel(tone: "ok" | "issue" | "info" | "muted"): string {
-  switch (tone) {
-    case "ok": return "OK";
-    case "issue": return "Reported";
-    case "info": return "Info";
-    default: return "Unknown";
-  }
 }
 
 function formatTimestamp(value: string): string {
@@ -1685,6 +1823,12 @@ function formatTimestamp(value: string): string {
   } catch {
     return value;
   }
+}
+
+function formatAutoCheckDate(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }).format(parsed);
 }
 
 type EquipmentSectionItem = { key: string; title: string; meta?: string | null; detail?: string | null; };

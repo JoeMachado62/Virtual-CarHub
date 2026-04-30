@@ -134,10 +134,10 @@ export function DealBuilderPanel() {
   if (pendingFilters !== null) {
     return (
       <aside className="deal-builder-card">
-        <p className="section-eyebrow">Build Your Deal</p>
+        <p className="section-eyebrow">Wholesale Acquisition Search</p>
         <h2>Almost there — where are you located?</h2>
         <p className="muted-copy">
-          Enter your ZIP code so Danny can compare vehicles that make sense for your area.
+          Enter your ZIP code so Danny can compare wholesale opportunities that make sense for your area.
         </p>
         <form className="deal-builder-form" onSubmit={onZipSubmit}>
           <input
@@ -162,7 +162,7 @@ export function DealBuilderPanel() {
             className="button"
             disabled={!/^\d{5}$/.test(zipCode.trim())}
           >
-            Search Inventory
+            Start Wholesale Search
           </button>
           <button
             type="button"
@@ -187,10 +187,10 @@ export function DealBuilderPanel() {
 
   return (
     <aside className="deal-builder-card">
-      <p className="section-eyebrow">Build Your Deal</p>
-      <h2>Tell Danny exactly what you want.</h2>
+      <p className="section-eyebrow">Wholesale Acquisition Search</p>
+      <h2>Tell Danny what you want to acquire.</h2>
       <p className="muted-copy">
-        Describe the vehicle, price range, mileage, or features you want. Danny will turn it into a live wholesale
+        Share the vehicle, budget, mileage, and must-haves. Danny turns your request into a live wholesale acquisition
         search.
       </p>
 
@@ -199,18 +199,18 @@ export function DealBuilderPanel() {
           rows={4}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="I want a 2021 BMW X5 with under 40k miles..."
+          placeholder="I want a 2021 BMW X5 under 40k miles..."
           disabled={loading}
         />
         <button type="submit" className="button" disabled={loading}>
-          {loading ? "Finding matches..." : "Browse Matches"}
+          {loading ? "Starting search..." : "Start Wholesale Search"}
         </button>
       </form>
       {error ? <p className="dashboard-error">{error}</p> : null}
 
       <div className="deal-builder-badges">
-        <span className="badge">Wholesale + retail inventory</span>
-        <span className="badge">Built around your budget</span>
+        <span className="badge">Dealer-only wholesale channels</span>
+        <span className="badge">Buyer-side guidance</span>
       </div>
     </aside>
   );
