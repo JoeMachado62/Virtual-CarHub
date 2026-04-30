@@ -18,6 +18,8 @@ from app.schemas.ove_inventory import (
 )
 from app.services.audit_service import log_event
 from app.services.ghl_lifecycle_service import GHLLifecycleService
+from app.schemas.hot_deals import HotDealIngestRequest
+from app.services.hot_deal_service import HotDealBatchValidationError, ingest_hot_deals, ingest_hot_deals_resilient
 from app.services.ove_inventory_service import (
     OveDetailRequestNotFoundError,
     OveDetailRequestOwnershipError,
@@ -32,6 +34,7 @@ from app.services.ove_inventory_service import (
     get_pending_ove_detail_requests,
     heartbeat_ove_detail_request,
     ingest_ove_inventory,
+    prune_unavailable_ove_inventory,
     serialize_request_timestamp,
     terminal_ove_detail_request,
     upsert_ove_vehicle_detail,
@@ -46,6 +49,38 @@ def _normalized_vin(vin: str) -> str:
     if len(cleaned) != 17:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="VIN must be 17 characters")
     return cleaned
+
+
+@router.post("/hot-deals/ingest")
+def ingest_ove_hot_deals(payload: dict | HotDealIngestRequest, db: Session = Depends(get_db)) -> dict:
+    try:
+        if isinstance(payload, HotDealIngestRequest):
+            report = ingest_hot_deals(db, payload)
+        else:
+            report = ingest_hot_deals_resilient(db, payload)
+    except HotDealBatchValidationError as exc:
+        db.rollback()
+        log_event(
+            db,
+            deal_id=None,
+            event_type="inventory_ove_hot_deals_rejected",
+            actor="system",
+            payload=exc.report,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.report,
+        ) from exc
+    log_event(
+        db,
+        deal_id=None,
+        event_type="inventory_ove_hot_deals_ingest",
+        actor="system",
+        payload=report,
+    )
+    db.commit()
+    return ok(report)
 
 
 @router.post("/ingest")
@@ -236,6 +271,9 @@ def request_ove_detail(vin: str, payload: OveDetailRequestEnqueueRequest, db: Se
 def cleanup_stale_ove(
     stale_threshold_days: int = Query(default=None, ge=1, le=30),
     max_mark: int = Query(default=None, ge=1, le=10000),
+    prune_unavailable: bool = Query(default=True),
+    unavailable_retention_days: int = Query(default=None, ge=1, le=365),
+    max_delete: int = Query(default=None, ge=1, le=50000),
     dry_run: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -244,14 +282,31 @@ def cleanup_stale_ove(
     threshold = stale_threshold_days if stale_threshold_days is not None else settings.ove_stale_threshold_days
     cap = max_mark if max_mark is not None else settings.ove_stale_cleanup_max_per_run
 
-    result = cleanup_stale_ove_inventory(
+    stale_result = cleanup_stale_ove_inventory(
         db,
         stale_threshold_days=threshold,
         max_mark=cap,
         dry_run=dry_run,
     )
+    prune_result = None
+    if prune_unavailable:
+        prune_result = prune_unavailable_ove_inventory(
+            db,
+            retention_days=(
+                unavailable_retention_days
+                if unavailable_retention_days is not None
+                else settings.ove_unavailable_retention_days
+            ),
+            max_delete=max_delete if max_delete is not None else settings.ove_unavailable_cleanup_max_per_run,
+            dry_run=dry_run,
+        )
 
-    if not dry_run and result.get("marked_unavailable", 0) > 0:
+    result = {"stale": stale_result, "pruned_unavailable": prune_result}
+
+    changed = stale_result.get("marked_unavailable", 0) > 0 or (
+        prune_result is not None and prune_result.get("deleted", 0) > 0
+    )
+    if not dry_run and changed:
         log_event(
             db,
             deal_id=None,

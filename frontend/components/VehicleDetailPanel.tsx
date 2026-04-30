@@ -141,6 +141,14 @@ type VehicleDetail = {
   listing_snapshot?: Record<string, unknown>;
   mmr?: number | null;
   badges?: { type: string; label: string; color: string; ratio?: string }[];
+  hot_deal?: {
+    deal_label: string;
+    deal_delta: number;
+    mmr_value: number;
+    auction_end_at: string;
+    marketing_title?: string | null;
+    marketing_summary?: string | null;
+  } | null;
   features_raw: string[];
   high_value_features?: string[];
   options?: string[];
@@ -605,6 +613,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   const [downPaymentInput, setDownPaymentInput] = useState("");
   const [marketComparison, setMarketComparison] = useState<MarketComparisonData | null>(null);
   const [marketComparisonLoading, setMarketComparisonLoading] = useState(false);
+  const [countdownNow, setCountdownNow] = useState(() => Date.now());
   const photoTouchStartX = useRef<number | null>(null);
   const topResetVin = useRef<string | null>(null);
 
@@ -616,6 +625,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [vin]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setCountdownNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -997,12 +1011,23 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   const featureLimit = showAllFeatures ? expandedFeatureBadges.length : 24;
   const isAuction = vehicle.source_type === "ove" || vehicle.source_type === "auction";
   const sellerSummary = sanitizePublicText((vehicle.seller_comments || "").trim()) || buildFallbackSellerSummary(vehicle);
+  const hotDeal = vehicle.hot_deal;
 
   return (
-    <div className="vdp-wrap">
+    <div className={`vdp-wrap${hotDeal ? " vdp-wrap--hot-deal" : ""}`}>
       <a className="vdp-back-link" href="#" onClick={(e) => { e.preventDefault(); window.history.back(); }}>
         &lsaquo; View similar vehicles
       </a>
+      {hotDeal ? (
+        <div className="vdp-hot-deal-banner">
+          <div>
+            <span className="hot-deal-pill">Deal of the Hour</span>
+            <strong>{hotDeal.deal_label} Deal</strong>
+            <span>{formatCurrency(hotDeal.deal_delta)} below MMR</span>
+          </div>
+          <span className="vdp-hot-deal-countdown">{formatHotDealCountdown(hotDeal.auction_end_at, countdownNow)}</span>
+        </div>
+      ) : null}
 
       <section className="card vdp-hero-card">
         <div className="vdp-hero-grid">
@@ -1103,7 +1128,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 <input
                   className="input vdp-down-payment-input"
                   type="text"
-                  inputMode="decimal"
+                  inputMode="text"
                   value={downPaymentInput}
                   onChange={(event) => setDownPaymentInput(event.target.value)}
                   placeholder="$7,000 or 10%"
@@ -2079,6 +2104,20 @@ function formatCurrency(value: number): string {
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(value || 0);
+}
+
+function formatHotDealCountdown(target: string, now: number): string {
+  const remaining = Math.max(0, new Date(target).getTime() - now);
+  const totalSeconds = Math.floor(remaining / 1000);
+  if (totalSeconds <= 0) return "Expired";
+  if (totalSeconds < 60) return "Ending now";
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours < 1) {
+    return `Final minutes ${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `Ends in ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function resolvePricingBadge(vehicle: VehicleDetail, displayedPrice: number): string {

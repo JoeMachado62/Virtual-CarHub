@@ -21,7 +21,7 @@ from app.core.responses import ok
 from app.db.session import get_db
 from app.integrations.marketcheck_client import MarketCheckClient
 from app.integrations.nhtsa_client import NHTSAClient, categorize_decode
-from app.models.entities import Deal, GarageItem, OveVehicleDetail, User, Vehicle, VehicleHistoryEnrichment, VehicleImageAsset, VehicleTaxonomyCache
+from app.models.entities import Deal, GarageItem, HotDeal, OveVehicleDetail, User, Vehicle, VehicleHistoryEnrichment, VehicleImageAsset, VehicleTaxonomyCache
 from app.services.marketcheck_history_enrichment_service import (
     decode_option_packages,
     enrich_vehicle_history,
@@ -36,6 +36,7 @@ from app.services.seller_comment_service import (
     cache_vehicle_seller_comment,
     get_cached_vehicle_seller_comment,
 )
+from app.services.hot_deal_service import get_active_hot_deals, serialize_hot_deal
 from app.services.image_pipeline_service import resolve_vehicle_card_media, resolve_vehicle_display_context
 from app.services.inventory_taxonomy_service import (
     MIN_TAXONOMY_YEAR,
@@ -1714,6 +1715,14 @@ def list_taxonomy_routes(db: Session = Depends(get_db)) -> dict:
     return ok({"routes": routes, "count": len(routes)})
 
 
+@router.get("/hot-deals/active")
+def active_hot_deals(
+    limit: int = Query(default=12, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> dict:
+    return ok({"items": get_active_hot_deals(db, limit=limit)})
+
+
 class _ParseQueryBody(BaseModel):
     query: str = ""
 
@@ -2520,7 +2529,8 @@ def get_inventory_vehicle(
         except Exception:
             logger.warning("ChromeData detail fetch failed for vin=%s", vehicle.vin, exc_info=True)
 
-    resolved_images = display_context.get("gallery_images") or (vehicle.images or [])
+    public_gallery = display_context.get("gallery_images") or []
+    resolved_images = public_gallery or ([] if display_context.get("dealer_photos_gated") else (vehicle.images or []))
     hero_image = display_context.get("hero_image") or (resolved_images[0] if resolved_images else None)
 
     listing_meta: dict[str, Any] = {}
@@ -2651,6 +2661,16 @@ def get_inventory_vehicle(
         or rewritten_listing_comment
         or raw_listing_comment
     )
+    active_hot_deal = db.scalar(
+        select(HotDeal)
+        .where(
+            HotDeal.vin == vehicle.vin,
+            HotDeal.is_active.is_(True),
+            HotDeal.expires_at > datetime.now(UTC),
+        )
+        .order_by(HotDeal.deal_rank.asc(), HotDeal.deal_delta.desc())
+        .limit(1)
+    )
 
     return ok(
         {
@@ -2759,6 +2779,7 @@ def get_inventory_vehicle(
             "condition_report": (ove_detail.condition_report_json if ove_detail else {}) if _can_view_cr else {},
             "condition_report_url": _extract_cr_url(ove_detail) if _can_view_cr else None,
             "listing_snapshot": ove_detail.listing_snapshot_json if ove_detail else {},
+            "hot_deal": serialize_hot_deal(active_hot_deal) if active_hot_deal else None,
             "ove_detail": ove_payload,
             "history_enrichment": {
                 "status": history_enrichment.status,
@@ -2894,7 +2915,7 @@ def get_similar_vehicles(
     results = []
     for row in rows:
         card_media = resolve_vehicle_card_media(db, vehicle=row)
-        hero = card_media.thumbnail or (row.images[0] if row.images else None)
+        hero = card_media.thumbnail or (None if card_media.dealer_photos_gated else (row.images[0] if row.images else None))
         normalized = row.features_normalized or {}
         results.append({
             "vin": row.vin,
