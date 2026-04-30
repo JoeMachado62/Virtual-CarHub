@@ -63,8 +63,16 @@ def get_optional_user(
         return None
 
 
-def require_service_token(x_service_token: str | None = Header(default=None)) -> None:
-    if x_service_token != settings.service_token:
+def require_service_token(
+    authorization: str | None = Header(default=None),
+    x_service_token: str | None = Header(default=None),
+) -> None:
+    bearer_token = ""
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer":
+            bearer_token = token.strip()
+    if x_service_token != settings.service_token and bearer_token != settings.service_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid service token",

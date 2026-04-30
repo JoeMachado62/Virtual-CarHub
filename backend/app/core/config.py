@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     ove_stale_cleanup_enabled: bool = Field(default=True, alias="OVE_STALE_CLEANUP_ENABLED")
     ove_stale_cleanup_interval_seconds: int = Field(default=7200, alias="OVE_STALE_CLEANUP_INTERVAL_SECONDS")
     ove_stale_cleanup_startup_delay_seconds: int = Field(default=120, alias="OVE_STALE_CLEANUP_STARTUP_DELAY_SECONDS")
+    ove_unavailable_retention_days: int = Field(default=14, alias="OVE_UNAVAILABLE_RETENTION_DAYS")
+    ove_unavailable_cleanup_max_per_run: int = Field(default=5000, alias="OVE_UNAVAILABLE_CLEANUP_MAX_PER_RUN")
 
     # OVE Operational Health thresholds (minutes). Used by /inventory/ove/health
     # to classify staleness into ok / warning / critical bands.

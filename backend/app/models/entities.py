@@ -293,6 +293,42 @@ class OveVehicleDetail(Base, TimestampMixin):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class HotDeal(Base, TimestampMixin):
+    __tablename__ = "hot_deals"
+    __table_args__ = (
+        Index("ix_hot_deals_active_expires", "is_active", "expires_at"),
+        Index("ix_hot_deals_active_rank_delta", "is_active", "deal_rank", "deal_delta"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    vin: Mapped[str] = mapped_column(ForeignKey("vehicles.vin", ondelete="CASCADE"), index=True)
+    source_platform: Mapped[str] = mapped_column(String(40), default=AuctionPlatform.MANHEIM.value, nullable=False, index=True)
+    source_list_name: Mapped[str] = mapped_column(String(120), default="VHC Marketing List", nullable=False, index=True)
+    batch_id: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    snapshot_mode: Mapped[str] = mapped_column(String(30), default="full_replace", nullable=False)
+    listing_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    listing_url: Mapped[str | None] = mapped_column(String(1200))
+    auction_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    auction_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    mmr_value: Mapped[float] = mapped_column(Float, nullable=False)
+    asking_price: Mapped[float] = mapped_column(Float, nullable=False)
+    deal_delta: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    deal_delta_pct: Mapped[float | None] = mapped_column(Float)
+    deal_label: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    deal_rank: Mapped[int] = mapped_column(Integer, default=100, nullable=False, index=True)
+    cr_screen_status: Mapped[str] = mapped_column(String(40), default="passed", nullable=False, index=True)
+    cr_screen_reasons: Mapped[list] = mapped_column(JSON, default=list)
+    marketing_title: Mapped[str | None] = mapped_column(String(255))
+    marketing_summary: Mapped[str | None] = mapped_column(Text)
+    hero_image_url: Mapped[str | None] = mapped_column(String(1200))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    featured_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    vehicle: Mapped[Vehicle] = relationship()
+
+
 class OveDetailRequest(Base, TimestampMixin):
     __tablename__ = "ove_detail_requests"
 

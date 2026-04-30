@@ -245,6 +245,8 @@ def get_profile(
     db.commit()
     return ok(
         {
+            "first_name": current_user.first_name,
+            "last_name": current_user.last_name,
             "profile_tier": profile.profile_tier.value,
             "version": profile.version,
             "bfv_json": profile.bfv_json,

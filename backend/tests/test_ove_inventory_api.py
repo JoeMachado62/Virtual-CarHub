@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import delete, func
+from sqlalchemy import delete, func, select
 
 # Hard guard against running these tests against a non-throwaway database.
 # These tests use db.execute(delete(OveDetailRequest)) and seed fixture VINs
@@ -25,6 +25,7 @@ from app.api.v1.routers.inventory_ove import (
     complete_ove_detail,
     fail_ove_detail,
     heartbeat_ove_detail,
+    ingest_ove_hot_deals,
     ingest_ove,
     pending_ove_detail_requests,
     push_ove_detail,
@@ -34,7 +35,8 @@ from app.api.v1.routers.inventory_ove import (
 from app.core.constants import OveDetailRequestStatus
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
-from app.models.entities import OveDetailRequest, OveVehicleDetail, Vehicle
+from app.models.entities import HotDeal, OveDetailRequest, OveVehicleDetail, Vehicle
+from app.schemas.hot_deals import HotDealIngestRequest
 from app.schemas.ove_inventory import (
     NAAA_INSPECTION_TEMPLATE,
     OveBulkIngestRequest,
@@ -52,6 +54,270 @@ from app.schemas.ove_inventory import (
     _normalize_inspection,
 )
 from app.services import ove_inventory_service
+from app.services.hot_deal_service import get_active_hot_deals
+
+
+def test_prune_unavailable_ove_inventory_deletes_only_old_unavailable_rows() -> None:
+    init_db()
+    old_vin = "1HGCM82633A100001"
+    recent_vin = "1HGCM82633A100002"
+    active_vin = "1HGCM82633A100003"
+    marketcheck_vin = "1HGCM82633A100004"
+    now = datetime.now(UTC)
+
+    with SessionLocal() as db:
+        db.execute(delete(Vehicle).where(Vehicle.vin.in_([old_vin, recent_vin, active_vin, marketcheck_vin])))
+        db.add_all(
+            [
+                Vehicle(
+                    vin=old_vin,
+                    year=2024,
+                    make="Honda",
+                    model="Accord",
+                    price_asking=25000,
+                    source_type="ove",
+                    available=False,
+                    last_seen_active=now - timedelta(days=20),
+                ),
+                Vehicle(
+                    vin=recent_vin,
+                    year=2024,
+                    make="Honda",
+                    model="Accord",
+                    price_asking=25000,
+                    source_type="ove",
+                    available=False,
+                    last_seen_active=now - timedelta(days=2),
+                ),
+                Vehicle(
+                    vin=active_vin,
+                    year=2024,
+                    make="Honda",
+                    model="Accord",
+                    price_asking=25000,
+                    source_type="ove",
+                    available=True,
+                    last_seen_active=now - timedelta(days=20),
+                ),
+                Vehicle(
+                    vin=marketcheck_vin,
+                    year=2024,
+                    make="Honda",
+                    model="Accord",
+                    price_asking=25000,
+                    source_type="marketcheck",
+                    available=False,
+                    last_seen_active=now - timedelta(days=20),
+                ),
+            ]
+        )
+        db.commit()
+
+        result = ove_inventory_service.prune_unavailable_ove_inventory(
+            db,
+            retention_days=14,
+            max_delete=10,
+        )
+        db.commit()
+
+        assert result["deleted"] == 1
+        assert db.get(Vehicle, old_vin) is None
+        assert db.get(Vehicle, recent_vin) is not None
+        assert db.get(Vehicle, active_vin) is not None
+        assert db.get(Vehicle, marketcheck_vin) is not None
+
+
+def test_hot_deals_ingest_upserts_vehicle_detail_and_active_feed() -> None:
+    init_db()
+    vin = "1HGCM82633A200001"
+    now = datetime.now(UTC)
+
+    with SessionLocal() as db:
+        db.execute(delete(HotDeal).where(HotDeal.vin == vin))
+        db.execute(delete(OveVehicleDetail).where(OveVehicleDetail.vin == vin))
+        db.execute(delete(Vehicle).where(Vehicle.vin == vin))
+        db.commit()
+
+        response = ingest_ove_hot_deals(
+            HotDealIngestRequest.model_validate(
+                {
+                    "source_list_name": "VHC Marketing List",
+                    "source_platform": "manheim",
+                    "batch_id": "vhc-marketing-test",
+                    "snapshot_mode": "full_replace",
+                    "scraped_at": now.isoformat(),
+                    "filter_rules": {"minimum_delta_below_mmr": 1000},
+                    "deals": [
+                        {
+                            "vin": vin,
+                            "listing_id": "ove-hot-1",
+                            "listing_url": "https://example.com/ove/hot-1",
+                            "auction_start_at": (now - timedelta(hours=1)).isoformat(),
+                            "auction_end_at": (now + timedelta(hours=6)).isoformat(),
+                            "vehicle": {
+                                "year": 2025,
+                                "make": "Ford",
+                                "model": "F-250",
+                                "trim": "XL",
+                                "price_asking": 56049,
+                                "location_state": "FL",
+                                "images": ["https://images.example.com/f250.jpg"],
+                                "features_normalized": {"drivetrain": "4WD"},
+                            },
+                            "pricing": {
+                                "mmr_value": 58500,
+                                "asking_price": 56049,
+                                "deal_delta": 2451,
+                                "deal_delta_pct": 4.19,
+                                "deal_label": "Excellent",
+                                "deal_rank": 1,
+                            },
+                            "cr_screen": {
+                                "status": "passed",
+                                "reasons": [],
+                                "excluded_signals_checked": ["structural_damage"],
+                            },
+                            "detail": {
+                                "images": [
+                                    {
+                                        "url": "https://images.example.com/f250.jpg",
+                                        "role": "hero",
+                                        "display_order": 0,
+                                        "is_primary": True,
+                                    }
+                                ],
+                                "condition_report": {
+                                    "overall_grade": "4.2",
+                                    "announcements": [],
+                                "tire_depths": {
+                                    "lf": {"position_label": "LF", "tread_depth": "7/32"},
+                                    "rf": {"position_label": "RF", "tread_depth": "7/32"},
+                                    "lr": {"position_label": "LR", "tread_depth": "6/32"},
+                                    "rr": {"position_label": "RR", "tread_depth": "6/32"},
+                                },
+                                "damage_summary": {"total_items": 0, "structural_issue": False},
+                                    "metadata": {
+                                        "report_link": {
+                                            "href": "http://content.liquidmotors.com/IR/1/2.html",
+                                            "title": "4.2",
+                                        }
+                                    },
+                                },
+                                "seller_comments": "Runs and drives well.",
+                                "listing_snapshot": {
+                                    "title": "2025 Ford F-250 XL",
+                                    "page_url": "https://example.com/ove/hot-1",
+                                },
+                            },
+                            "marketing": {
+                                "title": "Deal of the Hour",
+                                "summary": "$2,451 below MMR",
+                                "featured_until": (now + timedelta(hours=1)).isoformat(),
+                            },
+                        }
+                    ],
+                }
+            ),
+            db=db,
+        )
+
+        assert response["status"] == "ok"
+        assert response["data"]["requested"] == 1
+        assert response["data"]["hot_deals_inserted"] == 1
+
+        vehicle = db.get(Vehicle, vin)
+        assert vehicle is not None
+        assert vehicle.available is True
+        assert vehicle.features_normalized["mmr"] == 58500
+
+        detail = db.get(OveVehicleDetail, vin)
+        assert detail is not None
+        assert detail.condition_report_json["overall_grade"] == "4.2"
+        assert detail.condition_report_json["vehicle_history"]["owners"] == 0
+        assert detail.condition_report_json["damage_items"] == []
+
+        hot_deal = db.scalar(select(HotDeal).where(HotDeal.vin == vin, HotDeal.is_active.is_(True)))
+        assert hot_deal is not None
+        assert hot_deal.deal_delta == 2451
+
+        vehicle.available = False
+        db.commit()
+
+        feed_items = get_active_hot_deals(db, limit=12)
+        assert any(item["vin"] == vin for item in feed_items)
+
+
+def test_hot_deals_ingest_accepts_valid_items_when_batch_has_invalid_deal() -> None:
+    init_db()
+    valid_vin = "1HGCM82633A200011"
+    invalid_vin = "1HGCM82633A200012"
+    now = datetime.now(UTC)
+
+    with SessionLocal() as db:
+        db.execute(delete(HotDeal).where(HotDeal.vin.in_([valid_vin, invalid_vin])))
+        db.execute(delete(OveVehicleDetail).where(OveVehicleDetail.vin.in_([valid_vin, invalid_vin])))
+        db.execute(delete(Vehicle).where(Vehicle.vin.in_([valid_vin, invalid_vin])))
+        db.commit()
+
+        valid_deal = {
+            "vin": valid_vin,
+            "listing_id": "ove-hot-partial-1",
+            "listing_url": "https://example.com/ove/hot-partial-1",
+            "auction_end_at": (now + timedelta(hours=6)).isoformat(),
+            "vehicle": {
+                "year": 2025,
+                "make": "Ford",
+                "model": "F-250",
+                "price_asking": 56049,
+                "images": ["https://images.example.com/f250.jpg"],
+            },
+            "pricing": {
+                "mmr_value": 58500,
+                "asking_price": 56049,
+                "deal_delta": 2451,
+                "deal_label": "Excellent",
+                "deal_rank": 1,
+            },
+            "detail": {
+                "condition_report": {
+                    "overall_grade": "4.2",
+                    "metadata": {
+                        "report_link": {
+                            "href": "http://content.liquidmotors.com/IR/1/partial.html",
+                            "title": "4.2",
+                        }
+                    },
+                },
+                "listing_snapshot": {"title": "2025 Ford F-250"},
+            },
+        }
+        invalid_deal = {
+            **valid_deal,
+            "vin": invalid_vin,
+            "listing_id": "ove-hot-partial-2",
+            "detail": {"listing_snapshot": {"title": "Missing CR"}},
+        }
+
+        response = ingest_ove_hot_deals(
+            {
+                "source_list_name": "VHC Test Partial Hot Deals",
+                "source_platform": "manheim",
+                "batch_id": "vhc-marketing-partial-test",
+                "snapshot_mode": "full_replace",
+                "scraped_at": now.isoformat(),
+                "deals": [valid_deal, invalid_deal],
+            },
+            db=db,
+        )
+
+        assert response["status"] == "ok"
+        assert response["data"]["requested"] == 2
+        assert response["data"]["accepted"] == 1
+        assert response["data"]["rejected"] == 1
+        assert response["data"]["rejected_items"][0]["vin"] == invalid_vin
+        assert response["data"]["rejected_items"][0]["errors"][0]["field"] == "payload"
+        assert db.scalar(select(HotDeal).where(HotDeal.vin == valid_vin)) is not None
+        assert db.scalar(select(HotDeal).where(HotDeal.vin == invalid_vin)) is None
 
 
 def test_ove_ingest_request_pending_and_detail_contract(monkeypatch: pytest.MonkeyPatch) -> None:

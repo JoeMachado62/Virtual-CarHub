@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -334,6 +334,68 @@ def cleanup_stale_ove_inventory(
         "marked_unavailable": marked,
         "capped": total_stale > max_mark,
         "remaining_stale": max(0, total_stale - marked),
+    }
+
+
+def prune_unavailable_ove_inventory(
+    db: Session,
+    *,
+    retention_days: int = 14,
+    max_delete: int = 5000,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Delete unavailable OVE rows after a short retention window."""
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    prune_filter = [
+        func.lower(Vehicle.source_type) == InventorySourceType.OVE.value,
+        Vehicle.available.is_(False),
+        Vehicle.last_seen_active < cutoff,
+    ]
+
+    total_prunable = db.scalar(
+        select(func.count()).select_from(Vehicle).where(*prune_filter)
+    ) or 0
+
+    if dry_run or total_prunable == 0:
+        return {
+            "dry_run": dry_run,
+            "retention_days": retention_days,
+            "cutoff": cutoff.isoformat(),
+            "total_prunable_found": total_prunable,
+            "deleted": 0,
+            "capped": False,
+            "remaining_prunable": total_prunable if dry_run else 0,
+        }
+
+    vins = [
+        row[0]
+        for row in db.execute(
+            select(Vehicle.vin)
+            .where(*prune_filter)
+            .order_by(Vehicle.last_seen_active.asc())
+            .limit(max_delete)
+        ).all()
+    ]
+    if not vins:
+        return {
+            "dry_run": False,
+            "retention_days": retention_days,
+            "cutoff": cutoff.isoformat(),
+            "total_prunable_found": total_prunable,
+            "deleted": 0,
+            "capped": False,
+            "remaining_prunable": 0,
+        }
+
+    deleted = db.execute(delete(Vehicle).where(Vehicle.vin.in_(vins))).rowcount or 0
+    return {
+        "dry_run": False,
+        "retention_days": retention_days,
+        "cutoff": cutoff.isoformat(),
+        "total_prunable_found": total_prunable,
+        "deleted": deleted,
+        "capped": total_prunable > max_delete,
+        "remaining_prunable": max(0, total_prunable - deleted),
     }
 
 
