@@ -22,7 +22,6 @@ def nightly_ingest() -> dict:
             client = MarketCheckClient(
                 api_key=settings.marketcheck_api_key,
                 api_secret=settings.marketcheck_api_secret,
-                price_api_key=settings.marketcheck_price_api_key,
                 api_base_url=settings.marketcheck_api_base_url,
                 live=True,
             )

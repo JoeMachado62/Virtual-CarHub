@@ -36,7 +36,7 @@ def build_marketcheck_client() -> MarketCheckClient:
     return MarketCheckClient(
         api_key=settings.marketcheck_api_key,
         api_secret=settings.marketcheck_api_secret,
-        price_api_key=settings.marketcheck_price_api_key,
+
         api_base_url=settings.marketcheck_api_base_url,
         live=settings.has_marketcheck,
     )
@@ -289,133 +289,6 @@ def merge_listing_metadata(primary: dict[str, Any] | None, secondary: dict[str, 
     return merged
 
 
-def _normalize_package_code(value: str | None) -> str:
-    return "".join(ch for ch in (value or "").upper() if ch.isalnum())
-
-
-def _available_option_package_lookup(payload: Any) -> dict[str, dict[str, Any]]:
-    if not isinstance(payload, dict):
-        return {}
-    rows = payload.get("available_options_packages") or payload.get("options_packages") or payload.get("packages") or []
-    if not isinstance(rows, list):
-        return {}
-
-    lookup: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        code = _to_str(row.get("code") or row.get("package_code") or row.get("id"))
-        if not code:
-            continue
-        lookup[_normalize_package_code(code)] = row
-    return lookup
-
-
-def _package_display_name(code: str, package_row: dict[str, Any] | None) -> str:
-    if not package_row:
-        return code
-
-    name = _to_str(
-        package_row.get("name")
-        or package_row.get("package_name")
-        or package_row.get("title")
-        or package_row.get("description")
-    )
-    if not name:
-        return code
-
-    normalized_code = _normalize_package_code(code)
-    if normalized_code and normalized_code not in _normalize_package_code(name):
-        return f"{name} ({code})"
-    return name
-
-
-def rebuild_listing_feature_merge(metadata: dict[str, Any]) -> dict[str, Any]:
-    merged_feature_details: list[dict[str, str | None]] = []
-    seen: set[str] = set()
-    for key in ("feature_details", "high_value_feature_details", "option_details", "option_package_details"):
-        for item in metadata.get(key) or []:
-            if not isinstance(item, dict):
-                continue
-            description = _to_str(item.get("description"))
-            if not description:
-                continue
-            marker = "|".join(
-                [
-                    (item.get("category") or "").strip().lower(),
-                    description.strip().lower(),
-                    (item.get("type") or "").strip().lower(),
-                ]
-            )
-            if marker in seen:
-                continue
-            seen.add(marker)
-            merged_feature_details.append(
-                {
-                    "category": _to_str(item.get("category")),
-                    "description": description,
-                    "type": _to_str(item.get("type")),
-                }
-            )
-
-    metadata["feature_details"] = merged_feature_details
-    metadata["features"] = [item["description"] for item in merged_feature_details if item.get("description")]
-    metadata["supplemental_photo_links"] = list(
-        dict.fromkeys(
-            [
-                *[str(item) for item in metadata.get("photo_links_cached") or [] if _to_str(item)],
-                *[str(item) for item in metadata.get("photo_links") or [] if _to_str(item)],
-            ]
-        )
-    )
-    return metadata
-
-
-def decode_option_packages(vin: str, metadata: dict[str, Any], client: MarketCheckClient) -> dict[str, Any]:
-    raw_codes = [str(item) for item in metadata.get("option_package_codes") or metadata.get("option_packages") or [] if _to_str(item)]
-    if not raw_codes:
-        return metadata
-
-    try:
-        payload = client.get_available_options_packages(vin)
-    except Exception:
-        logger.debug("available options package decode failed vin=%s", vin, exc_info=True)
-        return metadata
-
-    lookup = _available_option_package_lookup(payload)
-    if not lookup:
-        return metadata
-
-    decoded_packages: list[str] = []
-    decoded_details: list[dict[str, str | None]] = []
-    seen_packages: set[str] = set()
-    detail_lookup = {
-        _normalize_package_code(_to_str(item.get("description"))): item
-        for item in (metadata.get("option_package_details") or [])
-        if isinstance(item, dict) and _to_str(item.get("description"))
-    }
-
-    for code in raw_codes:
-        normalized_code = _normalize_package_code(code)
-        package_row = lookup.get(normalized_code)
-        label = _package_display_name(code, package_row)
-        marker = label.strip().lower()
-        if marker and marker not in seen_packages:
-            seen_packages.add(marker)
-            decoded_packages.append(label)
-
-        source_detail = detail_lookup.get(normalized_code)
-        decoded_details.append(
-            {
-                "category": _to_str((source_detail or {}).get("category")) or "Packages",
-                "description": label,
-                "type": _to_str((source_detail or {}).get("type")),
-            }
-        )
-
-    metadata["option_packages"] = decoded_packages
-    metadata["option_package_details"] = decoded_details
-    return rebuild_listing_feature_merge(metadata)
 
 
 def enrichment_metadata_from_record(record: VehicleHistoryEnrichment | None) -> dict[str, Any]:
@@ -648,7 +521,6 @@ def enrich_vehicle_history(
             logger.debug("history listing detail fetch failed vin=%s listing_id=%s", vehicle.vin, listing_id, exc_info=True)
 
     metadata = extract_listing_metadata(listing_payload)
-    metadata = decode_option_packages(vehicle.vin, metadata, client)
     source_comment = metadata.get("seller_comments") or metadata.get("description")
     rewritten_comment, rewrite_provider = build_virtualcarhub_seller_comment(
         vehicle=vehicle,

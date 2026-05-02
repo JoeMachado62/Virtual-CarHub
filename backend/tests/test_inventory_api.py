@@ -8,7 +8,6 @@ from app.api.v1.routers.inventory import (
     get_inventory_vehicle,
     inventory_facets,
     search_inventory,
-    wordpress_inventory_export,
 )
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
@@ -30,17 +29,6 @@ class StubMarketCheckClient:
         _ = params
         return {"listings": self._listings}
 
-
-class StubMarketCheckPriceClient:
-    def __init__(self, average_retail: float) -> None:
-        self.live = True
-        self._average_retail = average_retail
-
-    def get_price(self, vin: str) -> dict:
-        return {
-            "vin": vin,
-            "average_retail": self._average_retail,
-        }
 
 
 class StubMarketCheckTaxonomyClient:
@@ -342,7 +330,7 @@ def test_search_auction_source_and_pricing_are_public_facing() -> None:
         assert item["pricing"]["detail_shop_fee"] == 150.0
         assert item["pricing"]["marketing_fee"] == 599.0
 
-        detail = get_inventory_vehicle(vin=vin, db=db, current_user=None)
+        detail = get_inventory_vehicle(identifier=vin, db=db, current_user=None)
         assert detail["status"] == "ok"
         assert detail["data"]["price_asking"] == 53249.0
         assert detail["data"]["source_label"] == "Wholesale Direct"
@@ -613,8 +601,93 @@ def test_search_applies_zip_radius_to_auction_inventory() -> None:
 
         assert response["status"] == "ok"
         vins = {item["vin"] for item in response["data"]["items"]}
-        assert near_vin in vins
-        assert far_vin not in vins
+    assert near_vin in vins
+    assert far_vin not in vins
+
+
+def test_search_infers_body_type_for_thin_auction_inventory() -> None:
+    init_db()
+    suv_vin = "5UX33EU01R9S49894"
+    sedan_vin = "WBA53FJ03RCP81233"
+    with SessionLocal() as db:
+        db.execute(delete(Vehicle).where(Vehicle.vin.in_([suv_vin, sedan_vin])))
+        db.add_all(
+            [
+                Vehicle(
+                    vin=suv_vin,
+                    listing_id="ove-thin-x5",
+                    year=2024,
+                    make="BMW",
+                    model="X5",
+                    body_type=None,
+                    odometer=12000,
+                    price_asking=55000,
+                    location_zip="33312",
+                    location_state="FL",
+                    source_type="ove",
+                    available=True,
+                    quality_firewall_pass=True,
+                ),
+                Vehicle(
+                    vin=sedan_vin,
+                    listing_id="ove-thin-5-series",
+                    year=2024,
+                    make="BMW",
+                    model="5 Series",
+                    body_type=None,
+                    odometer=12000,
+                    price_asking=55000,
+                    location_zip="33312",
+                    location_state="FL",
+                    source_type="ove",
+                    available=True,
+                    quality_firewall_pass=True,
+                ),
+            ]
+        )
+        db.commit()
+
+        response = search_inventory(
+            q=None,
+            make="BMW",
+            model=None,
+            trim=None,
+            body_type="SUV",
+            inventory_type=None,
+            certified=None,
+            source_type="auction",
+            state=None,
+            exterior_color=None,
+            interior_color=None,
+            drivetrain=None,
+            fuel_type=None,
+            transmission=None,
+            single_owner=None,
+            clean_title=None,
+            min_dom=None,
+            max_dom=None,
+            min_price=None,
+            max_price=None,
+            min_year=2024,
+            max_year=2024,
+            min_miles=None,
+            max_miles=None,
+            zip_code="33312",
+            radius=50,
+            has_images=None,
+            sort_by="updated_at",
+            sort_dir="desc",
+            live_sync=False,
+            sync_limit=72,
+            page=1,
+            per_page=25,
+            db=db,
+        )
+
+    assert response["status"] == "ok"
+    vins = {item["vin"] for item in response["data"]["items"]}
+    assert suv_vin in vins
+    assert sedan_vin not in vins
 
 
 def test_inventory_taxonomy_cache_sync_and_facets() -> None:
@@ -711,147 +784,6 @@ def test_inventory_taxonomy_cache_sync_and_facets() -> None:
     assert lookup["body_types_by_make_model_trim"]["Honda|||Civic|||EX"] == ["Sedan"]
 
 
-def test_wordpress_export_json_contract() -> None:
-    init_db()
-    with SessionLocal() as db:
-        seed_inventory(db)
-        db.commit()
-
-        response = wordpress_inventory_export(
-            format="json",
-            q=None,
-            make=None,
-            model=None,
-            trim=None,
-            body_type=None,
-            source_type=None,
-            state=None,
-            min_price=None,
-            max_price=None,
-            min_year=None,
-            max_year=None,
-            min_dom=None,
-            max_dom=None,
-            has_images=None,
-            include_unavailable=False,
-            updated_since=None,
-            include_price_stats=False,
-            sort_by="updated_at",
-            sort_dir="desc",
-            page=1,
-            per_page=3,
-            db=db,
-        )
-
-    assert response["status"] == "ok"
-    payload = response["data"]
-    assert payload["export"]["format"] == "json"
-    assert "source_priority" in payload["export"]
-    assert "items" in payload
-    assert "pagination" in payload
-    if payload["items"]:
-        first = payload["items"][0]
-        assert "external_id" in first
-        assert "vdp_url" in first
-        assert "images" in first
-        assert "source_priority" in first
-        assert "image_display_mode" in first
-        assert "inspection_status" in first
-        assert "has_inspection_report" in first
-        assert "photos_coming_soon" in first
-        assert "marketcheck_average_retail" in first
-        assert "price_delta_marketcheck" in first
-        assert "price_delta_marketcheck_pct" in first
-
-
-def test_wordpress_export_csv_contract() -> None:
-    init_db()
-    with SessionLocal() as db:
-        seed_inventory(db)
-        db.commit()
-
-        response = wordpress_inventory_export(
-            format="csv",
-            q=None,
-            make=None,
-            model=None,
-            trim=None,
-            body_type=None,
-            source_type=None,
-            state=None,
-            min_price=None,
-            max_price=None,
-            min_year=None,
-            max_year=None,
-            min_dom=None,
-            max_dom=None,
-            has_images=None,
-            include_unavailable=False,
-            updated_since=None,
-            include_price_stats=False,
-            sort_by="updated_at",
-            sort_dir="desc",
-            page=1,
-            per_page=2,
-            db=db,
-        )
-
-    assert response.media_type == "text/csv; charset=utf-8"
-    assert "attachment; filename=" in response.headers.get("content-disposition", "")
-    body = response.body.decode("utf-8")
-    assert body.startswith("external_id,vin,title")
-
-
-def test_wordpress_export_can_include_marketcheck_price_stats(monkeypatch) -> None:
-    init_db()
-    with SessionLocal() as db:
-        seed_inventory(db)
-        db.commit()
-
-        monkeypatch.setattr(
-            api_routers.inventory,
-            "_marketcheck_client",
-            lambda: StubMarketCheckPriceClient(average_retail=33000.0),
-        )
-
-        response = wordpress_inventory_export(
-            format="json",
-            q=None,
-            make=None,
-            model=None,
-            trim=None,
-            body_type=None,
-            source_type=None,
-            state=None,
-            min_price=None,
-            max_price=None,
-            min_year=None,
-            max_year=None,
-            min_dom=None,
-            max_dom=None,
-            has_images=None,
-            include_unavailable=False,
-            updated_since=None,
-            include_price_stats=True,
-            sort_by="updated_at",
-            sort_dir="desc",
-            page=1,
-            per_page=2,
-            db=db,
-        )
-
-    assert response["status"] == "ok"
-    payload = response["data"]
-    assert payload["export"]["price_stats"]["requested"] is True
-    assert payload["export"]["price_stats"]["enriched"] is True
-    assert payload["items"]
-
-    first = payload["items"][0]
-    assert first["marketcheck_average_retail"] == 33000.0
-    assert isinstance(first["price_delta_marketcheck"], float)
-    assert isinstance(first["price_delta_marketcheck_pct"], float)
-
-
 def test_build_marketcheck_search_params_includes_dom_range() -> None:
     params = _build_marketcheck_search_params(
         q=None,
@@ -934,67 +866,3 @@ def test_search_live_sync_falls_back_without_leaking_vendor_error(monkeypatch) -
     assert sync["error"] == "Live wholesale sync is temporarily unavailable. Showing saved inventory results."
     assert "api_key" not in sync["error"]
     assert "marketcheck.com" not in sync["error"]
-
-
-def test_wordpress_export_filters_by_days_on_market() -> None:
-    init_db()
-    with SessionLocal() as db:
-        db.execute(delete(Vehicle).where(Vehicle.vin.in_(["1HGCM82633A004501", "1HGCM82633A004502"])))
-
-        db.add(
-            Vehicle(
-                vin="1HGCM82633A004501",
-                year=2021,
-                make="Toyota",
-                model="Camry",
-                price_asking=22995,
-                source_type="marketcheck",
-                available=True,
-                features_normalized={"days_on_market": 30},
-            )
-        )
-        db.add(
-            Vehicle(
-                vin="1HGCM82633A004502",
-                year=2020,
-                make="Honda",
-                model="Accord",
-                price_asking=21995,
-                source_type="marketcheck",
-                available=True,
-                features_normalized={"days_on_market": 60},
-            )
-        )
-        db.commit()
-
-        response = wordpress_inventory_export(
-            format="json",
-            q=None,
-            make=None,
-            model=None,
-            trim=None,
-            body_type=None,
-            source_type=None,
-            state=None,
-            min_price=None,
-            max_price=None,
-            min_year=None,
-            max_year=None,
-            min_dom=45,
-            max_dom=None,
-            has_images=None,
-            include_unavailable=False,
-            updated_since=None,
-            include_price_stats=False,
-            sort_by="updated_at",
-            sort_dir="desc",
-            page=1,
-            per_page=100,
-            db=db,
-        )
-
-    assert response["status"] == "ok"
-    items = response["data"]["items"]
-    vins = {item["vin"] for item in items}
-    assert "1HGCM82633A004501" not in vins
-    assert "1HGCM82633A004502" in vins

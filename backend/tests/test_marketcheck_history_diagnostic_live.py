@@ -156,15 +156,6 @@ class DiagnosticMarketCheckClient(MarketCheckClient):
             raise
         return self._record_success(endpoint="listing", request=request, response=response)
 
-    def get_available_options_packages(self, vin: str) -> dict:
-        request = {"vin": vin, "path": f"/decode/car/neovin/{vin}/options-packages"}
-        try:
-            response = super().get_available_options_packages(vin)
-        except Exception as exc:
-            self._record_failure(endpoint="options_packages", request=request, error=exc)
-            raise
-        return self._record_success(endpoint="options_packages", request=request, response=response)
-
 
 def _run_live_marketcheck_history_diagnostic(vin: str) -> dict[str, Any]:
     init_db()
@@ -178,7 +169,6 @@ def _run_live_marketcheck_history_diagnostic(vin: str) -> dict[str, Any]:
     client = DiagnosticMarketCheckClient(
         api_key=settings.marketcheck_api_key,
         api_secret=settings.marketcheck_api_secret,
-        price_api_key=settings.marketcheck_price_api_key,
         api_base_url=settings.marketcheck_api_base_url,
         live=True,
     )

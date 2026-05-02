@@ -7,25 +7,22 @@ class MarketCheckClient(ExternalServiceClient):
         api_key: str,
         *,
         api_secret: str = "",
-        price_api_key: str = "",
         api_base_url: str = "https://api.marketcheck.com/v2",
         live: bool = False,
     ):
         self.live = live
         self.api_key = api_key
         self.api_secret = api_secret
-        self.price_api_key = price_api_key or api_key
         super().__init__(
             base_url=api_base_url,
             headers={},
             policy=ServicePolicy(max_retries=3, timeout_seconds=30, failure_threshold=5, recovery_seconds=300),
         )
 
-    def _with_api_key(self, params: dict | None = None, *, use_price_key: bool = False) -> dict:
+    def _with_api_key(self, params: dict | None = None) -> dict:
         payload = dict(params or {})
-        key = self.price_api_key if use_price_key else self.api_key
-        if key:
-            payload.setdefault("api_key", key)
+        if self.api_key:
+            payload.setdefault("api_key", self.api_key)
         return payload
 
     def search_inventory(self, params: dict) -> dict:
@@ -71,39 +68,6 @@ class MarketCheckClient(ExternalServiceClient):
             return {"vin": vin, "history": [], "source": "stub"}
         params = self._with_api_key()
         return self._request("GET", f"/history/car/{vin}", params=params)
-
-    def get_available_options_packages(self, vin: str) -> dict:
-        """GET /v2/decode/car/neovin/{vin}/options-packages — available factory option packages."""
-        if not self.live:
-            return {"vin": vin, "available_options_packages": [], "source": "stub"}
-        params = self._with_api_key()
-        return self._request("GET", f"/decode/car/neovin/{vin}/options-packages", params=params)
-
-    def get_price(self, vin: str) -> dict:
-        if not self.live:
-            return {"vin": vin, "average_retail": 30000, "source": "stub"}
-        params = self._with_api_key({"vin": vin}, use_price_key=True)
-        try:
-            return self._request("GET", "/stats/car", params=params)
-        except Exception:
-            search_params = self._with_api_key({"rows": 10, "start": 0, "vin": vin}, use_price_key=True)
-            payload = self._request("GET", "/search/car/active", params=search_params)
-            listings = payload.get("listings", []) if isinstance(payload, dict) else []
-            prices = [float(row.get("price")) for row in listings if row.get("price") is not None]
-            average = round(sum(prices) / len(prices), 2) if prices else None
-            return {
-                "vin": vin,
-                "average_retail": average,
-                "sample_count": len(prices),
-                "source": "search_fallback",
-            }
-
-    def get_marketcheck_price(self, params: dict) -> dict:
-        """GET /v2/predict/car/us/marketcheck_price — model-based market value."""
-        if not self.live:
-            return {"marketcheck_price": None, "source": "stub"}
-        payload = self._with_api_key(params, use_price_key=True)
-        return self._request("GET", "/predict/car/us/marketcheck_price", params=payload)
 
     def get_market_days_supply(self, params: dict) -> dict:
         """GET /v2/mds/car — market days supply and 45-day inferred sales."""

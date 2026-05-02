@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,12 +9,19 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     vch_env: Literal["local", "staging", "production"] = "local"
-    database_url: str = Field(default="sqlite:///./virtual_carhub.db", alias="DATABASE_URL")
+    database_url: str = Field(alias="DATABASE_URL")
     database_pool_size: int = Field(default=20, alias="DATABASE_POOL_SIZE")
     database_max_overflow: int = Field(default=40, alias="DATABASE_MAX_OVERFLOW")
     database_pool_timeout_seconds: int = Field(default=30, alias="DATABASE_POOL_TIMEOUT_SECONDS")
     database_pool_recycle_seconds: int = Field(default=1800, alias="DATABASE_POOL_RECYCLE_SECONDS")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+
+    @field_validator("database_url")
+    @classmethod
+    def require_postgres_database_url(cls, value: str) -> str:
+        if not value.startswith("postgresql"):
+            raise ValueError("DATABASE_URL must be an explicit PostgreSQL URL")
+        return value
 
     jwt_secret_key: str = Field(default="dev-secret", alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
@@ -28,12 +35,6 @@ class Settings(BaseSettings):
     )
 
     service_token: str = Field(default="dev-service-token", alias="SERVICE_TOKEN")
-    wordpress_export_bearer_token: str = Field(default="", alias="WORDPRESS_EXPORT_BEARER_TOKEN")
-    wordpress_export_topup_enabled: bool = Field(default=False, alias="WORDPRESS_EXPORT_TOPUP_ENABLED")
-    wordpress_export_topup_min_results: int = Field(default=35, alias="WORDPRESS_EXPORT_TOPUP_MIN_RESULTS")
-    wordpress_export_topup_zip: str = Field(default="", alias="WORDPRESS_EXPORT_TOPUP_ZIP")
-    wordpress_export_topup_radius: int = Field(default=25, alias="WORDPRESS_EXPORT_TOPUP_RADIUS")
-    wordpress_export_topup_limit: int = Field(default=200, alias="WORDPRESS_EXPORT_TOPUP_LIMIT")
     cors_origins: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
     public_web_base_url: str = Field(default="https://app.virtualcarhub.com", alias="PUBLIC_WEB_BASE_URL")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
@@ -49,7 +50,6 @@ class Settings(BaseSettings):
     marketcheck_cache_ttl_detail_seconds: int = Field(default=21600, alias="MARKETCHECK_CACHE_TTL_DETAIL_SECONDS")
     marketcheck_cache_ttl_search_seconds: int = Field(default=900, alias="MARKETCHECK_CACHE_TTL_SEARCH_SECONDS")
     marketcheck_cache_ttl_facets_seconds: int = Field(default=3600, alias="MARKETCHECK_CACHE_TTL_FACETS_SECONDS")
-    marketcheck_cache_ttl_price_seconds: int = Field(default=86400, alias="MARKETCHECK_CACHE_TTL_PRICE_SECONDS")
     marketcheck_history_enrichment_enabled: bool = Field(default=True, alias="MARKETCHECK_HISTORY_ENRICHMENT_ENABLED")
     marketcheck_history_enrichment_interval_seconds: int = Field(default=900, alias="MARKETCHECK_HISTORY_ENRICHMENT_INTERVAL_SECONDS")
     marketcheck_history_enrichment_batch_size: int = Field(default=8, alias="MARKETCHECK_HISTORY_ENRICHMENT_BATCH_SIZE")
@@ -138,7 +138,6 @@ class Settings(BaseSettings):
     # Core integration endpoints and keys
     marketcheck_api_key: str = Field(default="", alias="MARKETCHECK_API_KEY")
     marketcheck_api_secret: str = Field(default="", alias="MARKETCHECK_API_SECRET")
-    marketcheck_price_api_key: str = Field(default="", alias="MARKETCHECK_PRICE_API_KEY")
     marketcheck_api_base_url: str = Field(default="https://api.marketcheck.com/v2", alias="MARKETCHECK_API_BASE_URL")
 
     ghl_api_key: str = Field(default="", alias="GHL_API_KEY")

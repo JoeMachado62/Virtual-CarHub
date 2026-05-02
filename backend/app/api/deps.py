@@ -79,24 +79,6 @@ def require_service_token(
         )
 
 
-def require_wordpress_export_auth(
-    authorization: str | None = Header(default=None),
-    x_service_token: str | None = Header(default=None),
-) -> None:
-    # If a dedicated bearer token is configured, require Authorization: Bearer <token>.
-    token = (settings.wordpress_export_bearer_token or "").strip()
-    if token:
-        if not authorization:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
-        scheme, _, value = authorization.partition(" ")
-        if scheme.lower() != "bearer" or value.strip() != token:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid bearer token")
-        return
-
-    # Backward compatibility: if no bearer token is configured, allow anonymous access.
-    # Operators can still optionally send x-service-token; it is not required in this mode.
-    _ = x_service_token
-
 
 def _verify_hmac_signature(secret: str, payload: bytes, signature: str) -> bool:
     digest = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
