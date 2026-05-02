@@ -38,7 +38,6 @@
 7. DB operations scripts added:
    - Postgres backup
    - Postgres restore
-   - SQLite -> Postgres migration utility
 
 ## Migration strategy for existing DBs
 
@@ -48,13 +47,6 @@
    - `bash scripts/db/backup_postgres.sh`
 2. Restore into target:
    - `bash scripts/db/restore_postgres.sh /path/to/backup.dump`
-
-### B) Legacy SQLite -> Postgres
-
-1. Run:
-   - `cd backend`
-   - `.venv/bin/python scripts/migrate_sqlite_to_postgres.py --sqlite-path ./virtual_carhub.db --truncate-target`
-2. Utility performs table-by-table upsert using existing SQLAlchemy metadata.
 
 ## Deployment order
 

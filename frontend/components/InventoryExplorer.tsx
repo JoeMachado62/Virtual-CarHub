@@ -11,6 +11,7 @@ import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
 import { AuthState, canAccessConditionReports, clearAuthState, isAdminUser, loadValidAuthState } from "@/lib/auth";
 import { normalizeSourceFilterValue, toPublicSourceLabel } from "@/lib/sourceLabels";
+import { BODY_TYPE_OPTIONS } from "@/lib/vehicleOptions";
 import { maskVin } from "@/lib/vin";
 
 // Prefer the HMAC-derived public_slug for any public URL so the raw VIN
@@ -298,6 +299,8 @@ type FilterState = {
   sort_dir: "asc" | "desc";
 };
 
+type SearchMode = "inventory" | "hot_deals";
+
 const INITIAL_FILTERS: FilterState = {
   q: "",
   make: [],
@@ -340,7 +343,6 @@ const FACET_REFRESH_KEYS: (keyof FilterState)[] = [
   "make",
   "model",
   "trim",
-  "body_type",
   "source_type",
   "state",
   "zip_code",
@@ -396,6 +398,8 @@ function isChromeDataExterior(url: string | null | undefined): boolean {
 const SEARCH_CONTEXT_KEY = "vch:inventory:search-context";
 const SEARCH_FILTERS_KEY = "vch:inventory:filters";
 const SEARCH_FILTERS_LOCAL_KEY = "vch:inventory:last-filters";
+const SEARCH_RESULTS_CACHE_KEY = "vch:inventory:results-cache";
+const SEARCH_RESULTS_CACHE_TTL_MS = 10 * 60 * 1000;
 const HOT_DEALS_CACHE_KEY = "vch:inventory:hot-deals-cache:v2";
 const HOT_DEALS_CACHE_TTL_MS = 5 * 60 * 1000;
 const LIVE_SYNC_FALLBACK_MESSAGE = "Current wholesale updates are temporarily unavailable. Showing saved inventory results.";
@@ -791,9 +795,11 @@ function FilterSection({
 export function InventoryExplorer({ initialMake, initialModel, initialTrim }: InventoryExplorerProps = {}) {
   const searchParams = useSearchParams();
   const resultsRef = useRef<HTMLElement | null>(null);
+  const hasInitializedFiltersRef = useRef(false);
+  const inventoryRequestSeqRef = useRef(0);
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [searchMode, setSearchMode] = useState<"inventory" | "hot_deals">("inventory");
+  const [searchMode, setSearchMode] = useState<SearchMode>("inventory");
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [pendingActionType, setPendingActionType] = useState<"garage" | "remove" | "acquire" | "cr" | null>(null);
   const [pendingActionVin, setPendingActionVin] = useState<string | null>(null);
@@ -834,6 +840,14 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
         return Array.isArray(value) ? value.join(",") : String(value);
       }).join("|"),
     [filters],
+  );
+
+  const bodyTypeOptions = useMemo(
+    () => {
+      const staticBuckets: FacetBucket[] = BODY_TYPE_OPTIONS.map((bt) => ({ item: bt, count: 0 }));
+      return mergeFacetOptions(staticBuckets, facets.body_type || []);
+    },
+    [facets.body_type],
   );
 
   const makeOptions = useMemo(
@@ -918,12 +932,19 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       }
       return restored;
     };
+    const readStoredFilters = (): FilterState | null => {
+      const savedFilters =
+        window.sessionStorage.getItem(SEARCH_FILTERS_KEY) ||
+        window.localStorage.getItem(SEARCH_FILTERS_LOCAL_KEY);
+      return savedFilters ? normalizeRestoredFilters(JSON.parse(savedFilters) as FilterState) : null;
+    };
     const applyInitialFilters = (
       nextFilters: FilterState,
-      mode: "inventory" | "hot_deals" = "inventory",
+      mode: SearchMode = "inventory",
       options: { autoLoad?: boolean; message?: string } = {},
     ) => {
       if (cancelled) return;
+      hasInitializedFiltersRef.current = true;
       const autoLoad = options.autoLoad ?? mode === "hot_deals";
       setSearchMode(mode);
       setFilters(nextFilters);
@@ -957,6 +978,11 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     const hasUrlParams = Array.from(searchParams.keys()).some(
       (k) => !["nlp_query"].includes(k) && searchParams.get(k),
     );
+    const hasRouteFilters = Boolean(initialMake);
+
+    if (hasInitializedFiltersRef.current && !hasUrlParams && !hasRouteFilters) {
+      return;
+    }
 
     if (hasUrlParams) {
       if (searchParams.get("hot_deals") === "true") {
@@ -1023,6 +1049,40 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     }
 
     void (async () => {
+      // ── Restore cached search results (e.g. back-navigation from VDP) ──
+      try {
+        const cachedResults = window.sessionStorage.getItem(SEARCH_RESULTS_CACHE_KEY);
+        if (cachedResults) {
+          const parsed = JSON.parse(cachedResults) as {
+            cached_at?: number;
+            items?: InventoryItem[];
+            pagination?: typeof EMPTY_PAGINATION;
+            filters?: FilterState;
+            page?: number;
+          };
+          if (
+            parsed.cached_at &&
+            Date.now() - parsed.cached_at < SEARCH_RESULTS_CACHE_TTL_MS &&
+            Array.isArray(parsed.items) &&
+            parsed.filters
+          ) {
+            const restored = normalizeRestoredFilters(parsed.filters);
+            if (cancelled) return;
+            setSearchMode("inventory");
+            setFilters(restored);
+            setAppliedFilters(restored);
+            setRows(parsed.items);
+            setPagination(parsed.pagination || EMPTY_PAGINATION);
+            setSyncMeta(EMPTY_SYNC);
+            setFiltersReady(true);
+            setReadyToSearchMessage(null);
+            setPage(parsed.page || 1);
+            void loadFacets(restored);
+            return;
+          }
+        }
+      } catch { /* ignore stale cache */ }
+
       if (auth?.accessToken) {
         try {
           const res = await apiFetch<{
@@ -1033,7 +1093,20 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
             const bfv = res.data.bfv_json;
             const toArr = (v: unknown) =>
               Array.isArray(v) ? v.map((s) => String(s).toLowerCase()) : [];
-            const profileFilters: FilterState = { ...INITIAL_FILTERS, live_sync: false };
+            let storedFilters: FilterState | null = null;
+            try {
+              storedFilters = readStoredFilters();
+            } catch { /* ignore invalid saved filters */ }
+            const profileFilters: FilterState = {
+              ...INITIAL_FILTERS,
+              radius: storedFilters?.radius || INITIAL_FILTERS.radius,
+              source_type: normalizeSourceFilterValue(storedFilters?.source_type),
+              has_images: storedFilters?.has_images ?? INITIAL_FILTERS.has_images,
+              live_sync: storedFilters?.live_sync ?? INITIAL_FILTERS.live_sync,
+              sort_by: storedFilters?.sort_by || INITIAL_FILTERS.sort_by,
+              sort_dir: storedFilters?.sort_dir || INITIAL_FILTERS.sort_dir,
+            };
+            if (storedFilters?.zip_code) profileFilters.zip_code = storedFilters.zip_code;
             if (bfv.delivery_zip) profileFilters.zip_code = String(bfv.delivery_zip);
             if (bfv.year_min) profileFilters.min_year = String(bfv.year_min);
             if (bfv.year_max) profileFilters.max_year = String(bfv.year_max);
@@ -1056,11 +1129,8 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
         } catch { /* profile fetch is best-effort */ }
 
         try {
-          const savedFilters =
-            window.sessionStorage.getItem(SEARCH_FILTERS_KEY) ||
-            window.localStorage.getItem(SEARCH_FILTERS_LOCAL_KEY);
-          if (savedFilters) {
-            const restored = normalizeRestoredFilters(JSON.parse(savedFilters) as FilterState);
+          const restored = readStoredFilters();
+          if (restored) {
             if (hasVehicleIntentFilters(restored)) {
               applyInitialFilters(restored, "inventory", {
                 autoLoad: false,
@@ -1085,7 +1155,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
 
   useEffect(() => {
     if (!filtersReady) return;
-    void loadInventory(appliedFilters, page);
+    void loadInventory(appliedFilters, page, searchMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtersReady, appliedFilters, page, searchMode]);
 
@@ -1206,7 +1276,11 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     if (currentFilters.max_year.trim()) params.set("max_year", currentFilters.max_year.trim());
     if (currentFilters.min_miles.trim()) params.set("min_miles", currentFilters.min_miles.trim());
     if (currentFilters.max_miles.trim()) params.set("max_miles", currentFilters.max_miles.trim());
-    if (currentFilters.body_type.length) params.set("body_type", currentFilters.body_type.join(","));
+    // NOTE: body_type is intentionally NOT sent to the facets endpoint.
+    // Sending it causes self-filtering: the backend restricts the dataset to the
+    // selected body types before counting, which hides all other body type choices
+    // and deflates make/model counts.  Body type filtering is still applied at
+    // actual search time via loadInventory().
     if (currentFilters.exterior_color.length) params.set("exterior_color", currentFilters.exterior_color.join(","));
     if (currentFilters.interior_color.length) params.set("interior_color", currentFilters.interior_color.join(","));
     if (currentFilters.state.trim()) params.set("state", currentFilters.state.trim().toUpperCase());
@@ -1226,16 +1300,21 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     setFacets(response.data.facets || {});
   }
 
-  async function loadInventory(currentFilters: FilterState, currentPage: number) {
+  async function loadInventory(currentFilters: FilterState, currentPage: number, mode: SearchMode = searchMode) {
+    const requestSeq = inventoryRequestSeqRef.current + 1;
+    inventoryRequestSeqRef.current = requestSeq;
+    const isCurrentRequest = () => inventoryRequestSeqRef.current === requestSeq;
+
     setLoading(true);
     setError(null);
 
-    if (searchMode === "hot_deals") {
+    if (mode === "hot_deals") {
       try {
         const cached = window.sessionStorage.getItem(HOT_DEALS_CACHE_KEY);
         if (cached) {
           const parsed = JSON.parse(cached) as { cached_at?: number; items?: HotDealFeedItem[] };
           if (parsed.cached_at && Date.now() - parsed.cached_at < HOT_DEALS_CACHE_TTL_MS && Array.isArray(parsed.items)) {
+            if (!isCurrentRequest()) return;
             const cachedRows = parsed.items.map(mapHotDealToInventoryItem);
             setRows(cachedRows);
             setPagination({ page: 1, per_page: cachedRows.length || 18, total: cachedRows.length, total_pages: cachedRows.length ? 1 : 0, has_next: false, has_prev: false });
@@ -1247,6 +1326,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       } catch { /* ignore stale cache */ }
 
       const response = await apiFetch<{ items: HotDealFeedItem[] }>("/inventory/hot-deals/active?limit=50");
+      if (!isCurrentRequest()) return;
       if (response.status !== "ok") {
         setRows([]);
         setPagination(EMPTY_PAGINATION);
@@ -1310,6 +1390,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     params.set("per_page", "18");
 
     const response = await apiFetch<InventorySearchPayload>(`/inventory/search?${params.toString()}`);
+    if (!isCurrentRequest()) return;
     if (response.status !== "ok") {
       setRows([]);
       setPagination(EMPTY_PAGINATION);
@@ -1319,10 +1400,20 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       return;
     }
 
-    setRows(response.data.items || []);
-    setPagination(response.data.pagination || EMPTY_PAGINATION);
+    const items = response.data.items || [];
+    const pag = response.data.pagination || EMPTY_PAGINATION;
+    setRows(items);
+    setPagination(pag);
     setSyncMeta(response.data.sync || EMPTY_SYNC);
     setLoading(false);
+
+    // Cache results so back-navigation from VDP can restore without re-fetching
+    try {
+      window.sessionStorage.setItem(
+        SEARCH_RESULTS_CACHE_KEY,
+        JSON.stringify({ cached_at: Date.now(), items, pagination: pag, filters: currentFilters, page: currentPage }),
+      );
+    } catch { /* storage full or disabled */ }
   }
 
   async function loadAccountStatus(accessToken: string) {
@@ -1365,6 +1456,10 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       setOpenFilter(null);
       return;
     }
+    const submittedFilters: FilterState = {
+      ...filters,
+      source_type: normalizeSourceFilterValue(filters.source_type),
+    };
     setSearchMode("inventory");
     try {
       const nextUrl = new URL(window.location.href);
@@ -1373,12 +1468,13 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     } catch {
       // History updates are cosmetic; the submitted search still runs.
     }
-    await loadFacets(filters);
-    persistSearchContext(filters);
+    void loadFacets(submittedFilters);
+    persistSearchContext(submittedFilters);
     setReadyToSearchMessage(null);
     setFiltersReady(true);
     setPage(1);
-    setAppliedFilters({ ...filters });
+    setFilters(submittedFilters);
+    setAppliedFilters({ ...submittedFilters });
     collapseMobileFilters();
     queueMobileResultsScroll();
   }
@@ -1675,7 +1771,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
             >
               <MultiSelectList
                 label="Body Type"
-                options={facets.body_type || []}
+                options={bodyTypeOptions}
                 selected={filters.body_type}
                 onChange={(next) => updateFilters((prev) => ({ ...prev, body_type: next }))}
                 showLabel={false}
@@ -1863,7 +1959,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                 <select
                   className="select"
                   value={filters.source_type}
-                  onChange={(event) => setFilters((prev) => ({ ...prev, source_type: event.target.value }))}
+                  onChange={(event) => updateFilters((prev) => ({ ...prev, source_type: event.target.value }))}
                 >
                   <option value="">Any</option>
                   <option value="auction">Wholesale Direct</option>

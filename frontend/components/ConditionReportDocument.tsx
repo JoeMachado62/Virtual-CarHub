@@ -64,10 +64,15 @@ type VehicleDetail = {
 };
 
 type DamageItem = {
+  [key: string]: unknown;
+  location?: string;
   section?: string;
   section_label?: string;
   panel?: string;
+  damage_type?: string;
   condition?: string;
+  description?: string;
+  severity?: string;
   reported_severity?: string;
   severity_color?: string;
   severity_label?: string;
@@ -90,6 +95,7 @@ type AutoCheckReport = {
   autocheck_score?: number | null;
   score_range_low?: number | null;
   score_range_high?: number | null;
+  score_range_label?: string | null;
   historical_event_count?: number | null;
   owner_count?: number | null;
   accident_count?: number | null;
@@ -99,8 +105,10 @@ type AutoCheckReport = {
   odometer_check?: string | null;
   accident_check?: string | null;
   damage_check?: string | null;
+  other_title_brand_event_check?: string | null;
   vehicle_use?: string | null;
   buyback_protection?: string | null;
+  report_logo_url?: string | null;
   full_report_text?: string | null;
   view_report_href?: string | null;
   failure_category?: string | null;
@@ -111,6 +119,7 @@ type InspectionField = {
   label: string;
   value: string;
   has_issue: boolean;
+  is_default?: boolean;
 };
 
 type InspectionSection = {
@@ -152,6 +161,7 @@ const IMAGE_CATEGORIES = [
 ] as const;
 
 const INSPECTION_SECTION_ORDER = ["drivability", "exterior", "interior", "mechanical", "tires"] as const;
+const CARFAX_REPORT_PLACEHOLDER_URL = "https://www.carfax.com/vehicle-history-reports/";
 
 export function ConditionReportDocument({ vin }: { vin: string }) {
   const [vehicle, setVehicle] = useState<VehicleDetail | null>(null);
@@ -279,6 +289,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
     if (raw && typeof raw === "object" && Object.keys(raw).length > 0) return raw;
     return buildLegacyInspection(report);
   }, [report]);
+  const visibleInspection = useMemo(() => filterVisibleInspection(inspection), [inspection]);
 
   // Title info
   const titleStatus = typeof report.title_status === "string" ? report.title_status : null;
@@ -528,12 +539,12 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
             )}
 
             {/* Issues Summary */}
-            {inspection && (
+            {visibleInspection && (
               <div className="cr-panel-section">
                 <h4 className="cr-panel-heading">Issues</h4>
                 <div className="cr-issues-table">
                   {INSPECTION_SECTION_ORDER.map((sectionId) => {
-                    const section = inspection[sectionId];
+                    const section = visibleInspection[sectionId];
                     if (!section) return null;
                     const count = section.issue_count;
                     return (
@@ -550,11 +561,11 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         </section>
 
         {/* ── INSPECTION HEADER BAR ── */}
-        <div className="cr-inspection-banner">INSPECTION</div>
+        {visibleInspection && <div className="cr-inspection-banner">INSPECTION</div>}
 
         {/* ── NAAA INSPECTION SECTIONS ── */}
-        {inspection && INSPECTION_SECTION_ORDER.map((sectionId) => {
-          const section = inspection[sectionId];
+        {visibleInspection && INSPECTION_SECTION_ORDER.map((sectionId) => {
+          const section = visibleInspection[sectionId];
           if (!section) return null;
           const fields = Object.values(section.fields);
           return (
@@ -647,24 +658,13 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
                   <article className="cr-autocheck-score-card">
                     {autocheck.autocheck_score != null ? (
                       <>
-                        <div className="cr-autocheck-meter">
-                          <div className="cr-autocheck-meter-arc" />
-                          <div
-                            className="cr-autocheck-meter-pointer"
-                            style={{ transform: `translateX(-50%) rotate(${autoCheckSummary.pointerAngle}deg)` }}
-                          >
-                            <span />
-                          </div>
-                          <span className="cr-autocheck-meter-low">{autoCheckSummary.scoreRangeLow}</span>
-                          <span className="cr-autocheck-meter-high">{autoCheckSummary.scoreRangeHigh}</span>
-                          <strong className="cr-autocheck-meter-score">{autocheck.autocheck_score}</strong>
-                        </div>
+                        {renderAutoCheckScoreGauge(autocheck.autocheck_score, autoCheckSummary.scoreRangeLow, autoCheckSummary.scoreRangeHigh)}
                         <p className="cr-autocheck-score-heading">This vehicle&apos;s AutoCheck Score: {autocheck.autocheck_score}</p>
                         <p className="cr-autocheck-score-copy">
-                          Other comparable {vehicle.year} vehicles{vehicle.body_type ? <> in the <strong>{vehicle.body_type}</strong></> : ""} typically
+                          Other comparable {vehicle.year} vehicles{(autocheck.score_range_label || vehicle.body_type) ? <> in the <strong>{autocheck.score_range_label || vehicle.body_type}</strong></> : ""} typically
                           score between <strong>{autoCheckSummary.scoreRangeLow}-{autoCheckSummary.scoreRangeHigh}</strong>.
                         </p>
-                        {autocheck.view_report_href && isAdmin && (
+                        {autocheck.view_report_href && (
                           <button className="cr-autocheck-learn" onClick={() => window.open(autocheck.view_report_href!, "_blank", "noopener,noreferrer")}>
                             Learn more about the AutoCheck Score
                           </button>
@@ -678,15 +678,21 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
 
                 <div className="cr-autocheck-carfax">
                   <span className="cr-autocheck-carfax-icon" aria-hidden="true" />
-                  <span className="cr-autocheck-carfax-copy">Show me the <strong>CARFAX</strong></span>
-                  {autocheck.view_report_href && isAdmin && (
-                    <button className="cr-autocheck-carfax-button" onClick={() => window.open(autocheck.view_report_href!, "_blank", "noopener,noreferrer")}>
-                      View now
-                    </button>
-                  )}
-                  {(!autocheck.view_report_href || !isAdmin) && (
-                    <span className="cr-autocheck-carfax-button cr-autocheck-carfax-button-static">View now</span>
-                  )}
+                  <span className="cr-autocheck-carfax-copy">
+                    Show me the{" "}
+                    {autocheck.report_logo_url ? (
+                      <button className="cr-autocheck-logo-button" onClick={() => openExternal(getCarfaxPlaceholderHref(vehicle.vin))} aria-label="Open CARFAX report">
+                        <img src={autocheck.report_logo_url} alt="Vehicle history report" />
+                      </button>
+                    ) : (
+                      <button className="cr-autocheck-logo-button cr-autocheck-logo-text" onClick={() => openExternal(getCarfaxPlaceholderHref(vehicle.vin))} aria-label="Open CARFAX report">
+                        <strong>CARFAX</strong>
+                      </button>
+                    )}
+                  </span>
+                  <button className="cr-autocheck-carfax-button" onClick={() => openExternal(getCarfaxPlaceholderHref(vehicle.vin))}>
+                    View now
+                  </button>
                 </div>
 
                 <div className="cr-autocheck-check-list">
@@ -694,7 +700,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
                   {renderAutoCheckCheck("Accident Check", autocheck.accident_check)}
                   {renderAutoCheckCheck("Damage Check", autocheck.damage_check)}
                   {renderAutoCheckCheck("Odometer Check", autocheck.odometer_check)}
-                  {renderAutoCheckCheck("Other Title Brand and Specific Event Check", autocheck.title_brand_check)}
+                  {renderAutoCheckCheck("Other Title Brand and Specific Event Check", autocheck.other_title_brand_event_check)}
                   {renderAutoCheckCheck("Vehicle Usage Check", autocheck.vehicle_use)}
                   {renderAutoCheckCheck("AutoCheck Buyback Protection", autocheck.buyback_protection)}
                 </div>
@@ -780,21 +786,31 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
             </h3>
             <table className="cr-damage-table">
               <thead>
-                <tr><th>Section</th><th>Panel</th><th>Condition</th><th>Severity</th></tr>
+                <tr><th>Location</th><th>Damage Type</th><th>Severity</th><th>Description</th><th>Pics</th></tr>
               </thead>
               <tbody>
-                {damageItems.map((d, i) => (
-                  <tr key={i}>
-                    <td>{d.section_label || d.section || "\u2014"}</td>
-                    <td>{d.panel || "\u2014"}</td>
-                    <td>{d.condition || "\u2014"}</td>
-                    <td>
-                      <span className={`cr-severity cr-severity-${d.severity_color || "gray"}`}>
-                        {d.reported_severity || d.severity_label || "\u2014"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {damageItems.map((d, i) => {
+                  const photoUrls = getDamagePhotoUrls(d);
+                  return (
+                    <tr key={i}>
+                      <td>{getDamageLocation(d)}</td>
+                      <td>{getDamageType(d)}</td>
+                      <td>
+                        <span className={`cr-severity cr-severity-${getDamageSeverityColor(d)}`}>
+                          {getDamageSeverity(d)}
+                        </span>
+                      </td>
+                      <td>{getDamageDescription(d)}</td>
+                      <td>
+                        {photoUrls.length > 0 ? (
+                          <button className="cr-damage-photo-button" onClick={() => openExternal(photoUrls[0])}>
+                            View {photoUrls.length > 1 ? photoUrls.length : ""}
+                          </button>
+                        ) : "\u2014"}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             {severitySummary && <p className="cr-comments" style={{ fontSize: 13, color: "var(--muted)" }}>{severitySummary}</p>}
@@ -1052,6 +1068,11 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         .cr-severity-yellow { background: #4d3d0a; color: #e7a33e; }
         .cr-severity-red { background: #4d1a1a; color: #e74c3c; }
         .cr-severity-gray { background: #333; color: #aaa; }
+        .cr-damage-photo-button {
+          border: 1px solid #526ba9; border-radius: 4px; background: transparent;
+          color: #8ea8ff; font: inherit; font-size: 12px; padding: 3px 8px; cursor: pointer;
+        }
+        .cr-damage-photo-button:hover { background: rgba(113,138,205,0.16); color: #c7d4ff; }
 
         /* ── Equipment ── */
         .cr-equipment-wrap { padding: 14px; display: grid; gap: 12px; }
@@ -1094,34 +1115,21 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         .cr-autocheck-reported { display: grid; gap: 12px; margin-top: 28px; padding-top: 24px; border-top: 1px solid rgba(180,190,220,0.28); color: #f1f4ff; font-size: 18px; }
         .cr-autocheck-reported p { margin: 0; }
         .cr-autocheck-score-card { padding: 22px 28px 26px; text-align: center; display: grid; align-content: start; justify-items: center; }
-        .cr-autocheck-meter { position: relative; width: min(100%, 470px); height: 250px; margin: 0 auto -6px; }
-        .cr-autocheck-meter-arc {
-          position: absolute; left: 50%; top: 28px; width: min(82vw, 370px); height: 185px;
-          transform: translateX(-50%);
-          border: 34px solid rgba(204,208,218,0.38); border-bottom: 0;
-          border-radius: 370px 370px 0 0;
-          box-shadow: inset 0 1px 1px rgba(255,255,255,0.24);
+        .cr-autocheck-gauge { width: min(100%, 470px); height: auto; margin: -6px auto -2px; overflow: visible; }
+        .cr-autocheck-gauge-track {
+          fill: none; stroke: rgba(204,208,218,0.38); stroke-width: 32; stroke-linecap: butt;
+          filter: drop-shadow(0 1px 0 rgba(255,255,255,0.16));
         }
-        .cr-autocheck-meter-pointer {
-          position: absolute; left: 50%; bottom: 35px; width: 0; height: 180px;
-          transform-origin: 50% 100%; transition: transform 0.18s ease;
+        .cr-autocheck-gauge-knob {
+          fill: #fbf9ff; stroke: #6b3d92; stroke-width: 7;
+          filter: drop-shadow(0 4px 7px rgba(0,0,0,0.36));
         }
-        .cr-autocheck-meter-pointer span {
-          position: absolute; top: 2px; left: 50%; width: 68px; height: 68px;
-          transform: translateX(-50%);
-          border-radius: 50%; border: 8px solid #6b3d92; background: #fbf9ff;
-          box-shadow: 0 4px 10px rgba(0,0,0,0.32), inset 0 0 0 1px rgba(255,255,255,0.72);
+        .cr-autocheck-gauge-range,
+        .cr-autocheck-gauge-score {
+          font-family: inherit; dominant-baseline: middle; text-anchor: middle;
         }
-        .cr-autocheck-meter-low,
-        .cr-autocheck-meter-high {
-          position: absolute; top: 132px; color: #d9dfec; font-size: 29px;
-        }
-        .cr-autocheck-meter-low { left: 4%; }
-        .cr-autocheck-meter-high { right: 4%; }
-        .cr-autocheck-meter-score {
-          position: absolute; left: 50%; top: 134px; transform: translateX(-50%);
-          color: #6f8dff; font-size: 104px; line-height: 0.9;
-        }
+        .cr-autocheck-gauge-range { fill: #d9dfec; font-size: 22px; font-weight: 500; }
+        .cr-autocheck-gauge-score { fill: #6f8dff; font-size: 64px; font-weight: 900; }
         .cr-autocheck-score-heading { margin: 0 0 12px; color: #7395ff; font-size: 25px; font-weight: 800; }
         .cr-autocheck-score-copy { margin: 0; color: #f2f5ff; font-size: 17px; line-height: 1.45; max-width: 560px; }
         .cr-autocheck-score-copy strong { color: #fff; }
@@ -1155,14 +1163,20 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           font-size: 35px; line-height: 1; border: 1px solid rgba(255,255,255,0.72);
           box-shadow: inset 0 0 0 1px rgba(255,255,255,0.28);
         }
+        .cr-autocheck-logo-button {
+          display: inline-flex; align-items: center; justify-content: center;
+          min-height: 44px; max-width: 260px; padding: 0; border: 0; background: transparent;
+          cursor: pointer;
+        }
+        .cr-autocheck-logo-text { max-width: none; }
+        .cr-autocheck-logo-button img { display: block; max-width: 100%; max-height: 52px; object-fit: contain; }
         .cr-autocheck-carfax-button {
           min-width: 236px; padding: 16px 28px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.82);
           background: rgba(255,255,255,0.08); color: #fff; font-size: 21px; font-weight: 800; cursor: pointer;
           text-align: center;
         }
+        .cr-autocheck-carfax-button::after { content: "›"; margin-left: 46px; font-size: 26px; line-height: 0; }
         .cr-autocheck-carfax-button:hover { background: rgba(255,255,255,0.18); }
-        .cr-autocheck-carfax-button-static { cursor: default; }
-        .cr-autocheck-carfax-button-static:hover { background: rgba(255,255,255,0.08); }
         .cr-autocheck-check-list {
           border: 1px solid rgba(113,138,205,0.76); border-radius: 18px; padding: 16px 22px;
           background: rgba(14,18,32,0.78);
@@ -1187,7 +1201,11 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         .cr-autocheck-check-icon-ok { background: linear-gradient(135deg, #9dcf72, #52762e); }
         .cr-autocheck-check-icon-info,
         .cr-autocheck-check-icon-muted { background: linear-gradient(135deg, #7796df, #304b90); }
-        .cr-autocheck-check-icon-issue { background: linear-gradient(135deg, #e68b83, #9b3d37); }
+        .cr-autocheck-check-icon-issue {
+          width: 0; height: 0; border-radius: 0;
+          border-left: 22px solid transparent; border-right: 22px solid transparent;
+          border-bottom: 40px solid #a54442; background: transparent; box-shadow: none;
+        }
         .cr-autocheck-check-icon-ok::after {
           content: ""; position: absolute; left: 12px; top: 8px; width: 12px; height: 21px;
           border-right: 5px solid #fff; border-bottom: 5px solid #fff; transform: rotate(45deg);
@@ -1197,12 +1215,10 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           content: "i"; position: absolute; inset: 0; display: grid; place-items: center;
           color: #fff; font-size: 28px; font-weight: 900; font-family: Georgia, serif;
         }
-        .cr-autocheck-check-icon-issue::before,
-        .cr-autocheck-check-icon-issue::after {
-          content: ""; position: absolute; left: 12px; right: 12px; top: 19px; height: 5px;
-          border-radius: 999px; background: #fff;
+        .cr-autocheck-check-icon-issue::before {
+          content: "!"; position: absolute; left: -4px; top: 10px;
+          color: #fff; font-size: 24px; font-weight: 900; line-height: 1;
         }
-        .cr-autocheck-check-icon-issue::after { transform: rotate(90deg); }
         .cr-autocheck-unavailable {
           padding: 16px; display: flex; justify-content: space-between;
           align-items: flex-start; gap: 14px;
@@ -1290,13 +1306,10 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           .cr-autocheck-vin,
           .cr-autocheck-fact,
           .cr-autocheck-reported { font-size: 16px; }
-          .cr-autocheck-meter { height: 210px; }
-          .cr-autocheck-meter-arc { width: min(78vw, 300px); height: 150px; border-width: 26px; }
-          .cr-autocheck-meter-pointer { height: 146px; bottom: 43px; }
-          .cr-autocheck-meter-pointer span { width: 54px; height: 54px; border-width: 7px; }
-          .cr-autocheck-meter-score { top: 118px; font-size: 76px; }
-          .cr-autocheck-meter-low,
-          .cr-autocheck-meter-high { top: 118px; font-size: 22px; }
+          .cr-autocheck-gauge-track { stroke-width: 28; }
+          .cr-autocheck-gauge-knob { r: 19; stroke-width: 6; }
+          .cr-autocheck-gauge-range { font-size: 20px; }
+          .cr-autocheck-gauge-score { font-size: 58px; }
           .cr-autocheck-score-heading { font-size: 21px; }
           .cr-autocheck-carfax { grid-template-columns: 1fr; justify-items: start; padding: 20px; gap: 16px; }
           .cr-autocheck-carfax-copy { font-size: 34px; }
@@ -1374,10 +1387,10 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         :global(:root[data-theme="light"]) .cr-autocheck-reported { color: #101827; }
         :global(:root[data-theme="light"]) .cr-autocheck-vehicle-subtitle { color: #3f579e; }
         :global(:root[data-theme="light"]) .cr-autocheck-score-card { background: #f1f1f1; }
-        :global(:root[data-theme="light"]) .cr-autocheck-meter-arc { border-color: #c9c9c9; box-shadow: none; }
-        :global(:root[data-theme="light"]) .cr-autocheck-meter-low,
-        :global(:root[data-theme="light"]) .cr-autocheck-meter-high { color: #444; }
-        :global(:root[data-theme="light"]) .cr-autocheck-meter-score,
+        :global(:root[data-theme="light"]) .cr-autocheck-gauge-track { stroke: #c9c9c9; filter: none; }
+        :global(:root[data-theme="light"]) .cr-autocheck-gauge-range { fill: #444; }
+        :global(:root[data-theme="light"]) .cr-autocheck-gauge-score { fill: #566fae; }
+        :global(:root[data-theme="light"]) .cr-autocheck-gauge-score,
         :global(:root[data-theme="light"]) .cr-autocheck-score-heading,
         :global(:root[data-theme="light"]) .cr-autocheck-learn { color: #566fae; }
         :global(:root[data-theme="light"]) .cr-autocheck-score-copy { color: #101827; }
@@ -1408,6 +1421,28 @@ function renderAutoCheckFact(label: string, value: string | number | null | unde
   );
 }
 
+function renderAutoCheckScoreGauge(score: number, rangeLow: number, rangeHigh: number) {
+  const low = clampScore(rangeLow);
+  const high = clampScore(Math.max(rangeHigh, low + 1));
+  const position = Math.max(0, Math.min(1, (score - low) / Math.max(1, high - low)));
+  const cx = 160;
+  const cy = 150;
+  const radius = 106;
+  const angle = Math.PI - Math.PI * position;
+  const knobX = cx + radius * Math.cos(angle);
+  const knobY = cy - radius * Math.sin(angle);
+
+  return (
+    <svg className="cr-autocheck-gauge" viewBox="0 0 320 205" role="img" aria-label={`AutoCheck score ${score}, range ${low} to ${high}`}>
+      <path className="cr-autocheck-gauge-track" d={`M ${cx - radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx + radius} ${cy}`} fill="none" stroke="rgba(204,208,218,0.38)" strokeWidth="32" />
+      <circle className="cr-autocheck-gauge-knob" cx={knobX} cy={knobY} r="23" fill="#fbf9ff" stroke="#6b3d92" strokeWidth="7" />
+      <text className="cr-autocheck-gauge-range" x="36" y="126" fill="#d9dfec">{low}</text>
+      <text className="cr-autocheck-gauge-range" x="284" y="126" fill="#d9dfec">{high}</text>
+      <text className="cr-autocheck-gauge-score" x={cx} y="132" fill="#6f8dff">{score}</text>
+    </svg>
+  );
+}
+
 function renderAutoCheckCheck(label: string, value: string | null | undefined) {
   if (!value) return null;
   const tone = classifyAutoCheckValue(value);
@@ -1421,6 +1456,91 @@ function renderAutoCheckCheck(label: string, value: string | null | undefined) {
       <span className="cr-autocheck-check-more">More info</span>
     </div>
   );
+}
+
+function filterVisibleInspection(inspection: Inspection | null): Inspection | null {
+  if (!inspection) return null;
+  const filtered: Inspection = {};
+  for (const [sectionId, section] of Object.entries(inspection)) {
+    const visibleFields = Object.entries(section.fields || {})
+      .filter(([, field]) => !isGeneratedInspectionDefault(field));
+    if (visibleFields.length === 0) continue;
+    const fields = Object.fromEntries(visibleFields) as Record<string, InspectionField>;
+    filtered[sectionId] = {
+      ...section,
+      fields,
+      issue_count: Object.values(fields).filter((field) => field.has_issue).length,
+    };
+  }
+  return Object.keys(filtered).length > 0 ? filtered : null;
+}
+
+function isGeneratedInspectionDefault(field: InspectionField): boolean {
+  const normalized = field.value.trim().toLowerCase();
+  if (field.is_default === false) return false;
+  if (field.is_default === true) return normalized === "not inspected" || normalized === "not specified";
+  return normalized === "not inspected" || normalized === "not specified";
+}
+
+function getDamageLocation(item: DamageItem): string {
+  return firstText(item.location, item.section_label, item.section, item.panel) || "\u2014";
+}
+
+function getDamageType(item: DamageItem): string {
+  return firstText(item.damage_type, item.damageType, item.condition, item.type) || "\u2014";
+}
+
+function getDamageSeverity(item: DamageItem): string {
+  return firstText(item.reported_severity, item.severity, item.severity_label, item.severityLabel) || "\u2014";
+}
+
+function getDamageSeverityColor(item: DamageItem): string {
+  const explicit = firstText(item.severity_color, item.severityColor);
+  if (explicit) return explicit.toLowerCase();
+  const severity = getDamageSeverity(item).toLowerCase();
+  if (severity.includes("required") || severity.includes("major") || severity.includes("severe")) return "red";
+  if (severity.includes("moderate")) return "yellow";
+  if (severity.includes("minor") || severity.includes("normal")) return "green";
+  return "gray";
+}
+
+function getDamageDescription(item: DamageItem): string {
+  return firstText(item.description, item.damage_description, item.damageDescription, item.notes, item.comment) || "\u2014";
+}
+
+function getDamagePhotoUrls(item: DamageItem): string[] {
+  const buckets = [item.pics, item.photos, item.pictures, item.images, item.image_urls, item.imageUrls, item.photo_urls, item.photoUrls];
+  const urls: string[] = [];
+  for (const bucket of buckets) {
+    if (typeof bucket === "string" && bucket.startsWith("http")) {
+      urls.push(bucket);
+    } else if (Array.isArray(bucket)) {
+      for (const entry of bucket) {
+        if (typeof entry === "string" && entry.startsWith("http")) urls.push(entry);
+        if (entry && typeof entry === "object") {
+          const url = firstText((entry as Record<string, unknown>).url, (entry as Record<string, unknown>).href);
+          if (url && url.startsWith("http")) urls.push(url);
+        }
+      }
+    }
+  }
+  return Array.from(new Set(urls));
+}
+
+function firstText(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+function getCarfaxPlaceholderHref(vin: string): string {
+  return `${CARFAX_REPORT_PLACEHOLDER_URL}?vin=${encodeURIComponent(vin)}`;
+}
+
+function openExternal(url: string) {
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function stripSizeParam(url: string): string {
@@ -1722,19 +1842,22 @@ function normalizeAutoCheck(value: unknown): AutoCheckReport | null {
     autocheck_score: toFiniteInt(raw.autocheck_score),
     score_range_low: firstFiniteInt(raw.score_range_low, raw.scoreRangeLow, raw.score_min, raw.scoreMin, raw.low_score),
     score_range_high: firstFiniteInt(raw.score_range_high, raw.scoreRangeHigh, raw.score_max, raw.scoreMax, raw.high_score),
-    historical_event_count: firstFiniteInt(raw.historical_event_count, raw.historical_events, raw.event_count, raw.number_of_historical_events),
-    owner_count: toFiniteInt(raw.owner_count),
-    accident_count: toFiniteInt(raw.accident_count),
-    last_reported_event_date: normalizeString(raw.last_reported_event_date) || normalizeString(raw.last_event_date),
-    last_reported_mileage: firstFiniteInt(raw.last_reported_mileage, raw.last_reported_odometer, raw.last_mileage),
+    score_range_label: normalizeString(raw.score_range_label) || normalizeString(raw.scoreRangeLabel) || normalizeString(raw.comparison_class),
+    historical_event_count: firstFiniteInt(raw.historical_event_count, raw.historical_events, raw.event_count, raw.number_of_historical_events, raw.numberOfHistoricalEvents),
+    owner_count: firstFiniteInt(raw.owner_count, raw.ownerCount),
+    accident_count: firstFiniteInt(raw.accident_count, raw.numberOfAccidents),
+    last_reported_event_date: normalizeString(raw.last_reported_event_date) || normalizeString(raw.last_event_date) || normalizeString(raw.lastReportedEventDate),
+    last_reported_mileage: firstFiniteInt(raw.last_reported_mileage, raw.last_reported_odometer, raw.last_mileage, raw.lastReportedMileage),
     title_brand_check: normalizeString(raw.title_brand_check),
     odometer_check: normalizeString(raw.odometer_check),
     accident_check: normalizeString(raw.accident_check),
     damage_check: normalizeString(raw.damage_check),
+    other_title_brand_event_check: normalizeString(raw.other_title_brand_event_check) || normalizeString(raw.otherTitleBrandEventCheck),
     vehicle_use: normalizeString(raw.vehicle_use),
     buyback_protection: normalizeString(raw.buyback_protection),
+    report_logo_url: normalizeString(raw.report_logo_url) || normalizeString(raw.logoUrl),
     full_report_text: normalizeString(raw.full_report_text),
-    view_report_href: normalizeString(raw.view_report_href),
+    view_report_href: normalizeString(raw.view_report_href) || normalizeString(raw.reportUrl) || normalizeString(raw.report_url),
     failure_category: normalizeString(raw.failure_category),
     failure_message: normalizeString(raw.failure_message),
   };
@@ -1771,7 +1894,7 @@ function firstFiniteInt(...values: unknown[]): number | null {
 }
 
 function summarizeAutoCheck(autocheck: AutoCheckReport | null) {
-  const fallback = { scoreRangeLow: 0, scoreRangeHigh: 100, pointerAngle: 0 };
+  const fallback = { scoreRangeLow: 0, scoreRangeHigh: 100 };
   if (!autocheck) {
     return fallback;
   }
@@ -1781,11 +1904,9 @@ function summarizeAutoCheck(autocheck: AutoCheckReport | null) {
   }
   const low = clampScore(autocheck.score_range_low ?? score - 3);
   const high = clampScore(Math.max(autocheck.score_range_high ?? score + 2, low + 1));
-  const scorePosition = Math.max(0, Math.min(1, (score - low) / Math.max(1, high - low)));
   return {
     scoreRangeLow: low,
     scoreRangeHigh: high,
-    pointerAngle: -90 + scorePosition * 180,
   };
 }
 

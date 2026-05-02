@@ -184,6 +184,15 @@ someone else now owns it.
 `/complete` explicitly after a successful detail push so worker-side
 accounting is clean.
 
+The posted detail payload must follow
+[`CONDITION_REPORT_CONTRACT.md`](./CONDITION_REPORT_CONTRACT.md). In
+particular, when OVE exposes AutoCheck data, include the normalized
+`condition_report.autocheck` object with score/range, event counts, check
+rows, optional logo URL, optional report URL, and failure metadata when
+the AutoCheck scrape was attempted but incomplete. Do not leave AutoCheck
+only inside raw listing JSON; raw JSON may be stored for diagnostics, but
+the UI renders from the normalized `condition_report.autocheck` fields.
+
 ### 3.7 Deprecated: pending poll
 
 `GET /detail/pending` is now marked `deprecated=True` and is read-only.

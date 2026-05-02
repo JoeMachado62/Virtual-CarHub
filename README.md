@@ -15,6 +15,10 @@ cd /var/www/virtual-carhub
 cp backend/.env.example backend/.env
 cp frontend/.env.local.example frontend/.env.local
 
+# Postgres is required. Start it with Docker Compose or point
+# backend/.env DATABASE_URL at another PostgreSQL database.
+docker compose up -d postgres redis
+
 # Backend
 cd backend
 python3 -m venv .venv

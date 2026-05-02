@@ -790,7 +790,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     return (
       <div className="vdp-wrap">
         <a className="vdp-back-link" href="#" onClick={(e) => { e.preventDefault(); window.history.back(); }}>
-          &lsaquo; View similar vehicles
+          &larr; Go back
         </a>
         <section className="card">Loading vehicle details...</section>
       </div>
@@ -801,7 +801,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     return (
       <div className="vdp-wrap">
         <a className="vdp-back-link" href="#" onClick={(e) => { e.preventDefault(); window.history.back(); }}>
-          &lsaquo; View similar vehicles
+          &larr; Go back
         </a>
         <section className="card">{error || "Vehicle not found."}</section>
       </div>
@@ -1016,7 +1016,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   return (
     <div className={`vdp-wrap${hotDeal ? " vdp-wrap--hot-deal" : ""}`}>
       <a className="vdp-back-link" href="#" onClick={(e) => { e.preventDefault(); window.history.back(); }}>
-        &lsaquo; View similar vehicles
+        &larr; Go back
       </a>
       {hotDeal ? (
         <div className="vdp-hot-deal-banner">

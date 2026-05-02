@@ -128,7 +128,62 @@ empty. Populate both when possible.
 Drives the `VEHICLE HISTORY` section and the Engine Starts / Drivable
 bullets in the grade card.
 
-### 3.5 `damage_items` + `damage_summary`
+### 3.5 `autocheck` — required when OVE exposes AutoCheck data
+
+If the OVE listing/source page exposes an AutoCheck block, send it as a
+top-level `condition_report.autocheck` object. Do not leave it only in
+`metadata.listing_json.autocheck`; the backend has a partial fallback for
+legacy OVE fields, but the rich graphic section depends on the explicit
+normalized fields below.
+
+```jsonc
+"autocheck": {
+  "scrape_status": "success",              // success | partial | failed | not_attempted
+  "attempted_at": "2026-04-26T09:00:00Z",  // ISO-8601 UTC
+
+  "autocheck_score": 94,       // int
+  "score_range_low": 91,       // int
+  "score_range_high": 96,      // int
+  "score_range_label": "Pickup - Fullsize",
+
+  "historical_event_count": 32,
+  "owner_count": 1,
+  "accident_count": 1,
+  "last_reported_event_date": "2026-03-03",
+  "last_reported_mileage": 16171,
+
+  "title_brand_check": "OK",
+  "accident_check": "Information Reported(1)",
+  "damage_check": "OK",
+  "odometer_check": "OK",
+  "other_title_brand_event_check": "OK",
+  "vehicle_use": "Other Use Reported",
+  "buyback_protection": "Qualifies",
+
+  "report_logo_url": "https://...",        // optional logo image URL
+  "view_report_href": "https://...",       // optional source/report URL
+  "full_report_text": "optional plain-text transcript"
+}
+```
+
+Field rules:
+
+- Numeric values must be JSON numbers, not formatted strings.
+- `last_reported_event_date` must be `YYYY-MM-DD` when known.
+- `full_report_text` must be plain text and should be capped at 16,000
+  characters.
+- Use `scrape_status="partial"` only when the scraper captured enough
+  data to render a truthful section but some non-critical fields are
+  missing. Use `failed` when AutoCheck was attempted and did not load.
+- The canonical check-row display values are `OK`,
+  `Information Reported(n)`, `Other Use Reported`, `Qualifies`,
+  `Not Eligible`, and `Unknown`. If AutoCheck provides a more specific
+  short display phrase, preserve it.
+- `other_title_brand_event_check` is separate from `title_brand_check`.
+  Do not duplicate one field into the other unless the source truly only
+  exposes a combined value.
+
+### 3.6 `damage_items` + `damage_summary`
 
 ```jsonc
 "damage_items": [
@@ -156,7 +211,7 @@ Source: CR HTML damage map (SVG overlay + tabular list).
 template classes are `cr-severity-{color}` so stick to the five values
 above.
 
-### 3.6 `tire_depths`
+### 3.7 `tire_depths`
 
 ```jsonc
 "tire_depths": {
@@ -177,7 +232,7 @@ Keyed map. Position keys are lowercase (`lf`, `rf`, `lr`, `rr`, or
 `spare`). Source: CR HTML tire section. The `TIRE CONDITION` section is
 hidden entirely if this object is missing or empty.
 
-### 3.7 Title info
+### 3.8 Title info
 
 | Key | Type | Source |
 |---|---|---|
@@ -188,19 +243,19 @@ hidden entirely if this object is missing or empty.
 The `TITLE INFORMATION` section only renders if at least one of these is
 present.
 
-### 3.8 Color fallbacks
+### 3.9 Color fallbacks
 
 | Key | Type | Notes |
 |---|---|---|
 | `exterior_color` | `string` | Fallback only — the top-level vehicle record's `exterior_color` wins. |
 | `interior_color` | `string` | Same. |
 
-### 3.9 `severity_summary`
+### 3.10 `severity_summary`
 
 `string` — a one-line narrative (e.g. `"7 minor items, 2 moderate, no
 structural."`) rendered below the damage table. Optional.
 
-### 3.10 `raw_text`
+### 3.11 `raw_text`
 
 `string` — the full listing/CR dump as a single blob. The template uses
 this **only as a last-resort fallback** when structured fields are
@@ -260,6 +315,7 @@ expect a visibly broken CR page:
 - [ ] `condition_report.metadata.report_link.href` — URL to liquidmotors CR page
 - [ ] `condition_report.announcements` OR `condition_report.metadata.announcementsEnrichment.announcements`
 - [ ] `condition_report.vehicle_history.owners` and `.accidents`
+- [ ] `condition_report.autocheck` when OVE exposes AutoCheck data, including score/range, event counts, check rows, and optional report URL
 - [ ] `condition_report.damage_items` (array, possibly empty — but only empty if the CR page itself reports no damage)
 - [ ] `condition_report.tire_depths` with 4 positions (lf/rf/lr/rr)
 - [ ] `condition_report.overall_grade`
@@ -348,6 +404,29 @@ condition_report.vehicle_history.engine_starts
 condition_report.vehicle_history.drivable
 condition_report.vehicle_history.owners
 condition_report.vehicle_history.accidents
+condition_report.autocheck.scrape_status
+condition_report.autocheck.attempted_at
+condition_report.autocheck.autocheck_score
+condition_report.autocheck.score_range_low
+condition_report.autocheck.score_range_high
+condition_report.autocheck.score_range_label
+condition_report.autocheck.historical_event_count
+condition_report.autocheck.owner_count
+condition_report.autocheck.accident_count
+condition_report.autocheck.last_reported_event_date
+condition_report.autocheck.last_reported_mileage
+condition_report.autocheck.title_brand_check
+condition_report.autocheck.accident_check
+condition_report.autocheck.damage_check
+condition_report.autocheck.odometer_check
+condition_report.autocheck.other_title_brand_event_check
+condition_report.autocheck.vehicle_use
+condition_report.autocheck.buyback_protection
+condition_report.autocheck.report_logo_url
+condition_report.autocheck.view_report_href
+condition_report.autocheck.full_report_text
+condition_report.autocheck.failure_category
+condition_report.autocheck.failure_message
 condition_report.damage_items[].section
 condition_report.damage_items[].section_label
 condition_report.damage_items[].panel

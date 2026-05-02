@@ -141,6 +141,28 @@ filter.
             "engine_starts": true,
             "drivable": true
           },
+          "autocheck": {
+            "scrape_status": "success",
+            "attempted_at": "2026-04-26T09:00:00Z",
+            "autocheck_score": 94,
+            "score_range_low": 91,
+            "score_range_high": 96,
+            "score_range_label": "Pickup - Fullsize",
+            "historical_event_count": 32,
+            "owner_count": 1,
+            "accident_count": 0,
+            "last_reported_event_date": "2026-03-03",
+            "last_reported_mileage": 16171,
+            "title_brand_check": "OK",
+            "accident_check": "OK",
+            "damage_check": "OK",
+            "odometer_check": "OK",
+            "other_title_brand_event_check": "OK",
+            "vehicle_use": "OK",
+            "buyback_protection": "Qualifies",
+            "report_logo_url": null,
+            "view_report_href": null
+          },
           "damage_items": [],
           "damage_summary": {
             "total_items": 0,
@@ -226,10 +248,42 @@ Important fields:
 - `announcements`
 - `remarks`
 - `vehicle_history`
+- `autocheck` when OVE exposes AutoCheck data
 - `damage_items`
 - `damage_summary`
 - `tire_depths`
 - `metadata.report_link.href`
+
+For Hot Deals, `condition_report.autocheck` should be treated as part of
+the quality proof when it is available. Send the normalized object
+described in `CONDITION_REPORT_CONTRACT.md`, including:
+
+- `scrape_status`
+- `autocheck_score`
+- `score_range_low`
+- `score_range_high`
+- `score_range_label`
+- `historical_event_count`
+- `owner_count`
+- `accident_count`
+- `last_reported_event_date`
+- `last_reported_mileage`
+- `title_brand_check`
+- `accident_check`
+- `damage_check`
+- `odometer_check`
+- `other_title_brand_event_check`
+- `vehicle_use`
+- `buyback_protection`
+- optional `report_logo_url`
+- optional `view_report_href`
+
+If AutoCheck exists on the source listing but the scraper could not load
+or parse it, do not include the VIN in the Hot Deals batch unless the
+normal CR HTML independently proves it passed every negative signal. In
+that exception case, send `autocheck.scrape_status="failed"` or
+`"partial"` with `failure_category` and `failure_message` so admins can
+see why the graphic section is incomplete.
 
 The VPS stores this report, but the frontend must gate full report access
 to admins and logged-in credit-approved buyers.
@@ -301,7 +355,8 @@ For every included VIN:
 3. Include MMR, asking price, dollar delta below MMR, percent delta when
    available, deal_label, and deal_rank.
 4. Include the deep scrape condition_report payload following
-   CONDITION_REPORT_CONTRACT.md.
+   CONDITION_REPORT_CONTRACT.md, including condition_report.autocheck when
+   OVE exposes AutoCheck data.
 5. Include listing_snapshot, seller_comments, images, and CR metadata links.
 6. Include cr_screen.status="passed", the filter version, reasons=[], and
    the excluded signals that were checked.

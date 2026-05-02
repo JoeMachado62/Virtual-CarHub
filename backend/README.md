@@ -5,6 +5,7 @@ FastAPI implementation of the VirtualCarHub PRD v2 API surface.
 ## Local Run
 
 ```bash
+docker compose up -d postgres redis
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
@@ -41,9 +42,9 @@ uvicorn app.main:app --reload --port 8000
   - `bash scripts/db/backup_postgres.sh`
 - Postgres restore:
   - `bash scripts/db/restore_postgres.sh /path/to/backup.dump`
-- SQLite -> Postgres migration utility:
-  - `cd backend && .venv/bin/python scripts/migrate_sqlite_to_postgres.py --sqlite-path ./virtual_carhub.db --truncate-target`
-- Alembic uses `DATABASE_URL` when present in environment (no longer forced to sqlite from `alembic.ini`).
+- PostgreSQL is required. `DATABASE_URL` must be set explicitly; SQLite is not a supported runtime or test fallback.
+- Alembic uses `DATABASE_URL` when present in environment and otherwise falls back to the local Docker Compose Postgres URL in `alembic.ini`.
+- Backend tests require `TEST_DATABASE_URL`, or a `DATABASE_URL` whose database name contains `test`.
 - Object storage URL resolution supports:
   - `OBJECT_STORAGE_PUBLIC_BASE_URL`
   - `AWS_CLOUDFRONT_DOMAIN`
