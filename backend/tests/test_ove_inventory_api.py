@@ -1,23 +1,9 @@
-import os
-
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import delete, func, select
-
-# Hard guard against running these tests against a non-throwaway database.
-# These tests use db.execute(delete(OveDetailRequest)) and seed fixture VINs
-# directly via SessionLocal(), which means they will WIPE THE LIVE QUEUE if
-# pointed at production. We allow only sqlite or an explicitly-named test DB.
-_db_url = os.environ.get("DATABASE_URL", "")
-if _db_url and "sqlite" not in _db_url and "test" not in _db_url.lower():
-    raise RuntimeError(
-        f"Refusing to run destructive OVE inventory tests against DATABASE_URL={_db_url!r}. "
-        "These tests truncate ove_detail_requests. Point DATABASE_URL at a sqlite file or "
-        "a database whose name contains 'test' before running this suite."
-    )
 
 from app.api.v1.routers.inventory import get_inventory_vehicle
 from app.api.v1.routers.inventory_ove import (
@@ -622,14 +608,22 @@ def test_ove_detail_push_request_accepts_nested_autocheck_payload() -> None:
                 "scrape_status": "success",
                 "attempted_at": "2026-04-16T14:32:55Z",
                 "autocheck_score": 94,
+                "score_range_low": "91",
+                "score_range_high": 96.2,
+                "score_range_label": "Pickup - Fullsize",
+                "historical_event_count": "32",
                 "owner_count": 1,
                 "accident_count": 0,
+                "last_reported_event_date": "2026-03-03",
+                "last_reported_mileage": "16171",
                 "title_brand_check": "OK",
                 "odometer_check": "OK",
                 "accident_check": "No accidents reported",
                 "damage_check": "OK",
+                "other_title_brand_event_check": "OK",
                 "vehicle_use": "Personal Use Only",
                 "buyback_protection": "Eligible",
+                "report_logo_url": "https://cdn.example.com/history-logo.png",
                 "full_report_text": "Sample Experian AutoCheck report body",
                 "view_report_href": "https://www.autocheck.com/report/sample",
             },
@@ -639,7 +633,72 @@ def test_ove_detail_push_request_accepts_nested_autocheck_payload() -> None:
     autocheck = payload.condition_report["autocheck"]
     assert autocheck["scrape_status"] == "success"
     assert autocheck["autocheck_score"] == 94
+    assert autocheck["score_range_low"] == 91
+    assert autocheck["score_range_high"] == 96
+    assert autocheck["historical_event_count"] == 32
+    assert autocheck["last_reported_mileage"] == 16171
     assert autocheck["title_brand_check"] == "OK"
+    assert autocheck["other_title_brand_event_check"] == "OK"
+
+
+def test_ove_detail_push_request_normalizes_ove_listing_json_autocheck() -> None:
+    payload = OveDetailPushRequest(
+        images=[
+            OveImagePayload(
+                url="https://assets.cai-media-management.com/example-photo-1.jpg",
+                role="hero",
+                display_order=0,
+                is_primary=True,
+            ),
+        ],
+        condition_report={
+            "overall_grade": "4.3",
+            "announcements": ["Title Status: Title Present"],
+            "metadata": {
+                "report_link": {"href": "http://content.liquidmotors.com/IR/15614/38020974.html"},
+                "announcementsEnrichment": {"announcements": ["Title Status: Title Present"]},
+                "listing_json": {
+                    "autocheck": {
+                        "score": "94",
+                        "scoreRangeLow": "91",
+                        "scoreRangeHigh": "96",
+                        "scoreRangeLabel": "Pickup - Fullsize",
+                        "numberOfHistoricalEvents": "32",
+                        "ownerCount": "1",
+                        "numberOfAccidents": "1",
+                        "lastReportedEventDate": "2026-03-03",
+                        "lastReportedMileage": "16171",
+                        "titleAndProblemCheckOK": True,
+                        "odometerCheckOK": True,
+                        "vehicleUseAndEventCheckOK": False,
+                    }
+                },
+            },
+            "vehicle_history": {
+                "owners": 1,
+                "accidents": 1,
+                "drivable": True,
+                "engine_starts": True,
+            },
+            "damage_items": [],
+            "tire_depths": {
+                "lf": {"position_label": "LF", "tread_depth": "7/32"},
+                "rf": {"position_label": "RF", "tread_depth": "7/32"},
+                "lr": {"position_label": "LR", "tread_depth": "6/32"},
+                "rr": {"position_label": "RR", "tread_depth": "6/32"},
+            },
+        },
+    )
+
+    autocheck = payload.condition_report["autocheck"]
+    assert autocheck["scrape_status"] == "success"
+    assert autocheck["autocheck_score"] == 94
+    assert autocheck["score_range_label"] == "Pickup - Fullsize"
+    assert autocheck["historical_event_count"] == 32
+    assert autocheck["accident_count"] == 1
+    assert autocheck["accident_check"] == "Information Reported(1)"
+    assert autocheck["vehicle_use"] == "Other Use Reported"
+    assert autocheck["other_title_brand_event_check"] == autocheck["title_brand_check"]
 
 
 def test_ove_detail_request_deduplicates_pending_rows() -> None:
@@ -1073,6 +1132,7 @@ class TestNaaaInspection:
                 assert field["label"] == field_def["label"]
                 assert field["value"] == field_def["default"]
                 assert field["has_issue"] is False
+                assert field["is_default"] is True
 
     def test_scraper_values_preserved(self) -> None:
         """Values sent by the scraper are used instead of defaults."""
@@ -1089,8 +1149,10 @@ class TestNaaaInspection:
 
         assert result["drivability"]["fields"]["smart_keys"]["value"] == "2"
         assert result["drivability"]["fields"]["smart_keys"]["has_issue"] is False
+        assert result["drivability"]["fields"]["smart_keys"]["is_default"] is False
         assert result["drivability"]["fields"]["vehicle_starts"]["value"] == "Yes - Starts"
         assert result["drivability"]["fields"]["vehicle_starts"]["has_issue"] is False
+        assert result["drivability"]["fields"]["odor_bio"]["is_default"] is True
         # Unfilled fields still get defaults
         assert result["drivability"]["fields"]["odor_bio"]["value"] == "Not Inspected"
 

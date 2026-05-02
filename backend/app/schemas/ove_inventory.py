@@ -63,6 +63,22 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
+def _first_clean_text(*values: Any) -> str | None:
+    for value in values:
+        cleaned = _clean_text(value)
+        if cleaned:
+            return cleaned
+    return None
+
+
+def _first_coerce_int(*values: Any) -> int | None:
+    for value in values:
+        coerced = _coerce_int(value)
+        if coerced is not None:
+            return coerced
+    return None
+
+
 # ---------------------------------------------------------------------------
 # NAAA standard inspection fields — every field is always present in the
 # normalised output so that the frontend can render the full Manheim-style
@@ -183,7 +199,8 @@ def _normalize_inspection(
         for field_id, field_def in section_def["fields"].items():
             # Get value from incoming data, fall back to template default
             raw_value = incoming_section.get(field_id)
-            value = str(raw_value).strip() if raw_value not in (None, "") else field_def["default"]
+            is_default = raw_value in (None, "")
+            value = str(raw_value).strip() if not is_default else field_def["default"]
             has_issue = _is_issue_value(value)
             if has_issue:
                 section_issue_count += 1
@@ -191,6 +208,7 @@ def _normalize_inspection(
                 "label": field_def["label"],
                 "value": value,
                 "has_issue": has_issue,
+                "is_default": is_default,
             }
 
         result[section_id] = {
@@ -423,8 +441,8 @@ def _condition_report_has_content(value: dict[str, Any]) -> bool:
     return False
 
 
-def _normalize_ove_autocheck(ove_ac: dict[str, Any]) -> dict[str, Any]:
-    """Map OVE's autocheck block to the schema the frontend expects."""
+def _normalize_autocheck(raw_ac: dict[str, Any], *, from_ove_listing: bool = False) -> dict[str, Any]:
+    """Map scraper/OVE AutoCheck data to the schema the frontend expects."""
     def _check_text(ok: bool | None, label: str) -> str | None:
         if ok is True:
             return f"No {label} reported"
@@ -432,25 +450,112 @@ def _normalize_ove_autocheck(ove_ac: dict[str, Any]) -> dict[str, Any]:
             return f"{label} information reported"
         return None
 
-    return {
-        "scrape_status": "success",
-        "autocheck_score": _coerce_int(ove_ac.get("score")),
-        "owner_count": _coerce_int(ove_ac.get("ownerCount")),
-        "accident_count": _coerce_int(ove_ac.get("numberOfAccidents")),
-        "title_brand_check": _check_text(
-            _coerce_bool(ove_ac.get("titleAndProblemCheckOK")), "title brand issues"
+    accident_count = _first_coerce_int(
+        raw_ac.get("accident_count"),
+        raw_ac.get("numberOfAccidents"),
+        raw_ac.get("number_of_accidents"),
+    )
+    owner_count = _first_coerce_int(
+        raw_ac.get("owner_count"),
+        raw_ac.get("ownerCount"),
+        raw_ac.get("calculatedOwners"),
+    )
+    if accident_count is None:
+        normalized_accident_check = None
+    elif accident_count == 0:
+        normalized_accident_check = "OK"
+    else:
+        normalized_accident_check = f"Information Reported({accident_count})"
+
+    vehicle_use_ok = _coerce_bool(raw_ac.get("vehicleUseAndEventCheckOK"))
+    normalized_vehicle_use = None
+    if vehicle_use_ok is True:
+        normalized_vehicle_use = "OK"
+    elif vehicle_use_ok is False:
+        normalized_vehicle_use = "Other Use Reported"
+
+    normalized: dict[str, Any] = {
+        "scrape_status": _first_clean_text(raw_ac.get("scrape_status"), raw_ac.get("status")) or "success",
+        "attempted_at": _first_clean_text(raw_ac.get("attempted_at"), raw_ac.get("captured_at"), raw_ac.get("scraped_at")),
+        "autocheck_score": _first_coerce_int(raw_ac.get("autocheck_score"), raw_ac.get("score")),
+        "score_range_low": _first_coerce_int(
+            raw_ac.get("score_range_low"),
+            raw_ac.get("scoreRangeLow"),
+            raw_ac.get("score_min"),
+            raw_ac.get("scoreMin"),
+            raw_ac.get("low_score"),
         ),
-        "odometer_check": _check_text(
-            _coerce_bool(ove_ac.get("odometerCheckOK")), "odometer problems"
+        "score_range_high": _first_coerce_int(
+            raw_ac.get("score_range_high"),
+            raw_ac.get("scoreRangeHigh"),
+            raw_ac.get("score_max"),
+            raw_ac.get("scoreMax"),
+            raw_ac.get("high_score"),
         ),
-        "accident_check": _check_text(
-            True if _coerce_int(ove_ac.get("numberOfAccidents")) == 0 else False,
-            "accidents",
+        "score_range_label": _first_clean_text(
+            raw_ac.get("score_range_label"),
+            raw_ac.get("scoreRangeLabel"),
+            raw_ac.get("comparison_class"),
+            raw_ac.get("vehicleClass"),
         ),
-        "vehicle_use": _check_text(
-            _coerce_bool(ove_ac.get("vehicleUseAndEventCheckOK")), "vehicle use issues"
+        "historical_event_count": _first_coerce_int(
+            raw_ac.get("historical_event_count"),
+            raw_ac.get("historical_events"),
+            raw_ac.get("event_count"),
+            raw_ac.get("number_of_historical_events"),
+            raw_ac.get("numberOfHistoricalEvents"),
         ),
+        "owner_count": owner_count,
+        "accident_count": accident_count,
+        "last_reported_event_date": _first_clean_text(
+            raw_ac.get("last_reported_event_date"),
+            raw_ac.get("last_event_date"),
+            raw_ac.get("lastReportedEventDate"),
+        ),
+        "last_reported_mileage": _first_coerce_int(
+            raw_ac.get("last_reported_mileage"),
+            raw_ac.get("last_reported_odometer"),
+            raw_ac.get("last_mileage"),
+            raw_ac.get("lastReportedMileage"),
+        ),
+        "title_brand_check": _first_clean_text(raw_ac.get("title_brand_check"))
+        or _check_text(_coerce_bool(raw_ac.get("titleAndProblemCheckOK")), "title brand issues"),
+        "odometer_check": _first_clean_text(raw_ac.get("odometer_check"))
+        or _check_text(_coerce_bool(raw_ac.get("odometerCheckOK")), "odometer problems"),
+        "accident_check": _first_clean_text(raw_ac.get("accident_check"))
+        or normalized_accident_check,
+        "damage_check": _first_clean_text(raw_ac.get("damage_check"))
+        or _check_text(_coerce_bool(raw_ac.get("damageCheckOK")), "damage"),
+        "other_title_brand_event_check": _first_clean_text(
+            raw_ac.get("other_title_brand_event_check"),
+            raw_ac.get("otherTitleBrandEventCheck"),
+        ),
+        "vehicle_use": _first_clean_text(raw_ac.get("vehicle_use"))
+        or normalized_vehicle_use,
+        "buyback_protection": _first_clean_text(
+            raw_ac.get("buyback_protection"),
+            raw_ac.get("buybackProtection"),
+        ),
+        "report_logo_url": _first_clean_text(raw_ac.get("report_logo_url"), raw_ac.get("logoUrl")),
+        "view_report_href": _first_clean_text(
+            raw_ac.get("view_report_href"),
+            raw_ac.get("reportUrl"),
+            raw_ac.get("report_url"),
+            raw_ac.get("href"),
+        ),
+        "full_report_text": _first_clean_text(raw_ac.get("full_report_text"), raw_ac.get("transcript")),
+        "failure_category": _first_clean_text(raw_ac.get("failure_category")),
+        "failure_message": _first_clean_text(raw_ac.get("failure_message"), raw_ac.get("message")),
     }
+    if from_ove_listing and not normalized["other_title_brand_event_check"]:
+        normalized["other_title_brand_event_check"] = normalized["title_brand_check"]
+
+    return {key: value for key, value in normalized.items() if value not in (None, "", [], {})}
+
+
+def _normalize_ove_autocheck(ove_ac: dict[str, Any]) -> dict[str, Any]:
+    """Map OVE's autocheck block to the schema the frontend expects."""
+    return _normalize_autocheck(ove_ac, from_ove_listing=True)
 
 
 def _normalize_condition_report_payload(value: Any) -> dict[str, Any]:
@@ -651,6 +756,16 @@ def _normalize_condition_report_payload(value: Any) -> dict[str, Any]:
             report["tire_depths"] = normalized_tire_depths
         else:
             report.pop("tire_depths", None)
+
+    autocheck_raw = report.get("autocheck")
+    if autocheck_raw is not None:
+        if not isinstance(autocheck_raw, dict):
+            raise ValueError("condition_report.autocheck must be an object")
+        autocheck = _normalize_autocheck(autocheck_raw)
+        if autocheck:
+            report["autocheck"] = autocheck
+        else:
+            report.pop("autocheck", None)
 
     # Extract AutoCheck from OVE listing_json when the scraper didn't provide
     # a top-level autocheck block.  OVE stores it under metadata.listing_json.autocheck.

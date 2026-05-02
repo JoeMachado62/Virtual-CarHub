@@ -165,19 +165,6 @@ def _bulk_upsert_vehicles_pg(db: Session, rows: list[dict[str, Any]]) -> None:
         db.execute(stmt)
 
 
-def _bulk_upsert_vehicles_fallback(db: Session, rows: list[dict[str, Any]]) -> None:
-    """SQLite-compatible fallback: merge via ORM."""
-    for row in rows:
-        existing = db.get(Vehicle, row["vin"])
-        if existing:
-            for col in _VEHICLE_UPSERT_COLUMNS:
-                if col in row:
-                    setattr(existing, col, row[col])
-        else:
-            db.add(Vehicle(**row))
-    db.flush()
-
-
 def ingest_ove_inventory(
     db: Session,
     payload: OveBulkIngestRequest,
@@ -254,10 +241,9 @@ def ingest_ove_inventory(
         source_platforms.add(item.source_platform.value)
 
     dialect = db.bind.dialect.name if db.bind is not None else ""
-    if dialect == "postgresql":
-        _bulk_upsert_vehicles_pg(db, rows)
-    else:
-        _bulk_upsert_vehicles_fallback(db, rows)
+    if dialect != "postgresql":
+        raise RuntimeError(f"OVE inventory ingest requires PostgreSQL, got {dialect or 'unknown'}")
+    _bulk_upsert_vehicles_pg(db, rows)
 
     report.inserted = len(rows)
     report.synced_vins = [r["vin"] for r in rows]
@@ -630,7 +616,7 @@ def upsert_ove_vehicle_detail(
 
 
 def _ensure_aware(value: datetime | None) -> datetime | None:
-    """Coerce naive timestamps (e.g. SQLite) to UTC-aware datetimes."""
+    """Coerce naive timestamps to UTC-aware datetimes."""
     if value is None:
         return None
     if value.tzinfo is None:
@@ -673,9 +659,7 @@ def claim_ove_detail_requests(
     """Atomically claim up to ``limit`` eligible detail requests for a worker.
 
     Uses ``SELECT ... FOR UPDATE SKIP LOCKED`` on Postgres so two workers
-    cannot grab the same row. On SQLite (test fixture) we fall back to a
-    plain ordered select inside a single transaction, which is safe because
-    SQLite serializes writers.
+    cannot grab the same row.
     """
     worker_id = (worker_id or "").strip()
     if not worker_id:
@@ -698,10 +682,9 @@ def claim_ove_detail_requests(
     )
 
     dialect = db.bind.dialect.name if db.bind is not None else ""
-    if dialect == "postgresql":
-        # Atomic claim path: row-lock the candidates and skip rows another
-        # worker is currently claiming.
-        stmt = stmt.with_for_update(skip_locked=True)
+    if dialect != "postgresql":
+        raise RuntimeError(f"OVE detail claim requires PostgreSQL, got {dialect or 'unknown'}")
+    stmt = stmt.with_for_update(skip_locked=True)
 
     rows = db.scalars(stmt).all()
     if not rows:
@@ -709,8 +692,7 @@ def claim_ove_detail_requests(
 
     claimed: list[OveDetailRequest] = []
     for row in rows:
-        # Defensive guard: even with FOR UPDATE, re-check eligibility in case
-        # we landed on this branch via the SQLite fallback.
+        # Defensive guard: even with FOR UPDATE, re-check eligibility.
         lease_expires = _ensure_aware(row.lease_expires_at)
         if row.status == OveDetailRequestStatus.CLAIMED and (
             lease_expires is None or lease_expires >= now
