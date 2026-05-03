@@ -247,7 +247,7 @@ def test_inventory_search_and_detail_contract() -> None:
 
         if payload["items"]:
             vin = payload["items"][0]["vin"]
-            detail = get_inventory_vehicle(vin=vin, db=db)
+            detail = get_inventory_vehicle(identifier=vin, db=db, current_user=None)
             assert detail["status"] == "ok"
             assert detail["data"]["vin"] == vin
             assert "display_images" in detail["data"]
@@ -440,11 +440,11 @@ def test_search_wholesale_source_is_public_facing() -> None:
         items = response["data"]["items"]
         assert {item["vin"] for item in items} == {"2C3CDXCT5NH100001", "2C3CDXCT5NH100002"}
         assert all(item["source_filter_value"] == "wholesale" for item in items)
-        assert all(item["source_label"] == "Wholesale" for item in items)
+        assert all(item["source_label"] == "Surplus Inventory" for item in items)
 
-        detail = get_inventory_vehicle(vin="2C3CDXCT5NH100002", db=db)
+        detail = get_inventory_vehicle(identifier="2C3CDXCT5NH100002", db=db, current_user=None)
         assert detail["status"] == "ok"
-        assert detail["data"]["source_label"] == "Wholesale"
+        assert detail["data"]["source_label"] == "Surplus Inventory"
 
 
 def test_search_enforces_aged_inventory_for_retail_but_bypasses_auction_dom() -> None:
