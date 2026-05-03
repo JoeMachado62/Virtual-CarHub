@@ -1,13 +1,21 @@
 import logging
+from hashlib import sha256
 import time
+from urllib.parse import urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.core.config import settings
+from app.core.constants import ImageTier
 from app.db.session import SessionLocal
 from app.integrations.marketcheck_client import MarketCheckClient
-from app.models.entities import BuyerProfile, Deal, User
-from app.services.inventory_service import ingest_marketcheck_inventory, seed_inventory
+from app.models.entities import BuyerProfile, Deal, User, VehicleImageAsset
+from app.services.inventory_service import (
+    cleanup_stale_marketcheck_inventory,
+    ingest_marketcheck_inventory,
+    run_marketcheck_daily_snapshot,
+    seed_inventory,
+)
 from app.services.marketcheck_history_enrichment_service import run_history_enrichment_batch
 from app.services.matching_service import run_matching
 from app.tasks.celery_app import celery_app
@@ -32,6 +40,109 @@ def nightly_ingest() -> dict:
             result = {"inserted": inserted, "mode": "mock-seed", "source": "mock"}
         db.commit()
     return result
+
+
+@celery_app.task(name="inventory.marketcheck_snapshot")
+def marketcheck_snapshot(states: list[str] | None = None) -> dict:
+    if not settings.has_marketcheck:
+        return {"status": "skipped", "reason": "marketcheck_disabled"}
+    if not settings.marketcheck_snapshot_enabled:
+        return {"status": "skipped", "reason": "snapshot_disabled"}
+
+    client = MarketCheckClient(
+        api_key=settings.marketcheck_api_key,
+        api_secret=settings.marketcheck_api_secret,
+        api_base_url=settings.marketcheck_api_base_url,
+        live=True,
+    )
+    with SessionLocal() as db:
+        return run_marketcheck_daily_snapshot(
+            db,
+            client=client,
+            target_states=states or settings.snapshot_target_states,
+            limit_per_state=settings.snapshot_max_per_state,
+            min_dom=settings.snapshot_min_dom,
+            min_year=settings.snapshot_min_year,
+            min_miles=settings.snapshot_min_miles,
+            max_miles=settings.snapshot_max_miles,
+        )
+
+
+@celery_app.task(name="inventory.marketcheck_stale_cleanup")
+def marketcheck_stale_cleanup(dry_run: bool = False) -> dict:
+    with SessionLocal() as db:
+        result = cleanup_stale_marketcheck_inventory(
+            db,
+            stale_threshold_days=settings.marketcheck_stale_threshold_days,
+            max_mark=settings.marketcheck_stale_cleanup_max_per_run,
+            dry_run=dry_run,
+        )
+        if not dry_run:
+            db.commit()
+        return result
+
+
+@celery_app.task(name="images.cache_to_s3_batch")
+def cache_images_to_s3_batch(batch_size: int = 100) -> dict:
+    from app.services.s3_service import S3ServiceError, cache_remote_image, object_storage_uploads_enabled
+
+    if not object_storage_uploads_enabled():
+        return {"status": "skipped", "reason": "s3_disabled", "processed": 0, "cached": 0, "failed": 0}
+
+    with SessionLocal() as db:
+        assets = db.scalars(
+            select(VehicleImageAsset)
+            .where(
+                VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
+                VehicleImageAsset.active.is_(True),
+                VehicleImageAsset.external_url.isnot(None),
+                VehicleImageAsset.external_url != "",
+                or_(
+                    VehicleImageAsset.storage_key.is_(None),
+                    VehicleImageAsset.storage_key == "",
+                ),
+            )
+            .order_by(VehicleImageAsset.created_at.asc())
+            .limit(max(1, batch_size))
+        ).all()
+
+        cached = 0
+        failed = 0
+        for asset in assets:
+            try:
+                result = cache_remote_image(
+                    source_url=asset.external_url,
+                    key=_image_cache_key(asset),
+                )
+            except (S3ServiceError, ValueError):
+                logger.debug("image_cache_to_s3_failed asset_id=%s vin=%s", asset.id, asset.vin, exc_info=True)
+                failed += 1
+                continue
+
+            asset.storage_key = result.storage_key
+            asset.sha256 = result.sha256
+            normalized = dict(asset.metadata_json or {})
+            normalized["s3_cached_at"] = time.time()
+            normalized["s3_content_type"] = result.content_type
+            normalized["s3_size_bytes"] = result.size_bytes
+            asset.metadata_json = normalized
+            cached += 1
+
+        db.commit()
+
+    return {"status": "ok", "processed": len(assets), "cached": cached, "failed": failed}
+
+
+def _image_cache_key(asset: VehicleImageAsset) -> str:
+    url_hash = sha256(str(asset.external_url or "").encode("utf-8")).hexdigest()
+    path = urlsplit(str(asset.external_url or "")).path.lower()
+    ext = ".jpg"
+    for candidate in (".jpg", ".jpeg", ".png", ".webp", ".avif"):
+        if path.endswith(candidate):
+            ext = ".jpg" if candidate == ".jpeg" else candidate
+            break
+    source = str(asset.source_kind or "source").strip().lower().replace("/", "-") or "source"
+    return f"images/vehicles/{asset.vin}/{source}/{url_hash[:20]}{ext}"
 
 
 @celery_app.task(name="matching.rerun_all")

@@ -456,7 +456,7 @@ def resolve_vehicle_display_context(
             .order_by(VehicleInspectionImage.display_order.asc(), VehicleInspectionImage.created_at.asc())
         ).all()
         for row in report_images:
-            link = row.source_url or resolve_storage_url(row.storage_key)
+            link = resolve_storage_url(row.storage_key) or row.source_url
             if not link:
                 continue
             if row.image_type == "disclosure":
@@ -661,7 +661,7 @@ def _load_current_inspection_report(
 
 
 def _asset_url(asset: VehicleImageAsset) -> str | None:
-    return asset.external_url or resolve_storage_url(asset.storage_key)
+    return resolve_storage_url(asset.storage_key) or asset.external_url
 
 
 def _fingerprint(*, vin: str, tier: ImageTier, payload: list[str]) -> str:

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from sqlalchemy import delete, select
 
@@ -22,12 +23,25 @@ from app.models.entities import (
     VehicleInspectionReport,
 )
 from app.services.image_pipeline_service import (
+    _asset_url,
     ensure_tier2_hero_job,
     ensure_tier3_processing_job,
     resolve_vehicle_display_context,
     sync_marketcheck_source_assets,
 )
 from app.services.chromedata_service import CHROMEDATA_SOURCE_KIND
+
+
+def test_asset_url_prefers_storage_key_over_external_url(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "object_storage_public_base_url", "https://assets.example.com")
+    monkeypatch.setattr(settings, "aws_cloudfront_domain", "")
+    monkeypatch.setattr(settings, "s3_assets_bucket", "")
+    asset = SimpleNamespace(
+        storage_key="source-cache/VIN123/marketcheck/001.jpg",
+        external_url="https://source.example/VIN123/001.jpg",
+    )
+
+    assert _asset_url(asset) == "https://assets.example.com/source-cache/VIN123/marketcheck/001.jpg"
 
 
 def _make_vehicle(vin: str) -> Vehicle:

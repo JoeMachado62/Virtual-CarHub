@@ -172,6 +172,26 @@ class VehicleTaxonomyCache(Base, TimestampMixin):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class VehicleMarketComparisonCache(Base, TimestampMixin):
+    __tablename__ = "vehicle_market_comparison_cache"
+
+    vin: Mapped[str] = mapped_column(
+        ForeignKey("vehicles.vin", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
+
+
 class VehicleImageAsset(Base, TimestampMixin):
     __tablename__ = "vehicle_image_assets"
     __table_args__ = (UniqueConstraint("vin", "tier", "external_url", name="uq_vehicle_image_assets_vin_tier_url"),)

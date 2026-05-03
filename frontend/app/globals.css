@@ -16,6 +16,7 @@
   --danger: #ff8989;
   --shadow: 0 18px 54px rgba(2, 7, 20, 0.34);
   --shell-width: 1240px;
+  --inventory-shell-width: 1390px;
 }
 
 :root[data-theme="light"] {
@@ -84,6 +85,12 @@ textarea {
 .shell {
   width: min(var(--shell-width), calc(100% - 2rem));
   margin: 0 auto;
+}
+
+@media (min-width: 1081px) {
+  .inventory-search-shell {
+    width: min(var(--inventory-shell-width), calc(100% - 2rem));
+  }
 }
 
 .site-header {

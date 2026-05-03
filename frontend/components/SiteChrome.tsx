@@ -42,6 +42,9 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
   const [logoPath, setLogoPath] = useState("/assets/images/logo/VirtualCarHub white.png");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isEmbedRoute = pathname.startsWith("/embed/");
+  const isInventorySearchRoute =
+    pathname === "/vinventory" || pathname === "/inventory" || pathname.startsWith("/vinventory/make/");
+  const shellClassName = `shell${isInventorySearchRoute ? " inventory-search-shell" : ""}`;
 
   // Close mobile menu on route change
   useEffect(() => {
@@ -89,7 +92,7 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
         </div>
 
         <div className="navbar-shell">
-          <div className="shell navbar">
+          <div className={`${shellClassName} navbar`}>
             <Link href="/" className="brand-lockup">
               <img src={logoPath} alt="VirtualCarHub" className="brand-mark" />
             </Link>
@@ -168,7 +171,7 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
       </header>
 
       <div className="page-body">
-        <div className="shell">{children}</div>
+        <div className={shellClassName}>{children}</div>
       </div>
 
       <footer className="site-footer">

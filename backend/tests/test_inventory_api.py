@@ -1,20 +1,24 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select
 
 from app.api.v1 import routers as api_routers
+from app.core.config import settings
 from app.api.v1.routers.inventory import (
     _build_marketcheck_search_params,
     get_inventory_vehicle,
+    get_inventory_vehicle_market_comparison,
     inventory_facets,
     search_inventory,
 )
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
-from app.models.entities import Vehicle, VehicleTaxonomyCache
+from app.models.entities import Vehicle, VehicleMarketComparisonCache, VehicleTaxonomyCache
 from app.services.inventory_taxonomy_service import sync_marketcheck_taxonomy_cache
 from app.services.inventory_service import (
+    cleanup_stale_marketcheck_inventory,
     ingest_marketcheck_inventory,
+    run_marketcheck_daily_snapshot,
     seed_inventory,
     upsert_vehicle_with_source_priority,
 )
@@ -82,6 +86,17 @@ class FailingMarketCheckClient:
             "'https://api.marketcheck.com/v2/search/car/active?rows=72&start=0&zip=33991&radius=250"
             "&dom_range=60-9999&api_key=super-secret-key'"
         )
+
+
+class RecordingEmptyMarketCheckClient:
+    live = True
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def search_inventory(self, params: dict) -> dict:
+        self.calls.append(dict(params))
+        return {"listings": [], "num_found": 0}
 
 
 def test_ingest_marketcheck_inventory_inserts_rows() -> None:
@@ -815,6 +830,220 @@ def test_build_marketcheck_search_params_includes_dom_range() -> None:
     assert params["zip"] == "33991"
     assert params["radius"] == 250
     assert params["dom_range"] == "60-120"
+
+
+def test_market_comparison_endpoint_uses_db_cache(monkeypatch) -> None:
+    init_db()
+    vin = "1HGCM82633A200010"
+    comp_vin = "1HGCM82633A200011"
+
+    with SessionLocal() as db:
+        db.execute(
+            delete(VehicleMarketComparisonCache).where(
+                VehicleMarketComparisonCache.vin.in_([vin, comp_vin])
+            )
+        )
+        db.execute(delete(Vehicle).where(Vehicle.vin.in_([vin, comp_vin])))
+        db.add_all(
+            [
+                Vehicle(
+                    vin=vin,
+                    year=2022,
+                    make="Honda",
+                    model="Accord",
+                    trim="EX-L",
+                    odometer=32000,
+                    price_asking=24995,
+                    available=True,
+                ),
+                Vehicle(
+                    vin=comp_vin,
+                    year=2022,
+                    make="Honda",
+                    model="Accord",
+                    trim="EX-L",
+                    odometer=36000,
+                    price_asking=23995,
+                    available=True,
+                ),
+            ]
+        )
+        db.commit()
+        monkeypatch.setattr(api_routers.inventory.settings, "market_comparison_cache_ttl_hours", 48)
+
+        first = get_inventory_vehicle_market_comparison(identifier=vin, db=db)
+        first_payload = first["data"]
+        cache = db.get(VehicleMarketComparisonCache, vin)
+
+        assert cache is not None
+        assert cache.payload_json == first_payload
+
+        def fail_build(*args, **kwargs):
+            raise AssertionError("market comparison payload should come from cache")
+
+        monkeypatch.setattr(api_routers.inventory, "_build_market_comparison_payload", fail_build)
+        second = get_inventory_vehicle_market_comparison(identifier=vin, db=db)
+
+    assert second["data"] == first_payload
+
+
+def test_market_comparison_endpoint_rebuilds_expired_cache(monkeypatch) -> None:
+    init_db()
+    vin = "1HGCM82633A200012"
+    now = datetime.now(UTC)
+    stale_payload = {"vin": vin, "generated_at": "stale", "comparables": []}
+    fresh_payload = {
+        "vin": vin,
+        "generated_at": "fresh",
+        "this_vehicle": {
+            "vin": vin,
+            "label": "2022 Honda Accord",
+            "price": 25000.0,
+            "miles": 30000,
+            "href": f"/vinventory/{vin}",
+        },
+        "comparables": [],
+        "national_average": None,
+        "metrics": {
+            "available_units": None,
+            "market_days_supply": None,
+            "sold_units_45_days": None,
+        },
+        "sources": {
+            "local_comparable_count": 0,
+            "marketcheck_enabled": False,
+            "marketcheck_comparable_count": 0,
+            "mds_available": False,
+            "price_prediction_available": False,
+        },
+    }
+
+    with SessionLocal() as db:
+        db.execute(
+            delete(VehicleMarketComparisonCache).where(VehicleMarketComparisonCache.vin == vin)
+        )
+        db.execute(delete(Vehicle).where(Vehicle.vin == vin))
+        db.add(
+            Vehicle(
+                vin=vin,
+                year=2022,
+                make="Honda",
+                model="Accord",
+                odometer=30000,
+                price_asking=25000,
+                available=True,
+            )
+        )
+        db.add(
+            VehicleMarketComparisonCache(
+                vin=vin,
+                payload_json=stale_payload,
+                generated_at=now - timedelta(hours=49),
+                expires_at=now - timedelta(minutes=1),
+            )
+        )
+        db.commit()
+        monkeypatch.setattr(api_routers.inventory.settings, "market_comparison_cache_ttl_hours", 48)
+        monkeypatch.setattr(
+            api_routers.inventory,
+            "_build_market_comparison_payload",
+            lambda db, vehicle: fresh_payload,
+        )
+
+        response = get_inventory_vehicle_market_comparison(identifier=vin, db=db)
+        cache = db.get(VehicleMarketComparisonCache, vin)
+
+    assert response["data"] == fresh_payload
+    assert cache is not None
+    assert cache.payload_json == fresh_payload
+
+
+def test_snapshot_target_states_parses_csv(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "snapshot_target_states_raw", "FL, GA,tx, FL, bad")
+
+    assert settings.snapshot_target_states == ["FL", "GA", "TX"]
+
+
+def test_marketcheck_daily_snapshot_calls_ingest_once_per_state(monkeypatch) -> None:
+    init_db()
+    client = RecordingEmptyMarketCheckClient()
+
+    with SessionLocal() as db:
+        response = run_marketcheck_daily_snapshot(
+            db,
+            client=client,
+            target_states=["fl", "GA"],
+            limit_per_state=250,
+            min_dom=60,
+            min_year=2016,
+            min_miles=300,
+            max_miles=120000,
+        )
+
+    assert response["source"] == "marketcheck_snapshot"
+    assert response["states_requested"] == ["FL", "GA"]
+    assert [call["state"] for call in client.calls] == ["FL", "GA"]
+    assert all(call["start"] == 0 for call in client.calls)
+    assert all(call["rows"] == 100 for call in client.calls)
+    assert all(call["dom_range"] == "60-9999" for call in client.calls)
+
+
+def test_marketcheck_stale_cleanup_only_marks_marketcheck_rows() -> None:
+    init_db()
+    now = datetime.now(UTC)
+    marketcheck_vin = "1HGCM82633A300001"
+    ove_vin = "1HGCM82633A300002"
+    fresh_vin = "1HGCM82633A300003"
+
+    with SessionLocal() as db:
+        db.execute(delete(Vehicle).where(Vehicle.vin.in_([marketcheck_vin, ove_vin, fresh_vin])))
+        db.add_all(
+            [
+                Vehicle(
+                    vin=marketcheck_vin,
+                    year=2021,
+                    make="Honda",
+                    model="Accord",
+                    price_asking=21000,
+                    source_type="marketcheck",
+                    available=True,
+                    last_seen_active=now - timedelta(days=10),
+                ),
+                Vehicle(
+                    vin=ove_vin,
+                    year=2021,
+                    make="Honda",
+                    model="Accord",
+                    price_asking=21000,
+                    source_type="ove",
+                    available=True,
+                    last_seen_active=now - timedelta(days=10),
+                ),
+                Vehicle(
+                    vin=fresh_vin,
+                    year=2021,
+                    make="Honda",
+                    model="Accord",
+                    price_asking=21000,
+                    source_type="marketcheck",
+                    available=True,
+                    last_seen_active=now,
+                ),
+            ]
+        )
+        db.commit()
+
+        response = cleanup_stale_marketcheck_inventory(db, stale_threshold_days=7, max_mark=10)
+        db.commit()
+
+        stale_marketcheck = db.get(Vehicle, marketcheck_vin)
+        stale_ove = db.get(Vehicle, ove_vin)
+        fresh_marketcheck = db.get(Vehicle, fresh_vin)
+
+    assert response["marked_unavailable"] == 1
+    assert stale_marketcheck is not None and stale_marketcheck.available is False
+    assert stale_ove is not None and stale_ove.available is True
+    assert fresh_marketcheck is not None and fresh_marketcheck.available is True
 
 
 def test_search_live_sync_falls_back_without_leaking_vendor_error(monkeypatch) -> None:

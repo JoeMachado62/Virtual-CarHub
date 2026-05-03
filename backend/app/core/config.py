@@ -50,6 +50,19 @@ class Settings(BaseSettings):
     marketcheck_cache_ttl_detail_seconds: int = Field(default=21600, alias="MARKETCHECK_CACHE_TTL_DETAIL_SECONDS")
     marketcheck_cache_ttl_search_seconds: int = Field(default=900, alias="MARKETCHECK_CACHE_TTL_SEARCH_SECONDS")
     marketcheck_cache_ttl_facets_seconds: int = Field(default=3600, alias="MARKETCHECK_CACHE_TTL_FACETS_SECONDS")
+    market_comparison_cache_ttl_hours: int = Field(
+        default=48,
+        alias="MARKET_COMPARISON_CACHE_TTL_HOURS",
+    )
+    marketcheck_snapshot_enabled: bool = Field(default=False, alias="MARKETCHECK_SNAPSHOT_ENABLED")
+    snapshot_target_states_raw: str = Field(default="FL,GA,NC,SC,AL,TN,VA,TX,OH,PA", alias="SNAPSHOT_TARGET_STATES")
+    snapshot_min_dom: int = Field(default=60, alias="SNAPSHOT_MIN_DOM")
+    snapshot_min_year: int = Field(default=2016, alias="SNAPSHOT_MIN_YEAR")
+    snapshot_min_miles: int = Field(default=300, alias="SNAPSHOT_MIN_MILES")
+    snapshot_max_miles: int = Field(default=120000, alias="SNAPSHOT_MAX_MILES")
+    snapshot_max_per_state: int = Field(default=50000, alias="SNAPSHOT_MAX_PER_STATE")
+    marketcheck_stale_threshold_days: int = Field(default=7, alias="MARKETCHECK_STALE_THRESHOLD_DAYS")
+    marketcheck_stale_cleanup_max_per_run: int = Field(default=5000, alias="MARKETCHECK_STALE_CLEANUP_MAX_PER_RUN")
     marketcheck_history_enrichment_enabled: bool = Field(default=True, alias="MARKETCHECK_HISTORY_ENRICHMENT_ENABLED")
     marketcheck_history_enrichment_interval_seconds: int = Field(default=900, alias="MARKETCHECK_HISTORY_ENRICHMENT_INTERVAL_SECONDS")
     marketcheck_history_enrichment_batch_size: int = Field(default=8, alias="MARKETCHECK_HISTORY_ENRICHMENT_BATCH_SIZE")
@@ -230,6 +243,18 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def snapshot_target_states(self) -> list[str]:
+        seen: set[str] = set()
+        states: list[str] = []
+        for raw_state in self.snapshot_target_states_raw.split(","):
+            state = raw_state.strip().upper()
+            if len(state) != 2 or state in seen:
+                continue
+            seen.add(state)
+            states.append(state)
+        return states
 
     @property
     def has_marketcheck(self) -> bool:

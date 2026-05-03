@@ -1,7 +1,7 @@
 import ast
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,18 @@ from app.core.responses import ok
 from app.db.session import get_db
 from app.integrations.marketcheck_client import MarketCheckClient
 from app.integrations.nhtsa_client import NHTSAClient, categorize_decode
-from app.models.entities import Deal, GarageItem, HotDeal, OveVehicleDetail, User, Vehicle, VehicleHistoryEnrichment, VehicleImageAsset, VehicleTaxonomyCache
+from app.models.entities import (
+    Deal,
+    GarageItem,
+    HotDeal,
+    OveVehicleDetail,
+    User,
+    Vehicle,
+    VehicleHistoryEnrichment,
+    VehicleImageAsset,
+    VehicleMarketComparisonCache,
+    VehicleTaxonomyCache,
+)
 from app.services.marketcheck_history_enrichment_service import (
     enrich_vehicle_history,
     enrichment_metadata_from_record,
@@ -905,6 +916,49 @@ def _build_market_comparison_payload(db: Session, vehicle: Vehicle) -> dict[str,
         },
     }
 
+
+def _market_comparison_cache_ttl() -> timedelta:
+    ttl_hours = max(0, settings.market_comparison_cache_ttl_hours)
+    return timedelta(hours=ttl_hours)
+
+
+def _get_cached_market_comparison_payload(db: Session, vehicle: Vehicle) -> dict[str, Any] | None:
+    if _market_comparison_cache_ttl().total_seconds() <= 0:
+        return None
+
+    cache = db.scalar(
+        select(VehicleMarketComparisonCache).where(
+            VehicleMarketComparisonCache.vin == vehicle.vin,
+            VehicleMarketComparisonCache.expires_at > datetime.now(UTC),
+        )
+    )
+    if cache and isinstance(cache.payload_json, dict):
+        return cache.payload_json
+    return None
+
+
+def _write_market_comparison_cache(db: Session, vehicle: Vehicle, payload: dict[str, Any]) -> None:
+    ttl = _market_comparison_cache_ttl()
+    if ttl.total_seconds() <= 0:
+        return
+
+    now = datetime.now(UTC)
+    cache = db.get(VehicleMarketComparisonCache, vehicle.vin)
+    if cache is None:
+        cache = VehicleMarketComparisonCache(
+            vin=vehicle.vin,
+            generated_at=now,
+            expires_at=now + ttl,
+        )
+        db.add(cache)
+    cache.payload_json = payload
+    cache.generated_at = now
+    cache.expires_at = now + ttl
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.debug("market comparison cache write failed vin=%s", vehicle.vin, exc_info=True)
 
 
 def _build_marketcheck_search_params(
@@ -2361,7 +2415,13 @@ def get_inventory_vehicle_market_comparison(
             }
         )
 
-    return ok(_build_market_comparison_payload(db, vehicle))
+    cached_payload = _get_cached_market_comparison_payload(db, vehicle)
+    if cached_payload is not None:
+        return ok(cached_payload)
+
+    payload = _build_market_comparison_payload(db, vehicle)
+    _write_market_comparison_cache(db, vehicle, payload)
+    return ok(payload)
 
 
 @router.post("/history-enrichment/run", dependencies=[Depends(require_service_token)])
@@ -2373,6 +2433,37 @@ def run_inventory_history_enrichment(
 ) -> dict:
     vins = [vin.strip().upper()] if vin and vin.strip() else None
     return ok(run_history_enrichment_batch(db, limit=limit, force=force, vins=vins))
+
+
+@router.post("/snapshot/run", dependencies=[Depends(require_service_token)])
+def run_inventory_snapshot(
+    states: str | None = Query(default=None),
+) -> dict:
+    from app.tasks.jobs import marketcheck_snapshot
+
+    state_list = [state.upper() for state in _split_csv(states)] if states else None
+    task = marketcheck_snapshot.delay(states=state_list)
+    return ok({"task_id": str(task.id), "states": state_list or settings.snapshot_target_states})
+
+
+@router.post("/stale-cleanup/run", dependencies=[Depends(require_service_token)])
+def run_marketcheck_stale_cleanup(
+    dry_run: bool = Query(default=True),
+) -> dict:
+    from app.tasks.jobs import marketcheck_stale_cleanup
+
+    task = marketcheck_stale_cleanup.delay(dry_run=dry_run)
+    return ok({"task_id": str(task.id), "dry_run": dry_run})
+
+
+@router.post("/images/cache/run", dependencies=[Depends(require_service_token)])
+def run_image_cache_to_s3(
+    batch_size: int = Query(default=100, ge=1, le=1000),
+) -> dict:
+    from app.tasks.jobs import cache_images_to_s3_batch
+
+    task = cache_images_to_s3_batch.delay(batch_size=batch_size)
+    return ok({"task_id": str(task.id), "batch_size": batch_size})
 
 
 @router.get("/{identifier}/similar")

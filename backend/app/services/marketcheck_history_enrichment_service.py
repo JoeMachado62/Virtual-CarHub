@@ -413,9 +413,7 @@ def should_refresh_enrichment(record: VehicleHistoryEnrichment | None, *, force:
         return True
     now = datetime.now(UTC)
     if record.status == "completed":
-        if not record.last_enriched_at:
-            return True
-        return record.last_enriched_at <= now - timedelta(hours=max(1, settings.marketcheck_history_enrichment_ttl_hours))
+        return False
     if record.last_attempted_at is None:
         return True
     return record.last_attempted_at <= now - timedelta(hours=max(1, settings.marketcheck_history_enrichment_retry_hours))

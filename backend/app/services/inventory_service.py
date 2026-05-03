@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.integrations.marketcheck_client import MarketCheckClient
@@ -289,6 +290,120 @@ def ingest_marketcheck_inventory(
 
     db.flush()
     return report
+
+
+def run_marketcheck_daily_snapshot(
+    db: Session,
+    *,
+    client: MarketCheckClient,
+    target_states: list[str],
+    limit_per_state: int,
+    min_dom: int,
+    min_year: int,
+    min_miles: int,
+    max_miles: int,
+) -> dict[str, Any]:
+    """Prefetch MarketCheck inventory for configured target states.
+
+    `ingest_marketcheck_inventory` already paginates internally. Call it once
+    per state with a high limit to avoid double-pagination and duplicate calls.
+    """
+    total = InventoryIngestReport(source="marketcheck_snapshot")
+    state_results: dict[str, dict[str, Any]] = {}
+    normalized_states = [state.strip().upper() for state in target_states if state.strip()]
+
+    for state in normalized_states:
+        search_params = {
+            "state": state,
+            "inventory_type": "used",
+            "car_type": "used",
+            "dom_range": f"{max(0, min_dom)}-9999",
+            "year_range": f"{max(1900, min_year)}-{datetime.now(UTC).year + 1}",
+            "miles_range": f"{max(0, min_miles)}-{max(max_miles, min_miles)}",
+        }
+        try:
+            report = ingest_marketcheck_inventory(
+                db,
+                client=client,
+                limit=max(1, limit_per_state),
+                start=0,
+                search_params=search_params,
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.warning("marketcheck_snapshot_state_failed state=%s", state, exc_info=True)
+            state_results[state] = {"status": "error", "error": str(exc)}
+            continue
+
+        total.fetched += report.fetched
+        total.inserted += report.inserted
+        total.updated += report.updated
+        total.skipped_priority += report.skipped_priority
+        total.skipped_invalid += report.skipped_invalid
+        state_results[state] = {"status": "ok", **report.to_dict()}
+
+    return {
+        "source": "marketcheck_snapshot",
+        "states_requested": normalized_states,
+        "states": state_results,
+        "total": total.to_dict(),
+    }
+
+
+def cleanup_stale_marketcheck_inventory(
+    db: Session,
+    *,
+    stale_threshold_days: int = 7,
+    max_mark: int = 5000,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Mark stale MarketCheck vehicles unavailable without touching auction feeds."""
+    cutoff = datetime.now(UTC) - timedelta(days=max(1, stale_threshold_days))
+    now = datetime.now(UTC)
+    stale_filter = [
+        func.lower(Vehicle.source_type) == InventorySourceType.MARKETCHECK.value,
+        Vehicle.available.is_(True),
+        Vehicle.last_seen_active < cutoff,
+    ]
+    total_stale = db.scalar(select(func.count()).select_from(Vehicle).where(*stale_filter)) or 0
+
+    if dry_run or total_stale == 0:
+        return {
+            "dry_run": dry_run,
+            "stale_threshold_days": stale_threshold_days,
+            "cutoff": cutoff.isoformat(),
+            "total_stale_found": total_stale,
+            "marked_unavailable": 0,
+            "capped": False,
+            "remaining_stale": total_stale if dry_run else 0,
+        }
+
+    rows = db.scalars(
+        select(Vehicle)
+        .where(*stale_filter)
+        .order_by(Vehicle.last_seen_active.asc())
+        .limit(max(1, max_mark))
+    ).all()
+
+    for row in rows:
+        row.available = False
+        normalized = dict(row.features_normalized or {})
+        normalized["status"] = "Unavailable"
+        normalized["cleanup_reason"] = "marketcheck_stale_threshold"
+        normalized["cleanup_at"] = now.isoformat()
+        row.features_normalized = normalized
+
+    marked = len(rows)
+    return {
+        "dry_run": False,
+        "stale_threshold_days": stale_threshold_days,
+        "cutoff": cutoff.isoformat(),
+        "total_stale_found": total_stale,
+        "marked_unavailable": marked,
+        "capped": total_stale > max_mark,
+        "remaining_stale": max(0, total_stale - marked),
+    }
 
 
 def upsert_vehicle_with_source_priority(
