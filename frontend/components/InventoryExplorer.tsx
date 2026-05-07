@@ -831,6 +831,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   const [filters, setFilters] = useState<FilterState>(INITIAL_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<FilterState>(INITIAL_FILTERS);
   const [filtersReady, setFiltersReady] = useState(false);
+  const looksLikeVin = filters.q.trim().length === 17 && /^[A-Za-z0-9]+$/.test(filters.q.trim());
   const [readyToSearchMessage, setReadyToSearchMessage] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<InventoryItem[]>([]);
@@ -1753,7 +1754,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                     inputMode="numeric"
                     maxLength={5}
                     placeholder="33028"
-                    required
+                    required={!looksLikeVin}
                     value={filters.zip_code}
                     onChange={(event) =>
                       updateFilters((prev) => ({
@@ -1767,7 +1768,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                   Radius
                   <select
                     className="select"
-                    required
+                    required={!looksLikeVin}
                     value={filters.radius}
                     onChange={(event) => updateFilters((prev) => ({ ...prev, radius: event.target.value }))}
                   >
@@ -1779,7 +1780,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                   </select>
                 </label>
               </div>
-              <p className="inventory-required-note">* Required</p>
+              {!looksLikeVin && <p className="inventory-required-note">* Required</p>}
             </div>
 
             <label className="inventory-search-field">
