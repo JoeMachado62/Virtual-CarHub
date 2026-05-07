@@ -21,7 +21,7 @@ from app.api.v1.routers.inventory_ove import (
 from app.core.constants import OveDetailRequestStatus
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
-from app.models.entities import HotDeal, OveDetailRequest, OveVehicleDetail, Vehicle
+from app.models.entities import HotDeal, OveDetailRequest, OveVehicleDetail, User, Vehicle
 from app.schemas.hot_deals import HotDealIngestRequest
 from app.schemas.ove_inventory import (
     NAAA_INSPECTION_TEMPLATE,
@@ -448,11 +448,30 @@ def test_ove_ingest_request_pending_and_detail_contract(monkeypatch: pytest.Monk
 
         vehicle_detail = get_inventory_vehicle(identifier=vin, db=db, current_user=None)
         assert vehicle_detail["status"] == "ok"
-        assert vehicle_detail["data"]["ove_detail"]["listing_snapshot"]["title"] == "2023 Honda Accord EX"
         assert vehicle_detail["data"]["seller_comments"] == "Runs and drives well."
-        assert vehicle_detail["data"]["condition_report"]["overall_grade"] == "4.2"
+        assert vehicle_detail["data"]["condition_report"] == {}
+        assert vehicle_detail["data"]["condition_report_url"] is None
+        assert vehicle_detail["data"]["listing_snapshot"] == {}
+        assert vehicle_detail["data"]["ove_detail"]["images"] == []
+        assert vehicle_detail["data"]["ove_detail"]["listing_snapshot"] == {}
+        assert vehicle_detail["data"]["ove_detail"]["page_url"] is None
+        assert vehicle_detail["data"]["display_context"]["condition_report"] == {}
         assert vehicle_detail["data"]["condition_report_grade"] == "4.2"
-        assert vehicle_detail["data"]["condition_report_url"] == "http://content.liquidmotors.com/IR/15614/38020971.html"
+
+        approved_user = User(
+            email="approved-cr@example.com",
+            password_hash="test",
+            is_preapproved=True,
+            preapproved_until=datetime.now(UTC) + timedelta(days=1),
+        )
+        approved_detail = get_inventory_vehicle(identifier=vin, db=db, current_user=approved_user)
+        assert approved_detail["status"] == "ok"
+        assert approved_detail["data"]["condition_report"]["overall_grade"] == "4.2"
+        assert approved_detail["data"]["condition_report_url"] == "http://content.liquidmotors.com/IR/15614/38020971.html"
+        assert approved_detail["data"]["listing_snapshot"]["title"] == "2023 Honda Accord EX"
+        assert approved_detail["data"]["ove_detail"]["listing_snapshot"]["title"] == "2023 Honda Accord EX"
+        assert approved_detail["data"]["ove_detail"]["images"][0]["url"] == "https://images.example.com/accord-hero.jpg"
+        assert approved_detail["data"]["display_context"]["condition_report"]["overall_grade"] == "4.2"
 
 
 def test_ove_detail_push_request_rejects_incomplete_condition_report_contract() -> None:

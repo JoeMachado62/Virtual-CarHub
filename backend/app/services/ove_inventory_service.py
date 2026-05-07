@@ -5,7 +5,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, cast, delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+from sqlalchemy.types import JSON as SA_JSON
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -81,9 +83,13 @@ _VEHICLE_UPSERT_COLUMNS = (
     "engine_type", "cylinders", "forced_induction", "drivetrain", "mpg_combined",
     "ev_range", "towing_capacity_lbs", "odometer", "condition_grade",
     "price_asking", "price_wholesale_est", "location_zip", "location_state",
-    "source_type", "source_url", "images", "features_raw", "features_normalized",
+    "source_type", "source_url", "images",
     "available", "quality_firewall_pass", "last_seen_active",
 )
+
+# Columns that contain enrichment data (e.g. from MarketCheck) and should
+# not be blindly overwritten when a VIN already exists in the DB.
+_ENRICHMENT_PRESERVED_COLUMNS = ("features_raw", "features_normalized")
 
 
 def _build_vehicle_row(item, now: datetime) -> dict[str, Any]:
@@ -153,14 +159,55 @@ def _build_vehicle_row(item, now: datetime) -> dict[str, Any]:
 
 
 def _bulk_upsert_vehicles_pg(db: Session, rows: list[dict[str, Any]]) -> None:
-    """PostgreSQL bulk upsert using INSERT ... ON CONFLICT DO UPDATE."""
+    """PostgreSQL bulk upsert using INSERT ... ON CONFLICT DO UPDATE.
+
+    Enrichment-sensitive columns (features_raw, features_normalized) are
+    merged so that data added by MarketCheck or other enrichment sources
+    is preserved when a VIN already exists.  Strategy:
+      - features_normalized: incoming keys as base, existing keys overlay
+        (existing enrichment wins over scraper defaults).
+      - features_raw: keep existing if non-empty, otherwise use incoming.
+    """
     CHUNK_SIZE = 2000
     for i in range(0, len(rows), CHUNK_SIZE):
         chunk = rows[i : i + CHUNK_SIZE]
         stmt = pg_insert(Vehicle).values(chunk)
+
+        set_clause = {col: stmt.excluded[col] for col in _VEHICLE_UPSERT_COLUMNS}
+
+        # features_normalized: merge incoming under existing so enrichment
+        # keys added after initial ingest are preserved.
+        # Cast json → jsonb for the || merge, then back to json.
+        # The || operator gives right-side keys priority, so we put existing
+        # on the right to preserve enrichment over scraper defaults.
+        set_clause["features_normalized"] = cast(
+            func.coalesce(
+                cast(stmt.excluded["features_normalized"], PG_JSONB),
+                cast(func.cast("{}", SA_JSON), PG_JSONB),
+            ).op("||")(
+                func.coalesce(
+                    cast(Vehicle.features_normalized, PG_JSONB),
+                    cast(func.cast("{}", SA_JSON), PG_JSONB),
+                )
+            ),
+            SA_JSON,
+        )
+
+        # features_raw: keep existing if it has content, otherwise use incoming.
+        set_clause["features_raw"] = case(
+            (
+                and_(
+                    Vehicle.features_raw.isnot(None),
+                    func.json_array_length(Vehicle.features_raw) > 0,
+                ),
+                Vehicle.features_raw,
+            ),
+            else_=stmt.excluded["features_raw"],
+        )
+
         stmt = stmt.on_conflict_do_update(
             index_elements=["vin"],
-            set_={col: stmt.excluded[col] for col in _VEHICLE_UPSERT_COLUMNS},
+            set_=set_clause,
         )
         db.execute(stmt)
 
