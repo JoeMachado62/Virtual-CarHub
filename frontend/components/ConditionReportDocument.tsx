@@ -161,7 +161,8 @@ const IMAGE_CATEGORIES = [
 ] as const;
 
 const INSPECTION_SECTION_ORDER = ["drivability", "exterior", "interior", "mechanical", "tires"] as const;
-const CARFAX_REPORT_PLACEHOLDER_URL = "https://www.carfax.com/vehicle-history-reports/";
+const CARFAX_PARTNER_URL = "https://www.carfax.com/VehicleHistory/p/Report.cfx";
+const CARFAX_PARTNER_ID = "DVW_1";
 
 export function ConditionReportDocument({ vin }: { vin: string }) {
   const [vehicle, setVehicle] = useState<VehicleDetail | null>(null);
@@ -681,16 +682,16 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
                   <span className="cr-autocheck-carfax-copy">
                     Show me the{" "}
                     {autocheck.report_logo_url ? (
-                      <button className="cr-autocheck-logo-button" onClick={() => openExternal(getCarfaxPlaceholderHref(vehicle.vin))} aria-label="Open CARFAX report">
+                      <button className="cr-autocheck-logo-button" onClick={() => openExternal(getCarfaxHref(vehicle.vin))} aria-label="Open CARFAX report">
                         <img src={autocheck.report_logo_url} alt="Vehicle history report" />
                       </button>
                     ) : (
-                      <button className="cr-autocheck-logo-button cr-autocheck-logo-text" onClick={() => openExternal(getCarfaxPlaceholderHref(vehicle.vin))} aria-label="Open CARFAX report">
+                      <button className="cr-autocheck-logo-button cr-autocheck-logo-text" onClick={() => openExternal(getCarfaxHref(vehicle.vin))} aria-label="Open CARFAX report">
                         <strong>CARFAX</strong>
                       </button>
                     )}
                   </span>
-                  <button className="cr-autocheck-carfax-button" onClick={() => openExternal(getCarfaxPlaceholderHref(vehicle.vin))}>
+                  <button className="cr-autocheck-carfax-button" onClick={() => openExternal(getCarfaxHref(vehicle.vin))}>
                     View now
                   </button>
                 </div>
@@ -1295,6 +1296,13 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
 
         @media (max-width: 768px) {
           .cr-hero-layout { grid-template-columns: 1fr; }
+          .cr-gallery { overflow: hidden; }
+          .cr-gallery-stage { min-height: unset; height: auto; max-height: 60vw; overflow: hidden; }
+          .cr-gallery-main-img { max-width: 100%; max-height: 60vw; width: auto; object-fit: contain; }
+          .cr-gallery-thumbstrip { padding: 4px 6px; }
+          .cr-gallery-thumb { width: 48px; height: 36px; }
+          .cr-gallery-tabs { flex-wrap: wrap; }
+          .cr-gallery-tab { font-size: 11px; padding: 6px 8px; }
           .cr-summary-panel { max-height: none; }
           .cr-inspection-grid { grid-template-columns: 1fr; }
           .cr-image-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1535,8 +1543,8 @@ function firstText(...values: unknown[]): string | null {
   return null;
 }
 
-function getCarfaxPlaceholderHref(vin: string): string {
-  return `${CARFAX_REPORT_PLACEHOLDER_URL}?vin=${encodeURIComponent(vin)}`;
+function getCarfaxHref(vin: string): string {
+  return `${CARFAX_PARTNER_URL}?partner=${CARFAX_PARTNER_ID}&vin=${encodeURIComponent(vin)}`;
 }
 
 function openExternal(url: string) {
