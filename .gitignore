@@ -19,6 +19,7 @@ frontend/tsconfig.tsbuildinfo
 
 # Logs
 *.log
+backend/logs/
 
 # OS artifacts
 .DS_Store
@@ -33,6 +34,7 @@ wordpress/themes/virtualcarhub-motors-child/
 
 # Claude Code local settings
 .claude/
+.codex
 
 # Template reference archives (large binaries)
 .template-reference/
