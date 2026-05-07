@@ -17,6 +17,7 @@ from app.models.entities import Vehicle, VehicleImageAsset
 logger = logging.getLogger(__name__)
 
 CHROMEDATA_SOURCE_KIND = "chromedata"
+CHROMEDATA_COLOR_PIPELINE_VERSION = 2
 
 _CARD_SHOT_ORDER = ["01", "02", "03", "07", "05", "06"]
 _BASIC_EXTERIOR_SHOTS = {"01", "02", "03"}  # 3-angle set used when no color match
@@ -34,6 +35,11 @@ class ChromeDataColorInfo:
     install_cause: str
     rgb_hex_value: str | None
     is_exact_match: bool
+    match_source: str = ""
+    secondary_color_code: str = ""
+    secondary_description: str = ""
+    secondary_generic_desc: str = ""
+    secondary_rgb_hex_value: str | None = None
 
 
 @dataclass(slots=True)
@@ -206,6 +212,42 @@ def sync_chromedata_source_assets(
     return manifest
 
 
+def chromedata_assets_need_refresh(vehicle: Vehicle, assets: list[VehicleImageAsset]) -> bool:
+    """Return true when cached ChromeData card imagery predates the color-aware
+    resolver or appears to conflict with the listing exterior color."""
+    card_assets = [
+        asset for asset in assets
+        if asset.active and asset.role in {"hero", "gallery"} and asset.source_kind == CHROMEDATA_SOURCE_KIND
+    ]
+    if not card_assets:
+        return True
+
+    metadata = card_assets[0].metadata_json or {}
+    if metadata.get("color_pipeline_version") != CHROMEDATA_COLOR_PIPELINE_VERSION:
+        return True
+
+    listing_color = _listing_exterior_color(vehicle)
+    if not listing_color or not _has_color_token(listing_color):
+        return False
+
+    if metadata.get("color_match_blocked_reason") == "listing_color_not_available":
+        return False
+    if metadata.get("color_match_fallback_reason") == "listing_generic_color_unavailable":
+        return False
+
+    matched_text = " ".join(
+        str(value or "")
+        for value in (
+            metadata.get("color_description"),
+            metadata.get("color_generic"),
+            metadata.get("selected_color_description"),
+        )
+    )
+    if not matched_text.strip():
+        return True
+    return not _color_text_matches(listing_color, matched_text)
+
+
 def _resolve_vehicle_descriptor(vehicle: Vehicle) -> dict[str, Any]:
     normalized = vehicle.features_normalized or {}
     descriptor: dict[str, Any] = {
@@ -280,28 +322,20 @@ def _parse_cvd_descriptor(response: dict[str, Any], vehicle: Vehicle) -> dict[st
     )
     cvd_colors = _normalize_items(result.get("exteriorColors"))
     preferred_code = _normalized_color_code(vehicle)
-    normalized_features = vehicle.features_normalized or {}
-    exterior_color_text = _clean(
-        normalized_features.get("exterior_color")
-        or normalized_features.get("exterior_color_description")
-        or (vehicle.exterior_color if hasattr(vehicle, "exterior_color") else "")
-    )
+    exterior_color_text = _listing_exterior_color(vehicle)
 
-    # If any CVD color has a VIN-confirmed installCause, prefer that over
-    # the stored paint_code (which may come from unreliable auction data).
-    vin_confirmed = [c for c in cvd_colors if _clean(c.get("installCause")).upper() in {"B", "E", "V", "I"}]
-    if vin_confirmed:
-        selected_color = _select_color_info(cvd_colors, style_id=style_id, preferred_code=vin_confirmed[0].get("colorCode"))
-    elif exterior_color_text and cvd_colors:
-        # CVD can't confirm installed color — match the listing's exterior_color
-        # text (e.g. "Black") against CVD descriptions/genericDesc.
-        text_matched = _match_color_by_text(cvd_colors, exterior_color_text)
-        if text_matched:
-            selected_color = _select_color_info(cvd_colors, style_id=style_id, preferred_code=text_matched)
-        else:
-            selected_color = _select_color_info(cvd_colors, style_id=style_id, preferred_code=preferred_code)
-    else:
-        selected_color = _select_color_info(cvd_colors, style_id=style_id, preferred_code=preferred_code)
+    selected_color = _select_listing_aware_color(
+        cvd_colors,
+        style_id=style_id,
+        preferred_code=preferred_code,
+        exterior_color_text=exterior_color_text,
+    )
+    selected_secondary_color = _select_secondary_color(cvd_colors, style_id=style_id)
+    if selected_color and selected_secondary_color:
+        selected_color.secondary_color_code = selected_secondary_color.color_code
+        selected_color.secondary_description = selected_secondary_color.description
+        selected_color.secondary_generic_desc = selected_secondary_color.generic_desc
+        selected_color.secondary_rgb_hex_value = selected_secondary_color.rgb_hex_value
 
     return {
         "style_id": style_id,
@@ -311,6 +345,13 @@ def _parse_cvd_descriptor(response: dict[str, Any], vehicle: Vehicle) -> dict[st
         "color_code": selected_color.color_code if selected_color else "",
         "color_description": selected_color.description if selected_color else "",
         "color_info": selected_color,
+        "secondary_color_code": selected_secondary_color.color_code if selected_secondary_color else "",
+        "secondary_color_description": selected_secondary_color.description if selected_secondary_color else "",
+        "color_match_fallback_reason": (
+            "listing_generic_color_unavailable"
+            if cvd_colors and exterior_color_text and _has_color_token(exterior_color_text) and not selected_color
+            else ""
+        ),
     }
 
 
@@ -487,6 +528,7 @@ def _build_style_media_manifest(
         response,
         detail_level=detail_level,
         selected_color_code=descriptor.get("color_code"),
+        selected_secondary_color_code=descriptor.get("secondary_color_code"),
     )
     if not parsed:
         return None
@@ -506,6 +548,9 @@ def _build_style_media_manifest(
             "resolution_source": str(descriptor.get("match_level") or "style"),
             "selected_color_code": descriptor.get("color_code"),
             "selected_color_description": descriptor.get("color_description"),
+            "selected_secondary_color_code": descriptor.get("secondary_color_code"),
+            "selected_secondary_color_description": descriptor.get("secondary_color_description"),
+            "color_match_fallback_reason": descriptor.get("color_match_fallback_reason"),
         },
     )
 
@@ -525,6 +570,7 @@ def _build_ymmt_media_manifest(
             crawled_response["response"],
             detail_level=detail_level,
             selected_color_code=descriptor.get("color_code"),
+            selected_secondary_color_code=descriptor.get("secondary_color_code"),
         )
         if parsed:
             return ChromeDataManifest(
@@ -542,6 +588,9 @@ def _build_ymmt_media_manifest(
                     "request_type": "ymmt_crawl",
                     "selected_color_code": descriptor.get("color_code"),
                     "selected_color_description": descriptor.get("color_description"),
+                    "selected_secondary_color_code": descriptor.get("secondary_color_code"),
+                    "selected_secondary_color_description": descriptor.get("secondary_color_description"),
+                    "color_match_fallback_reason": descriptor.get("color_match_fallback_reason"),
                     "resolved_path": crawled_response["path"],
                 },
             )
@@ -579,6 +628,7 @@ def _build_ymmt_media_manifest(
             response,
             detail_level=detail_level,
             selected_color_code=descriptor.get("color_code"),
+            selected_secondary_color_code=descriptor.get("secondary_color_code"),
         )
         if not parsed:
             continue
@@ -597,6 +647,9 @@ def _build_ymmt_media_manifest(
                 "request_type": "ymmt",
                 "selected_color_code": descriptor.get("color_code"),
                 "selected_color_description": descriptor.get("color_description"),
+                "selected_secondary_color_code": descriptor.get("secondary_color_code"),
+                "selected_secondary_color_description": descriptor.get("secondary_color_description"),
+                "color_match_fallback_reason": descriptor.get("color_match_fallback_reason"),
             },
         )
     return None
@@ -644,7 +697,12 @@ def _crawl_media_response(vehicle: Vehicle, descriptor: dict[str, Any]) -> dict[
         logger.warning("ChromeData model crawl failed for href=%s", model_link["href"], exc_info=True)
         return None
 
-    if _parse_media_response(model_response, detail_level="card", selected_color_code=descriptor.get("color_code")):
+    if _parse_media_response(
+        model_response,
+        detail_level="card",
+        selected_color_code=descriptor.get("color_code"),
+        selected_secondary_color_code=descriptor.get("secondary_color_code"),
+    ):
         return {
             "response": model_response,
             "path": model_link["href"],
@@ -685,18 +743,29 @@ def _parse_media_response(
     *,
     detail_level: str,
     selected_color_code: str | None,
+    selected_secondary_color_code: str | None = None,
 ) -> dict[str, Any] | None:
     container = _media_container(response)
     if not container:
         return None
 
     selected_code = _clean(selected_color_code).upper()
+    selected_secondary_code = _clean(selected_secondary_color_code).upper()
     colorized_images = _normalize_items(container.get("colorized"))
     if selected_code:
         matched_colorized = [
             item for item in colorized_images
             if _clean(item.get("primaryColorOptionCode") or item.get("@primaryColorOptionCode")).upper() == selected_code
         ]
+        if selected_secondary_code:
+            two_tone_matched = [
+                item for item in matched_colorized
+                if _clean(
+                    item.get("secondaryColorOptionCode")
+                    or item.get("@secondaryColorOptionCode")
+                ).upper() == selected_secondary_code
+            ]
+            matched_colorized = two_tone_matched or matched_colorized
     else:
         matched_colorized = []
 
@@ -737,6 +806,9 @@ def _parse_media_response(
         )
 
     flags = container.get("flags") if isinstance(container.get("flags"), dict) else {}
+    if not flags and preferred_colorized:
+        item_flags = preferred_colorized[0].get("flags")
+        flags = item_flags if isinstance(item_flags, dict) else {}
     return {
         "hero_url": card_images[0],
         "gallery_urls": card_images,
@@ -765,6 +837,13 @@ def _normalize_items(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, dict)]
     if isinstance(value, dict):
+        item_keys = {
+            "colorCode", "genericDesc", "description", "styleId", "styleDescription",
+            "href", "@href", "xl:href", "@xl:href", "url", "primaryColorOptionCode",
+            "@primaryColorOptionCode", "shotCode", "@shotCode",
+        }
+        if any(key in value for key in item_keys):
+            return [value]
         if any(isinstance(inner, list) for inner in value.values()):
             items: list[dict[str, Any]] = []
             for inner in value.values():
@@ -825,7 +904,7 @@ def _width_rank(item: dict[str, Any], *, prefer_large: bool = False) -> int:
 
 
 def _extract_url(item: dict[str, Any]) -> str:
-    for key in ("href", "xl:href", "url", "@href"):
+    for key in ("href", "xl:href", "@xl:href", "url", "@href", "$", "#text"):
         value = item.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -925,11 +1004,94 @@ def _shot_code(item: dict[str, Any]) -> str:
     return code.zfill(2) if code.isdigit() and len(code) < 2 else code
 
 
+def _select_listing_aware_color(
+    colors: list[dict[str, Any]],
+    *,
+    style_id: int | None,
+    preferred_code: str | None,
+    exterior_color_text: str,
+) -> ChromeDataColorInfo | None:
+    if not colors:
+        return None
+
+    candidates = _style_body_color_candidates(colors, style_id=style_id)
+    installed = [item for item in candidates if _is_exact_color(item)]
+
+    if exterior_color_text:
+        text_match = _match_color_by_text(installed, exterior_color_text) if installed else None
+        if text_match:
+            return _select_color_info(candidates, style_id=style_id, preferred_code=text_match, match_source="vin_listing_text")
+
+        text_match = _match_color_by_text(candidates, exterior_color_text)
+        if text_match:
+            return _select_color_info(candidates, style_id=style_id, preferred_code=text_match, match_source="listing_text")
+
+        if _has_color_token(exterior_color_text):
+            return None
+
+    selected = _select_color_info(candidates, style_id=style_id, preferred_code=preferred_code, match_source="stored_code")
+    if selected and selected.color_code:
+        return selected
+
+    if installed:
+        return _to_color_info(installed[0], exact_override=True, match_source="vin_installed")
+
+    return _select_color_info(candidates, style_id=style_id, preferred_code=None, match_source="cvd_primary")
+
+
+def _select_secondary_color(colors: list[dict[str, Any]], *, style_id: int | None) -> ChromeDataColorInfo | None:
+    secondary_candidates = [
+        item for item in colors
+        if str(item.get("type") or "") in {"2", "3"}
+    ]
+    if style_id:
+        style_text = str(style_id)
+        style_matches = [
+            item for item in secondary_candidates
+            if style_text in {str(value) for value in _style_ids_for_color(item)}
+        ]
+        if style_matches:
+            secondary_candidates = style_matches
+
+    installed_secondary = [item for item in secondary_candidates if _is_exact_color(item)]
+    if installed_secondary:
+        return _to_color_info(installed_secondary[0], exact_override=True, match_source="vin_secondary")
+
+    primary_secondary = next((item for item in secondary_candidates if _truthy(item.get("primary"))), None)
+    if primary_secondary:
+        return _to_color_info(primary_secondary, exact_override=False, match_source="cvd_secondary_primary")
+
+    return None
+
+
+def _style_body_color_candidates(colors: list[dict[str, Any]], *, style_id: int | None) -> list[dict[str, Any]]:
+    body_colors = [item for item in colors if str(item.get("type") or "") in {"", "1"}]
+    candidates = body_colors or colors
+    if not style_id:
+        return candidates
+    style_text = str(style_id)
+    style_matches = [
+        item for item in candidates
+        if style_text in {str(value) for value in _style_ids_for_color(item)}
+    ]
+    return style_matches or candidates
+
+
+def _style_ids_for_color(item: dict[str, Any]) -> list[Any]:
+    styles = item.get("styles") or item.get("styleIds") or item.get("styleID") or item.get("styleId")
+    if isinstance(styles, list):
+        return styles
+    if styles in (None, ""):
+        return []
+    return [styles]
+
+
 def _select_color_info(
     colors: list[dict[str, Any]],
     *,
     style_id: int | None,
     preferred_code: str | None,
+    match_source: str = "",
 ) -> ChromeDataColorInfo | None:
     if not colors:
         return None
@@ -937,16 +1099,19 @@ def _select_color_info(
     if preferred:
         for item in colors:
             if _clean(item.get("colorCode")).upper() == preferred:
-                return _to_color_info(item, exact_override=True)
+                return _to_color_info(item, exact_override=True, match_source=match_source)
 
-    body_colors = [item for item in colors if str(item.get("type") or "") in {"", "1"}]
-    candidates = body_colors or colors
+    candidates = _style_body_color_candidates(colors, style_id=style_id)
 
     primary = next((item for item in candidates if _truthy(item.get("primary"))), None)
     if primary:
-        return _to_color_info(primary, exact_override=_is_exact_color(primary))
+        return _to_color_info(primary, exact_override=_is_exact_color(primary), match_source=match_source)
 
-    return _to_color_info(candidates[0], exact_override=_is_exact_color(candidates[0]) and len(candidates) == 1)
+    return _to_color_info(
+        candidates[0],
+        exact_override=_is_exact_color(candidates[0]) and len(candidates) == 1,
+        match_source=match_source,
+    )
 
 
 def _match_color_by_text(colors: list[dict[str, Any]], exterior_text: str) -> str | None:
@@ -956,6 +1121,7 @@ def _match_color_by_text(colors: list[dict[str, Any]], exterior_text: str) -> st
     if not target:
         return None
     target_tokens = set(target.split())
+    target_color_tokens = _canonical_color_tokens(target_tokens)
 
     best_code: str | None = None
     best_score = 0
@@ -968,8 +1134,14 @@ def _match_color_by_text(colors: list[dict[str, Any]], exterior_text: str) -> st
             if not desc:
                 continue
             desc_tokens = set(desc.split())
+            desc_color_tokens = _canonical_color_tokens(desc_tokens)
             if target == desc:
                 return code  # exact match — return immediately
+            if target_color_tokens and desc_color_tokens and target_color_tokens & desc_color_tokens:
+                score = 80 + len(target_color_tokens & desc_color_tokens)
+                if score > best_score:
+                    best_score = score
+                    best_code = code
             if target_tokens and target_tokens.issubset(desc_tokens):
                 score = 60 + len(target_tokens)
                 if score > best_score:
@@ -983,7 +1155,7 @@ def _match_color_by_text(colors: list[dict[str, Any]], exterior_text: str) -> st
     return best_code
 
 
-def _to_color_info(item: dict[str, Any], *, exact_override: bool) -> ChromeDataColorInfo:
+def _to_color_info(item: dict[str, Any], *, exact_override: bool, match_source: str) -> ChromeDataColorInfo:
     return ChromeDataColorInfo(
         color_code=_clean(item.get("colorCode")),
         description=_clean(item.get("description")),
@@ -991,6 +1163,7 @@ def _to_color_info(item: dict[str, Any], *, exact_override: bool) -> ChromeDataC
         install_cause=_clean(item.get("installCause")),
         rgb_hex_value=_clean(item.get("rgbHexValue")) or None,
         is_exact_match=exact_override,
+        match_source=match_source,
     )
 
 
@@ -1008,9 +1181,64 @@ def _normalized_color_code(vehicle: Vehicle) -> str:
     )
 
 
+_COLOR_WORDS = {
+    "black", "blue", "brown", "gold", "gray", "grey", "green", "orange", "purple",
+    "red", "silver", "tan", "white", "yellow", "beige", "bronze", "copper",
+    "charcoal", "maroon", "pearl", "metallic",
+}
+
+_COLOR_ALIASES = {
+    "grey": "gray",
+    "charcoal": "gray",
+    "pearl": "white",
+    "beige": "tan",
+    "bronze": "brown",
+    "copper": "brown",
+    "maroon": "red",
+}
+
+
+def _canonical_color_tokens(tokens: set[str]) -> set[str]:
+    return {
+        _COLOR_ALIASES.get(token, token)
+        for token in tokens
+        if token in _COLOR_WORDS
+    }
+
+
+def _listing_exterior_color(vehicle: Vehicle) -> str:
+    normalized_features = vehicle.features_normalized or {}
+    return _clean(
+        normalized_features.get("exterior_color")
+        or normalized_features.get("exterior_color_description")
+        or normalized_features.get("paint_description")
+        or (vehicle.exterior_color if hasattr(vehicle, "exterior_color") else "")
+    )
+
+
+def _has_color_token(value: str) -> bool:
+    tokens = set(_normalize_match_text(value).split())
+    return bool(tokens & _COLOR_WORDS)
+
+
+def _color_text_matches(needle: str, haystack: str) -> bool:
+    target = _normalize_match_text(needle)
+    candidate = _normalize_match_text(haystack)
+    if not target or not candidate:
+        return False
+    target_tokens = set(target.split())
+    candidate_tokens = set(candidate.split())
+    color_tokens = _canonical_color_tokens(target_tokens)
+    candidate_color_tokens = _canonical_color_tokens(candidate_tokens)
+    if color_tokens:
+        return bool(color_tokens & candidate_color_tokens)
+    return target == candidate or target in candidate or candidate in target
+
+
 def _asset_metadata(manifest: ChromeDataManifest, *, variant: str, shot_code: str | None) -> dict[str, Any]:
     return {
         "provider": CHROMEDATA_SOURCE_KIND,
+        "color_pipeline_version": CHROMEDATA_COLOR_PIPELINE_VERSION,
         "variant": variant,
         "style_id": manifest.style_id,
         "style_description": manifest.style_description,
@@ -1019,7 +1247,12 @@ def _asset_metadata(manifest: ChromeDataManifest, *, variant: str, shot_code: st
         "shot_code": shot_code,
         "color_code": manifest.color_info.color_code if manifest.color_info else "",
         "color_description": manifest.color_info.description if manifest.color_info else "",
+        "color_generic": manifest.color_info.generic_desc if manifest.color_info else "",
+        "secondary_color_code": manifest.color_info.secondary_color_code if manifest.color_info else "",
+        "secondary_color_description": manifest.color_info.secondary_description if manifest.color_info else "",
+        "secondary_color_generic": manifest.color_info.secondary_generic_desc if manifest.color_info else "",
         "color_match_exact": bool(manifest.color_info and manifest.color_info.is_exact_match),
+        "color_match_source": manifest.color_info.match_source if manifest.color_info else "",
         "flags": manifest.flags,
         **manifest.source_metadata,
     }

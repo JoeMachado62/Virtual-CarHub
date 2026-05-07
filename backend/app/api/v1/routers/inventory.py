@@ -1705,13 +1705,22 @@ def search_inventory(
                 }
             )
 
-    stmt = select(Vehicle).where(
-        Vehicle.available.is_(True),
-        or_(
-            Vehicle.quality_firewall_pass.is_(True),
-            Vehicle.quality_firewall_pass.is_(None),
-        ),
-    )
+    # VIN searches return a specific vehicle regardless of availability status
+    if is_vin_search:
+        stmt = select(Vehicle).where(
+            or_(
+                Vehicle.quality_firewall_pass.is_(True),
+                Vehicle.quality_firewall_pass.is_(None),
+            ),
+        )
+    else:
+        stmt = select(Vehicle).where(
+            Vehicle.available.is_(True),
+            or_(
+                Vehicle.quality_firewall_pass.is_(True),
+                Vehicle.quality_firewall_pass.is_(None),
+            ),
+        )
     if q:
         clean_q = q.strip()
         # VIN exact match (17 alphanumeric characters)
@@ -1965,6 +1974,7 @@ def batch_fetch_reference_images(
     from app.services.chromedata_service import (
         CHROMEDATA_SOURCE_KIND,
         batch_build_chromedata_manifests,
+        chromedata_assets_need_refresh,
         sync_chromedata_source_assets,
     )
 
@@ -1981,17 +1991,16 @@ def batch_fetch_reference_images(
         vehicle = db.get(Vehicle, vin)
         if not vehicle:
             continue
-        # Check if ChromeData card assets already exist
-        existing = db.scalar(
-            select(VehicleImageAsset.id).where(
+        existing_assets = db.scalars(
+            select(VehicleImageAsset).where(
                 VehicleImageAsset.vin == vin,
                 VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
                 VehicleImageAsset.source_kind == CHROMEDATA_SOURCE_KIND,
                 VehicleImageAsset.role.in_(["hero", "gallery"]),
                 VehicleImageAsset.active.is_(True),
-            ).limit(1)
-        )
-        if not existing:
+            )
+        ).all()
+        if chromedata_assets_need_refresh(vehicle, existing_assets):
             vehicles.append(vehicle)
 
     if not vehicles:
@@ -2066,7 +2075,11 @@ def get_inventory_vehicle(
     # Lazy-load full ChromeData reference assets when detail imagery is not cached yet.
     has_chromedata_card = display_context.get("has_chromedata_stock")
     has_chromedata_detail = bool(display_context.get("chromedata_detail_images"))
-    should_fetch_chromedata_detail = settings.has_chromedata_media and (not has_chromedata_card or not has_chromedata_detail)
+    should_fetch_chromedata_detail = settings.has_chromedata_media and (
+        not has_chromedata_card
+        or not has_chromedata_detail
+        or bool(display_context.get("reference_pending"))
+    )
     if should_fetch_chromedata_detail:
         try:
             from app.services.chromedata_service import build_chromedata_manifest, sync_chromedata_source_assets
@@ -2170,11 +2183,11 @@ def get_inventory_vehicle(
         ove_payload = {
             "source_platform": ove_detail.source_platform.value,
             "seller_comments": ove_detail.seller_comments,
-            "images": ove_detail.images_json or [],
+            "images": (ove_detail.images_json or []) if _can_view_cr else [],
             "condition_report": (ove_detail.condition_report_json or {}) if _can_view_cr else {},
-            "listing_snapshot": ove_detail.listing_snapshot_json or {},
-            "sync_metadata": ove_detail.sync_metadata_json or {},
-            "page_url": ove_detail.page_url,
+            "listing_snapshot": (ove_detail.listing_snapshot_json or {}) if _can_view_cr else {},
+            "sync_metadata": (ove_detail.sync_metadata_json or {}) if _can_view_cr else {},
+            "page_url": ove_detail.page_url if _can_view_cr else None,
             "last_synced_at": ove_detail.last_synced_at,
         }
 
@@ -2226,6 +2239,11 @@ def get_inventory_vehicle(
         .order_by(HotDeal.deal_rank.asc(), HotDeal.deal_delta.desc())
         .limit(1)
     )
+
+    public_display_context = dict(display_context)
+    if not _can_view_cr:
+        public_display_context["condition_report"] = {}
+        public_display_context["buyer_protection"] = {}
 
     return ok(
         {
@@ -2333,7 +2351,7 @@ def get_inventory_vehicle(
             "seller_comments": seller_comments,
             "condition_report": (ove_detail.condition_report_json if ove_detail else {}) if _can_view_cr else {},
             "condition_report_url": _extract_cr_url(ove_detail) if _can_view_cr else None,
-            "listing_snapshot": ove_detail.listing_snapshot_json if ove_detail else {},
+            "listing_snapshot": (ove_detail.listing_snapshot_json if ove_detail else {}) if _can_view_cr else {},
             "hot_deal": serialize_hot_deal(active_hot_deal) if active_hot_deal else None,
             "ove_detail": ove_payload,
             "history_enrichment": {
@@ -2345,7 +2363,7 @@ def get_inventory_vehicle(
             "available": vehicle.available,
             "last_seen_active": vehicle.last_seen_active,
             "updated_at": vehicle.updated_at,
-            "display_context": display_context,
+            "display_context": public_display_context,
             "is_in_garage": is_in_garage,
             "nhtsa_decoded": nhtsa_categories,
         }

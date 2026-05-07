@@ -26,7 +26,7 @@ from app.models.entities import (
     VehicleInspectionReport,
 )
 from app.core.config import settings
-from app.services.chromedata_service import CHROMEDATA_SOURCE_KIND
+from app.services.chromedata_service import CHROMEDATA_SOURCE_KIND, chromedata_assets_need_refresh
 from app.services.evox_service import EVOX_SOURCE_KIND
 from app.services.imagin_service import IMAGIN_SOURCE_KIND
 from app.services.object_storage import resolve_storage_url
@@ -381,10 +381,11 @@ def resolve_vehicle_display_context(
         vehicle.source_type and vehicle.source_type.lower() in {"marketcheck", "dealer_wholesale"}
     )
 
+    chromedata_refresh_needed = bool(chromedata_assets_need_refresh(vehicle, chromedata_assets)) if chromedata_assets else False
     reference_pending = (
-        not chromedata_card_gallery
-        and settings.has_chromedata_media
+        settings.has_chromedata_media
         and bool(vehicle.vin or (vehicle.year and vehicle.make and vehicle.model))
+        and (not chromedata_card_gallery or chromedata_refresh_needed)
     )
 
     # Reference gallery: ChromeData > EVOX > Imagin
