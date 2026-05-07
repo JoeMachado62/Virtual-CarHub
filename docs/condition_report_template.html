@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VirtualCarHub Inspection Report — {{vehicle.year}} {{vehicle.make}} {{vehicle.model}}</title>
+
+<!-- Lucide icon set (free, MIT). Loads ~30KB and renders <i data-lucide="..."> as inline SVG. -->
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+<style>
+  :root{
+    --bg:#0e1130;
+    --bg-soft:#161a3a;
+    --card:#1b1f42;
+    --card-hover:#22264e;
+    --line:rgba(255,255,255,.06);
+    --line-strong:rgba(255,255,255,.14);
+    --label:#8a90b4;
+    --text:#ffffff;
+    --muted:#a4a8c8;
+    --accent:#e8a93c;
+    --violet:#8b87ff;
+    --red:#ff5b5b;
+    --green:#3dd07a;
+    --link:#8b9bff;
+    --carfax-1:#5b3aa5;
+    --carfax-2:#c45e9e;
+  }
+  *,*::before,*::after{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    font:14px/1.5 "Inter","Segoe UI",Arial,sans-serif;
+    color:var(--text);
+    background:radial-gradient(1100px 600px at 100% 0%, rgba(80,60,140,.18), transparent 70%), var(--bg);
+    min-height:100vh;
+  }
+  a{color:var(--link);text-decoration:none}
+  a:hover{text-decoration:underline}
+  i[data-lucide]{width:18px;height:18px;stroke-width:2;display:inline-block;vertical-align:middle}
+
+  .wrap{max-width:1280px;margin:0 auto;padding:24px 32px 60px}
+
+  /* ---- TOP BAR ---- */
+  .top-bar{display:flex;align-items:center;justify-content:space-between;padding:8px 0 18px}
+  .brand{font-size:20px;font-weight:700;letter-spacing:.3px}
+  .brand .accent{color:var(--accent)}
+  .top-actions{display:flex;gap:10px}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;
+    background:var(--card);color:var(--text);
+    border:1px solid var(--line-strong);
+    padding:9px 16px;border-radius:6px;font-weight:600;font-size:13px;cursor:pointer;
+    font-family:inherit;
+  }
+  .btn:hover{background:var(--card-hover)}
+
+  /* ---- VEHICLE TITLE ---- */
+  .veh-title{padding-top:8px;border-bottom:2px solid var(--accent);padding-bottom:14px;margin-bottom:18px}
+  .veh-title h1{margin:0;font-size:24px;font-weight:700}
+  .veh-title .meta{margin-top:6px;color:var(--muted);font-size:13px;display:flex;flex-wrap:wrap;gap:10px}
+  .veh-title .meta .dot{color:var(--label);opacity:.6}
+
+  /* ---- PHOTO GALLERY ---- */
+  .gallery{background:#0a0c1f;border-radius:8px;padding:14px;margin-bottom:24px;border:1px solid var(--line)}
+  .gallery .frame{position:relative;background:#000;aspect-ratio:16/8;border-radius:6px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+  .gallery .frame img{max-width:100%;max-height:100%;object-fit:contain}
+  .gallery .nav-btn{
+    position:absolute;top:50%;transform:translateY(-50%);
+    width:42px;height:42px;border-radius:50%;
+    background:rgba(0,0,0,.45);color:#fff;border:1px solid rgba(255,255,255,.3);
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+  }
+  .gallery .nav-btn:hover{background:rgba(0,0,0,.7)}
+  .gallery .nav-btn.prev{left:14px}
+  .gallery .nav-btn.next{right:14px}
+  .gallery .counter{
+    position:absolute;left:14px;bottom:14px;display:flex;align-items:center;gap:8px;
+    color:#fff;font-size:13px;text-shadow:0 1px 2px rgba(0,0,0,.6);
+  }
+  .gallery .counter .expand{cursor:pointer;opacity:.85}
+  .gallery .thumbs{display:flex;gap:6px;margin-top:10px;overflow-x:auto;padding-bottom:4px}
+  .gallery .thumbs::-webkit-scrollbar{height:6px}
+  .gallery .thumbs::-webkit-scrollbar-thumb{background:#333;border-radius:3px}
+  .gallery .thumb{flex:0 0 auto;width:80px;aspect-ratio:16/10;border-radius:4px;overflow:hidden;background:#222;cursor:pointer;border:2px solid transparent}
+  .gallery .thumb.active{border-color:var(--accent)}
+  .gallery .thumb img{width:100%;height:100%;object-fit:cover}
+  .gallery .filter-bar{display:flex;justify-content:center;margin-top:12px;border-top:1px solid var(--line);padding-top:12px}
+  .gallery .pill{
+    display:inline-flex;align-items:center;gap:8px;
+    background:transparent;color:var(--text);font-weight:700;font-size:12px;letter-spacing:1px;
+    padding:6px 14px;border-radius:999px;cursor:pointer;
+  }
+  .gallery .pill .badge{background:var(--accent);color:#1a1a1a;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700}
+
+  /* ---- SECTION HEADERS ---- */
+  .section{margin-top:18px}
+  .section-bar.major{
+    background:#191c3e;padding:14px 20px;border-radius:6px;
+    font-weight:700;letter-spacing:1.4px;font-size:13px;color:#fff;
+    border:1px solid var(--line);margin-top:24px;
+  }
+  .section-bar{
+    background:#191c3e;padding:11px 18px;border-radius:6px;
+    border-left:4px solid var(--accent);
+    font-weight:700;letter-spacing:1.2px;font-size:12px;color:#fff;
+    margin-bottom:14px;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;
+  }
+  .section-bar i[data-lucide]{color:var(--accent)}
+  .section-bar .chev{margin-left:auto;color:var(--muted);transition:transform .15s}
+  .section.collapsed .section-bar .chev{transform:rotate(-90deg)}
+  .section.collapsed .section-body{display:none}
+
+  /* ---- FIELD GRID ---- */
+  .field-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
+  @media (max-width:840px){.field-grid{grid-template-columns:1fr}}
+  .field{
+    background:var(--card);border:1px solid var(--line);border-radius:6px;
+    padding:14px 18px;
+  }
+  .field .lbl{
+    color:var(--label);font-size:10.5px;font-weight:700;letter-spacing:1px;
+    text-transform:uppercase;margin-bottom:6px;
+  }
+  .field .val{font-size:14.5px;font-weight:600;color:var(--text)}
+  .field .val.muted{color:var(--muted);font-weight:500}
+  .field.issue{border-color:rgba(255,91,91,.35)}
+  .field.issue .lbl{color:var(--red)}
+  .field.issue .val{color:var(--red)}
+  .field.ok .val{color:var(--green)}
+
+  /* ---- TIRES & WHEELS — driver | car | passenger ---- */
+  .tires-layout{
+    display:grid;
+    grid-template-columns:1fr minmax(180px,260px) 1fr;
+    grid-template-areas:
+      "df_d car pf_d"
+      "df_i car pf_i"
+      "dr_d car pr_d"
+      "dr_i car pr_i";
+    gap:12px;align-items:stretch;
+  }
+  .tires-layout .df_d{grid-area:df_d}
+  .tires-layout .df_i{grid-area:df_i}
+  .tires-layout .dr_d{grid-area:dr_d}
+  .tires-layout .dr_i{grid-area:dr_i}
+  .tires-layout .pf_d{grid-area:pf_d}
+  .tires-layout .pf_i{grid-area:pf_i}
+  .tires-layout .pr_d{grid-area:pr_d}
+  .tires-layout .pr_i{grid-area:pr_i}
+  .tires-layout .tire-car{
+    grid-area:car;
+    display:flex;align-items:center;justify-content:center;
+    padding:10px;
+  }
+  .tires-layout .tire-car img,
+  .tires-layout .tire-car svg{
+    max-width:100%;max-height:420px;width:auto;height:auto;
+    filter:drop-shadow(0 6px 18px rgba(0,0,0,.45));
+  }
+  @media (max-width:840px){
+    .tires-layout{
+      grid-template-columns:1fr;
+      grid-template-areas:"car" "df_d" "df_i" "dr_d" "dr_i" "pf_d" "pf_i" "pr_d" "pr_i";
+    }
+    .tires-layout .tire-car img,
+    .tires-layout .tire-car svg{max-height:280px}
+  }
+
+  .group-title{
+    color:var(--label);font-size:10.5px;font-weight:700;letter-spacing:1px;
+    text-transform:uppercase;margin:14px 4px 8px;display:flex;align-items:center;gap:8px;
+  }
+  .group-title i[data-lucide]{width:14px;height:14px;color:var(--violet)}
+
+  /* ---- TITLE & HISTORY CARDS ---- */
+  .history-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+  @media (max-width:840px){.history-grid{grid-template-columns:1fr}}
+  .summary-card,.gauge-card{
+    background:var(--card);border:1px solid var(--line);border-radius:8px;padding:18px 22px;
+  }
+  .summary-card h3{margin:0 0 4px;font-size:18px;font-weight:700}
+  .summary-card .fuel{color:var(--violet);font-size:13px;margin-bottom:14px;font-weight:600}
+  .summary-card .vin{font-weight:700;font-size:13px;margin-bottom:14px}
+  .summary-card .mini{margin-top:8px}
+  .summary-card .mini .lbl{color:var(--muted);font-size:12px}
+  .summary-card .mini .val{font-size:14px;font-weight:600}
+
+  .gauge-card{display:flex;flex-direction:column;align-items:center;text-align:center;justify-content:space-between}
+  .gauge-card svg{width:100%;max-width:300px;height:auto}
+  .gauge-card .score-line{color:var(--violet);font-weight:700;font-size:14px;margin-top:-4px}
+  .gauge-card .compare{color:var(--muted);font-size:12px;margin-top:6px;line-height:1.5}
+  .gauge-card .learn{color:var(--violet);font-size:12px;margin-top:8px;cursor:pointer}
+
+  /* ---- CARFAX BANNER ---- */
+  .carfax{
+    background:linear-gradient(90deg,var(--carfax-1) 0%, var(--carfax-2) 100%);
+    border-radius:10px;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;gap:16px;
+    margin:14px 0;
+  }
+  .carfax .left{display:flex;align-items:center;gap:14px;color:#fff;font-weight:700;font-size:18px}
+  .carfax .left i{width:28px;height:28px;color:#fff;opacity:.95}
+  .carfax .left .cfx-mark{background:#fff;color:#000;font-weight:900;padding:3px 10px;border-radius:3px;letter-spacing:1px;font-size:14px}
+  .carfax .view-btn{
+    background:#1f1f2f;color:#fff;border:0;padding:10px 22px;border-radius:6px;
+    font-weight:700;font-size:14px;display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-family:inherit;
+  }
+
+  .check-list{
+    background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 22px;
+    color:var(--muted);font-size:13px;margin-bottom:8px;
+  }
+  .check-list .item{padding:4px 0}
+  .check-list .item .ok{color:var(--green);font-weight:700;margin:0 6px}
+  .check-list .item .alert{color:var(--accent);font-weight:700;margin:0 6px}
+  .check-list .item .more{color:var(--violet);margin-left:6px;cursor:pointer;text-decoration:underline}
+  .check-list .item .more:hover{color:#b3aaff}
+
+  .full-report-row{
+    background:var(--card);border:1px solid var(--line);border-radius:8px;
+    padding:12px 22px;display:flex;justify-content:space-between;align-items:center;
+    cursor:pointer;font-weight:600;user-select:none;
+  }
+  .full-report-row .expand-lbl{color:var(--muted);font-size:12px;letter-spacing:1.2px;font-weight:700;display:inline-flex;align-items:center;gap:6px}
+  .full-report-row .expand-lbl i{transition:transform .15s}
+  .full-report-row.open .expand-lbl i{transform:rotate(180deg)}
+  .full-report-body{
+    background:var(--card);border:1px solid var(--line);border-top:0;
+    border-radius:0 0 8px 8px;padding:18px 22px;margin-top:-9px;
+    color:var(--text);font-size:13.5px;line-height:1.6;
+  }
+  .full-report-body[hidden]{display:none}
+  .full-report-body .empty-hint{color:var(--muted)}
+  .full-report-body code{background:rgba(255,255,255,.06);padding:1px 6px;border-radius:3px;font-size:12px}
+
+  /* ---- INFO MODAL ---- */
+  .modal{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+  .modal[hidden]{display:none}
+  .modal-overlay{position:absolute;inset:0;background:rgba(5,7,20,.72);backdrop-filter:blur(3px)}
+  .modal-card{
+    position:relative;background:#1d2148;border:1px solid var(--line-strong);
+    border-radius:10px;padding:24px 28px 22px;max-width:600px;width:100%;
+    max-height:85vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.55);
+  }
+  .modal-close{
+    position:absolute;top:10px;right:14px;background:transparent;border:0;color:var(--muted);
+    font-size:26px;cursor:pointer;line-height:1;padding:4px 8px;
+  }
+  .modal-close:hover{color:#fff}
+  .modal-title{margin:0 0 14px;color:var(--accent);font-size:18px;font-weight:700}
+  .modal-body{color:var(--text);font-size:13.5px;line-height:1.65}
+  .modal-body p{margin:0 0 10px}
+  .modal-body ul{margin:6px 0 12px;padding-left:22px}
+  .modal-body li{margin:3px 0}
+  .modal-body strong{color:var(--violet)}
+
+  /* ---- PROBLEM HIGHLIGHTS ---- */
+  .prob-list{padding:0 4px;margin:0;list-style:none}
+  .prob-list li{
+    padding:5px 0 5px 22px;position:relative;color:var(--accent);font-size:13.5px;
+  }
+  .prob-list li::before{
+    content:"";position:absolute;left:6px;top:13px;width:5px;height:5px;border-radius:50%;background:var(--accent);
+  }
+
+  /* ---- EQUIPMENT GRID ---- */
+  .equip-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  @media (max-width:840px){.equip-grid{grid-template-columns:1fr}}
+  .equip-item{
+    background:var(--card);border:1px solid var(--line);border-radius:6px;
+    padding:14px 16px;font-weight:700;font-size:12px;letter-spacing:.3px;
+    text-transform:uppercase;color:var(--text);min-height:54px;display:flex;align-items:center;
+  }
+  .equip-intro{color:var(--muted);margin:6px 0 14px}
+
+  @media print{
+    body{background:#fff;color:#000}
+    .top-actions,.gallery .nav-btn{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ TOP BAR ============ -->
+  <div class="top-bar">
+    <div class="brand"><span class="accent">Virtual</span>CarHub Inspection Report</div>
+    <div class="top-actions">
+      <button class="btn"><i data-lucide="arrow-left"></i> Back to Vehicle</button>
+      <button class="btn" onclick="window.print()"><i data-lucide="printer"></i> Print</button>
+    </div>
+  </div>
+
+  <!-- ============ VEHICLE TITLE ============ -->
+  <div class="veh-title">
+    <h1>{{vehicle.year}} {{vehicle.make}} {{vehicle.model}} {{vehicle.trim}}</h1>
+    <div class="meta">
+      <span>{{vehicle.vin}}</span>
+      <span class="dot">·</span>
+      <span>Odo {{vehicle.odometer}} mi</span>
+      <span class="dot">·</span>
+      <span>{{vehicle.exterior_color}} / {{vehicle.interior_color}}</span>
+      <span class="dot">·</span>
+      <span>{{vehicle.transmission}}</span>
+      <span class="dot">·</span>
+      <span>{{vehicle.drivetrain}}</span>
+    </div>
+  </div>
+
+  <!-- ============ PHOTO GALLERY ============ -->
+  <div class="gallery">
+    <div class="frame">
+      <img src="{{photo_main_url}}" alt="{{photo_main_caption}}">
+      <button class="nav-btn prev" aria-label="Previous"><i data-lucide="chevron-left"></i></button>
+      <button class="nav-btn next" aria-label="Next"><i data-lucide="chevron-right"></i></button>
+      <div class="counter">
+        <span>{{photo_main_index}} of {{photo_total}}</span>
+        <i data-lucide="maximize-2" class="expand"></i>
+      </div>
+    </div>
+
+    <div class="thumbs">
+      <!-- {{#thumbs}} -->
+      <div class="thumb {{#is_active}}active{{/is_active}}"><img src="{{url}}" alt=""></div>
+      <!-- {{/thumbs}} -->
+    </div>
+
+    <div class="filter-bar">
+      <span class="pill">ALL <span class="badge">{{media_total}}</span></span>
+    </div>
+  </div>
+
+  <!-- ============ INSPECTION (major divider) ============ -->
+  <div class="section-bar major">INSPECTION</div>
+
+  <!-- DRIVABILITY, KEYS, & HISTORY -->
+  <div class="section">
+    <div class="section-bar">
+      <i data-lucide="car"></i>DRIVABILITY, KEYS, &amp; HISTORY
+      <i data-lucide="chevron-down" class="chev"></i>
+    </div>
+    <div class="section-body">
+      <div class="field-grid">
+        <div class="field"><div class="lbl">Vehicle Drives</div><div class="val">{{drivability.drives}}</div></div>
+        <div class="field"><div class="lbl">Keys</div><div class="val">{{drivability.keys}}</div></div>
+        <div class="field"><div class="lbl">Key Fobs</div><div class="val">{{drivability.fobs}}</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXTERIOR (rebuilt: panel-by-panel) -->
+  <div class="section">
+    <div class="section-bar">
+      <i data-lucide="car-front"></i>EXTERIOR
+      <i data-lucide="chevron-down" class="chev"></i>
+    </div>
+    <div class="section-body">
+
+      <div class="group-title"><i data-lucide="square-stack"></i>Top &amp; Ends</div>
+      <div class="field-grid">
+        <div class="field {{#issues.front_bumper}}issue{{/issues.front_bumper}}"><div class="lbl">Front Bumper</div><div class="val">{{ext.front_bumper}}</div></div>
+        <div class="field {{#issues.hood}}issue{{/issues.hood}}"><div class="lbl">Hood</div><div class="val">{{ext.hood}}</div></div>
+        <div class="field {{#issues.roof}}issue{{/issues.roof}}"><div class="lbl">Roof</div><div class="val">{{ext.roof}}</div></div>
+        <div class="field {{#issues.trunk}}issue{{/issues.trunk}}"><div class="lbl">Trunk / Liftgate</div><div class="val">{{ext.trunk}}</div></div>
+        <div class="field {{#issues.rear_bumper}}issue{{/issues.rear_bumper}}"><div class="lbl">Rear Bumper</div><div class="val">{{ext.rear_bumper}}</div></div>
+      </div>
+
+      <div class="group-title"><i data-lucide="aperture"></i>Mirrors</div>
+      <div class="field-grid">
+        <div class="field {{#issues.driver_mirror}}issue{{/issues.driver_mirror}}"><div class="lbl">Driver Mirror</div><div class="val">{{ext.driver_mirror}}</div></div>
+        <div class="field {{#issues.passenger_mirror}}issue{{/issues.passenger_mirror}}"><div class="lbl">Passenger Mirror</div><div class="val">{{ext.passenger_mirror}}</div></div>
+      </div>
+
+      <div class="group-title"><i data-lucide="panel-left"></i>Driver Side &mdash; {{vehicle.door_count}}-Door</div>
+      <div class="field-grid">
+        <div class="field {{#issues.driver_fender}}issue{{/issues.driver_fender}}"><div class="lbl">Driver Fender</div><div class="val">{{ext.driver_fender}}</div></div>
+        <div class="field {{#issues.driver_front_door}}issue{{/issues.driver_front_door}}"><div class="lbl">Driver Front Door</div><div class="val">{{ext.driver_front_door}}</div></div>
+        <!-- Render the next field only on 4-door vehicles -->
+        <!-- {{#vehicle.is_four_door}} -->
+        <div class="field {{#issues.driver_rear_door}}issue{{/issues.driver_rear_door}}"><div class="lbl">Driver Rear Door</div><div class="val">{{ext.driver_rear_door}}</div></div>
+        <!-- {{/vehicle.is_four_door}} -->
+        <div class="field {{#issues.driver_quarter}}issue{{/issues.driver_quarter}}"><div class="lbl">Driver Quarter Panel</div><div class="val">{{ext.driver_quarter}}</div></div>
+      </div>
+
+      <div class="group-title"><i data-lucide="panel-right"></i>Passenger Side &mdash; {{vehicle.door_count}}-Door</div>
+      <div class="field-grid">
+        <div class="field {{#issues.passenger_fender}}issue{{/issues.passenger_fender}}"><div class="lbl">Passenger Fender</div><div class="val">{{ext.passenger_fender}}</div></div>
+        <div class="field {{#issues.passenger_front_door}}issue{{/issues.passenger_front_door}}"><div class="lbl">Passenger Front Door</div><div class="val">{{ext.passenger_front_door}}</div></div>
+        <!-- {{#vehicle.is_four_door}} -->
+        <div class="field {{#issues.passenger_rear_door}}issue{{/issues.passenger_rear_door}}"><div class="lbl">Passenger Rear Door</div><div class="val">{{ext.passenger_rear_door}}</div></div>
+        <!-- {{/vehicle.is_four_door}} -->
+        <div class="field {{#issues.passenger_quarter}}issue{{/issues.passenger_quarter}}"><div class="lbl">Passenger Quarter Panel</div><div class="val">{{ext.passenger_quarter}}</div></div>
+      </div>
+
+      <div class="group-title"><i data-lucide="info"></i>Other</div>
+      <div class="field-grid">
+        <div class="field"><div class="lbl">Further Disclosures</div><div class="val muted">{{ext.further_disclosures}}</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- INTERIOR -->
+  <div class="section">
+    <div class="section-bar">
+      <i data-lucide="armchair"></i>INTERIOR
+      <i data-lucide="chevron-down" class="chev"></i>
+    </div>
+    <div class="section-body">
+
+      <div class="group-title"><i data-lucide="armchair"></i>Cosmetic Damage &mdash; Seats</div>
+      <div class="field-grid">
+        <div class="field {{#issues.driver_seat}}issue{{/issues.driver_seat}}"><div class="lbl">Driver Seat</div><div class="val">{{int.driver_seat}}</div></div>
+        <div class="field {{#issues.passenger_seat}}issue{{/issues.passenger_seat}}"><div class="lbl">Passenger Seat</div><div class="val">{{int.passenger_seat}}</div></div>
+        <div class="field {{#issues.rear_left_seat}}issue{{/issues.rear_left_seat}}"><div class="lbl">Rear Left Seat</div><div class="val">{{int.rear_left_seat}}</div></div>
+        <div class="field {{#issues.rear_seat_center}}issue{{/issues.rear_seat_center}}"><div class="lbl">Rear Seat Center</div><div class="val">{{int.rear_seat_center}}</div></div>
+        <div class="field {{#issues.rear_right_seat}}issue{{/issues.rear_right_seat}}"><div class="lbl">Rear Right Seat</div><div class="val">{{int.rear_right_seat}}</div></div>
+        <!-- Render only on vehicles that have a third row -->
+        <!-- {{#vehicle.has_third_row}} -->
+        <div class="field {{#issues.third_row_seats}}issue{{/issues.third_row_seats}}"><div class="lbl">Third Row Seats</div><div class="val">{{int.third_row_seats}}</div></div>
+        <!-- {{/vehicle.has_third_row}} -->
+      </div>
+
+      <div class="group-title"><i data-lucide="door-open"></i>Cosmetic Damage &mdash; Door Panels</div>
+      <div class="field-grid">
+        <div class="field {{#issues.driver_door_panel}}issue{{/issues.driver_door_panel}}"><div class="lbl">Driver Door Panel</div><div class="val">{{int.driver_door_panel}}</div></div>
+        <div class="field {{#issues.passenger_door_panel}}issue{{/issues.passenger_door_panel}}"><div class="lbl">Passenger Door Panel</div><div class="val">{{int.passenger_door_panel}}</div></div>
+        <!-- {{#vehicle.is_four_door}} -->
+        <div class="field {{#issues.driver_rear_door_panel}}issue{{/issues.driver_rear_door_panel}}"><div class="lbl">Driver Rear Door Panel</div><div class="val">{{int.driver_rear_door_panel}}</div></div>
+        <div class="field {{#issues.passenger_rear_door_panel}}issue{{/issues.passenger_rear_door_panel}}"><div class="lbl">Passenger Rear Door Panel</div><div class="val">{{int.passenger_rear_door_panel}}</div></div>
+        <!-- {{/vehicle.is_four_door}} -->
+      </div>
+
+      <div class="group-title"><i data-lucide="layout-dashboard"></i>Cosmetic Damage &mdash; Dashboard &amp; Headliner</div>
+      <div class="field-grid">
+        <div class="field {{#issues.dashboard}}issue{{/issues.dashboard}}"><div class="lbl">Dashboard</div><div class="val">{{int.dashboard}}</div></div>
+        <div class="field {{#issues.headliner}}issue{{/issues.headliner}}"><div class="lbl">Headliner / Roof Liner</div><div class="val">{{int.headliner}}</div></div>
+      </div>
+
+      <div class="group-title"><i data-lucide="settings"></i>Operation &amp; Equipment</div>
+      <div class="field-grid">
+        <div class="field"><div class="lbl">Airbags</div><div class="val">{{int.airbags}}</div></div>
+        <div class="field"><div class="lbl">Climate Control</div><div class="val">{{int.climate}}</div></div>
+        <div class="field"><div class="lbl">Electrical Accessory</div><div class="val">{{int.electrical}}</div></div>
+        <div class="field"><div class="lbl">Infotainment / Radio</div><div class="val">{{int.infotainment}}</div></div>
+        <div class="field"><div class="lbl">Sunroof Operation</div><div class="val">{{int.sunroof}}</div></div>
+        <div class="field {{#issues.smoke_odor}}issue{{/issues.smoke_odor}}"><div class="lbl">Smoke Odor</div><div class="val">{{int.smoke_odor}}</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MECHANICAL & DTC -->
+  <div class="section">
+    <div class="section-bar">
+      <i data-lucide="settings-2"></i>MECHANICAL &amp; DIAGNOSTIC TROUBLE CODES
+      <i data-lucide="chevron-down" class="chev"></i>
+    </div>
+    <div class="section-body">
+      <div class="field-grid">
+        <div class="field"><div class="lbl">Diagnostic Trouble Codes</div><div class="val">{{mech.dtc}}</div></div>
+        <div class="field"><div class="lbl">Emissions / Catalytic / Exhaust</div><div class="val">{{mech.emissions}}</div></div>
+        <div class="field"><div class="lbl">Engine Noise</div><div class="val">{{mech.engine_noise}}</div></div>
+        <div class="field"><div class="lbl">Warning Lights &amp; Gauge Cluster</div><div class="val">{{mech.warning_lights}}</div></div>
+        <div class="field"><div class="lbl">Active Visible Leaks</div><div class="val">{{mech.leaks}}</div></div>
+        <div class="field"><div class="lbl">Engine Oil Sludge</div><div class="val">{{mech.sludge}}</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TIRES & WHEELS -->
+  <div class="section">
+    <div class="section-bar">
+      <i data-lucide="circle-dot"></i>TIRES &amp; WHEELS
+      <i data-lucide="chevron-down" class="chev"></i>
+    </div>
+    <div class="section-body">
+      <div class="tires-layout">
+        <!-- driver column (left) -->
+        <div class="field df_d"><div class="lbl">Driver Front Tire Depth</div><div class="val">{{tires.df_depth}}</div></div>
+        <div class="field df_i"><div class="lbl">Driver Front Tire &amp; Wheel Issue</div><div class="val">{{tires.df_issue}}</div></div>
+        <div class="field dr_d"><div class="lbl">Driver Rear Tire Depth</div><div class="val">{{tires.dr_depth}}</div></div>
+        <div class="field dr_i"><div class="lbl">Driver Rear Tire &amp; Wheel Issue</div><div class="val">{{tires.dr_issue}}</div></div>
+
+        <!-- center: top-down vehicle icon
+             To use your own PNG instead, replace the <svg>...</svg> below with:
+                 <img src="car-top.png" alt="Vehicle top view">
+             and drop the file next to this HTML. -->
+        <div class="tire-car">
+          <svg viewBox="0 0 220 380" xmlns="http://www.w3.org/2000/svg" aria-label="Vehicle top view">
+            <!-- wheels -->
+            <rect x="6"   y="80"  width="22" height="44" rx="5" fill="#8c7da8"/>
+            <rect x="192" y="80"  width="22" height="44" rx="5" fill="#8c7da8"/>
+            <rect x="6"   y="258" width="22" height="44" rx="5" fill="#8c7da8"/>
+            <rect x="192" y="258" width="22" height="44" rx="5" fill="#8c7da8"/>
+
+            <!-- body -->
+            <rect x="22" y="20" width="176" height="340" rx="40" fill="#b6c8d8" stroke="#1a2438" stroke-width="2"/>
+
+            <!-- headlights -->
+            <path d="M 35 32 Q 50 26 62 28 L 62 50 Q 48 50 35 48 Z" fill="#ffffff"/>
+            <path d="M 185 32 Q 170 26 158 28 L 158 50 Q 172 50 185 48 Z" fill="#ffffff"/>
+
+            <!-- front windshield -->
+            <path d="M 50 62 Q 110 55 170 62 L 162 110 L 58 110 Z" fill="#2d2419"/>
+
+            <!-- center roof / sunroof -->
+            <rect x="58" y="125" width="104" height="135" rx="8" fill="#2d2419"/>
+
+            <!-- rear windshield -->
+            <path d="M 58 275 L 162 275 L 170 322 Q 110 328 50 322 Z" fill="#2d2419"/>
+
+            <!-- taillights -->
+            <ellipse cx="58"  cy="350" rx="16" ry="7" fill="#f08a3d"/>
+            <ellipse cx="162" cy="350" rx="16" ry="7" fill="#f08a3d"/>
+          </svg>
+        </div>
+
+        <!-- passenger column (right) -->
+        <div class="field pf_d"><div class="lbl">Passenger Front Tire Depth</div><div class="val">{{tires.pf_depth}}</div></div>
+        <div class="field pf_i"><div class="lbl">Passenger Front Tire &amp; Wheel Issue</div><div class="val">{{tires.pf_issue}}</div></div>
+        <div class="field pr_d"><div class="lbl">Passenger Rear Tire Depth</div><div class="val">{{tires.pr_depth}}</div></div>
+        <div class="field pr_i"><div class="lbl">Passenger Rear Tire &amp; Wheel Issue</div><div class="val">{{tires.pr_issue}}</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TITLE & VEHICLE HISTORY -->
+  <div class="section">
+    <div class="section-bar">
+      <i data-lucide="file-text"></i>TITLE &amp; VEHICLE HISTORY
+      <i data-lucide="chevron-down" class="chev"></i>
+    </div>
+    <div class="section-body">
+      <div class="field-grid">
+        <div class="field"><div class="lbl">Title State</div><div class="val">{{title.state}}</div></div>
+        <div class="field"><div class="lbl">Title Status</div><div class="val">{{title.status}}</div></div>
+        <div class="field"><div class="lbl">Owners</div><div class="val">{{title.owners}}</div></div>
+        <div class="field"><div class="lbl">Accidents</div><div class="val">{{title.accidents}}</div></div>
+      </div>
+
+      <div class="history-grid">
+        <div class="summary-card">
+          <h3>{{vehicle.year}} {{vehicle.make}} {{vehicle.model}} {{vehicle.trim}}</h3>
+          <div class="fuel">{{vehicle.fuel_type}}</div>
+          <div class="vin">VIN: {{vehicle.vin}}</div>
+          <div class="mini">
+            <div class="lbl">Calculated Owners</div>
+            <div class="val">{{title.owners}}</div>
+          </div>
+          <div class="mini">
+            <div class="lbl">Number of Accidents</div>
+            <div class="val">{{title.accidents}}</div>
+          </div>
+        </div>
+
+        <div class="gauge-card">
+          <svg viewBox="0 0 220 140"
+               class="ac-gauge"
+               data-score="{{autocheck.score}}"
+               data-min="{{autocheck.range_low}}"
+               data-max="{{autocheck.range_high}}">
+            <path d="M 25 110 A 85 85 0 0 1 195 110"
+                  stroke="rgba(255,255,255,.18)" stroke-width="14" fill="none" stroke-linecap="round"/>
+            <text x="25"  y="132" fill="#8a90b4" font-size="14">{{autocheck.range_low}}</text>
+            <text x="110" y="92"  fill="#8b87ff" font-size="22" font-weight="700" text-anchor="middle">{{autocheck.score}}</text>
+            <text x="195" y="132" fill="#8a90b4" font-size="14" text-anchor="end">{{autocheck.range_high}}</text>
+            <circle class="ac-dot" cx="110" cy="25" r="11" fill="#fff" stroke="#8b87ff" stroke-width="4"/>
+          </svg>
+          <div class="score-line">This vehicle's AutoCheck Score: {{autocheck.score}}</div>
+          <div class="compare">
+            Other comparable {{vehicle.year}} vehicles typically score between
+            <strong>{{autocheck.range_low}}–{{autocheck.range_high}}</strong>.
+          </div>
+          <div class="learn">Learn more about the AutoCheck Score</div>
+        </div>
+      </div>
+
+      <div class="carfax">
+        <div class="left">
+          <i data-lucide="file-check-2"></i>
+          <span>Show me the</span>
+          <span class="cfx-mark">CARFAX</span>
+        </div>
+        <button class="view-btn">View now <i data-lucide="chevron-right"></i></button>
+      </div>
+
+      <div class="check-list">
+        <div class="item">Major State Title Brand Check - <span class="{{title_brand.tone}}">{{title_brand.status}}</span><a class="more" data-info="title-brand">More info</a></div>
+        <div class="item">Accident Check - <span class="{{accident.tone}}">{{accident.status}}</span><a class="more" data-info="accident">More info</a></div>
+        <div class="item">Damage Check - <span class="{{damage.tone}}">{{damage.status}}</span><a class="more" data-info="damage">More info</a></div>
+        <div class="item">Odometer Check - <span class="{{odometer.tone}}">{{odometer.status}}</span><a class="more" data-info="odometer">More info</a></div>
+        <div class="item">Other Title Brand and Specific Event Check - <span class="{{other_title.tone}}">{{other_title.status}}</span><a class="more" data-info="other-title">More info</a></div>
+        <div class="item">Vehicle Usage Check - <span class="{{vehicle_usage.tone}}">{{vehicle_usage.status}}</span><a class="more" data-info="vehicle-usage">More info</a></div>
+        <div class="item">AutoCheck Buyback Protection - <span class="{{buyback.tone}}">{{buyback.status}}</span><a class="more" data-info="buyback">More info</a></div>
+      </div>
+
+      <div class="full-report-row" id="full-report-toggle">
+        <span>Full AutoCheck Report</span>
+        <span class="expand-lbl">EXPAND <i data-lucide="chevron-down"></i></span>
+      </div>
+      <div class="full-report-body" hidden>
+        <!-- The Full AutoCheck Report content slot. Three ways to populate it:
+             1. External link  →  set {{autocheck.full_report_url}}
+             2. Inline HTML    →  set {{{autocheck.full_report_html}}} (triple-stash, unescaped)
+             3. iframe embed   →  paste an <iframe src="..."> below
+        -->
+        {{#autocheck.full_report_url}}
+          <p><a href="{{autocheck.full_report_url}}" target="_blank" rel="noopener">Open the full AutoCheck report &#8599;</a></p>
+        {{/autocheck.full_report_url}}
+        {{{autocheck.full_report_html}}}
+        {{^autocheck.full_report_url}}{{^autocheck.full_report_html}}
+          <p class="empty-hint">No full report content provided. Set <code>autocheck.full_report_url</code> or <code>autocheck.full_report_html</code> in your template data.</p>
+        {{/autocheck.full_report_html}}{{/autocheck.full_report_url}}
+      </div>
+    </div>
+  </div>
+
+  <!-- PROBLEM HIGHLIGHTS -->
+  <div class="section">
+    <div class="section-bar">
+      <i data-lucide="alert-triangle"></i>PROBLEM HIGHLIGHTS
+      <i data-lucide="chevron-down" class="chev"></i>
+    </div>
+    <div class="section-body">
+      <ul class="prob-list">
+        <!-- {{#problem_highlights}} -->
+        <li>{{label}}: {{value}}</li>
+        <!-- {{/problem_highlights}} -->
+      </ul>
+    </div>
+  </div>
+
+  <!-- EQUIPMENT & FEATURES -->
+  <div class="section">
+    <div class="section-bar">
+      <i data-lucide="list-checks"></i>EQUIPMENT &amp; FEATURES
+      <i data-lucide="chevron-down" class="chev"></i>
+    </div>
+    <div class="section-body">
+      <div class="equip-intro">Vehicle feature list extracted from the condition report.</div>
+      <div class="equip-grid">
+        <!-- {{#equipment}} -->
+        <div class="equip-item">{{name}}</div>
+        <!-- {{/equipment}} -->
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ============ INFO MODAL (for AutoCheck "More info" links) ============ -->
+<div class="modal" id="info-modal" hidden role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
+  <div class="modal-overlay" data-close></div>
+  <div class="modal-card">
+    <button class="modal-close" data-close aria-label="Close">&times;</button>
+    <h3 class="modal-title" id="info-modal-title"></h3>
+    <div class="modal-body" id="info-modal-body"></div>
+  </div>
+</div>
+
+<script>
+  // Render Lucide icons (replaces every <i data-lucide="..."> with an inline SVG)
+  if (window.lucide) lucide.createIcons();
+
+  // Position the AutoCheck gauge dot along the arc based on data-score / data-min / data-max.
+  document.querySelectorAll('.ac-gauge').forEach(function(g){
+    var s  = parseFloat(g.dataset.score);
+    var lo = parseFloat(g.dataset.min);
+    var hi = parseFloat(g.dataset.max);
+    if (!isFinite(s) || !isFinite(lo) || !isFinite(hi) || hi <= lo) return;
+    var t   = Math.min(1, Math.max(0, (s - lo) / (hi - lo)));
+    var ang = Math.PI * (1 - t);                     // 180° (left) at min, 0° (right) at max
+    var cx  = 110 + 85 * Math.cos(ang);
+    var cy  = 110 - 85 * Math.sin(ang);
+    var dot = g.querySelector('.ac-dot');
+    if (dot){ dot.setAttribute('cx', cx.toFixed(2)); dot.setAttribute('cy', cy.toFixed(2)); }
+  });
+
+  // Click section header to collapse / expand
+  document.querySelectorAll('.section .section-bar').forEach(function(bar){
+    bar.addEventListener('click', function(){ bar.parentElement.classList.toggle('collapsed'); });
+  });
+
+  // Full AutoCheck Report — expand/collapse the body below the row
+  (function(){
+    var row  = document.getElementById('full-report-toggle');
+    var body = document.querySelector('.full-report-body');
+    if (!row || !body) return;
+    row.addEventListener('click', function(){
+      var open = !body.hasAttribute('hidden') ? false : true;
+      if (open){ body.removeAttribute('hidden'); row.classList.add('open'); }
+      else     { body.setAttribute('hidden',''); row.classList.remove('open'); }
+    });
+  })();
+
+  // ===== AutoCheck "More info" pop-up modals =====
+  var INFO = {
+    'title-brand': {
+      title: 'Major State Title Brand Check',
+      body: '<p>AutoCheck checks the following major title brands from Division of Motor Vehicles (DMV). If any of the title brands below is reported from the 50 U.S. states, the vehicle is not qualified for the Buyback Protection Program.</p>'
+          + '<ul>'
+          +   '<li>Fire brand</li>'
+          +   '<li>Hail or flood brand</li>'
+          +   '<li>Junk or scrapped brand</li>'
+          +   '<li>Manufacturer buyback</li>'
+          +   '<li>Lemon</li>'
+          +   '<li>Salvage brand</li>'
+          +   '<li>Rebuilt or rebuildable brand</li>'
+          +   '<li>Odometer brand (EML, NAM etc.)</li>'
+          + '</ul>'
+    },
+    'accident': {
+      title: 'Accident Check',
+      body: '<p>AutoCheck checks accident records from government sources or independent agencies. Not all accidents are reported to AutoCheck.</p>'
+    },
+    'damage': {
+      title: 'Damage Check',
+      body: '<p>AutoCheck checks damage-related events from an auction or an independent source. Not all damage events are reported to AutoCheck.</p>'
+          + '<p><strong>"Damage Reported"</strong> means that (i) a State agency or third party reported an event that did or may have resulted in vehicle frame or mechanical damage, such as a collision or incident such as vandalism or theft, or (ii) a third party reported that an inspection indicates that a vehicle appears to have sustained frame or other damage. Not all damage events are reported to AutoCheck and the damage severity of reported events will vary. In all events AutoCheck recommends that prospective vehicle purchasers conduct a detailed vehicle inspection prior to purchase of a pre-owned vehicle.</p>'
+          + '<p><strong>"Alert"</strong> means that damage was reported per the criteria above, however, there is one or more repair record also. This usually applies to frame/structural damage.</p>'
+    },
+    'odometer': {
+      title: 'Odometer Check',
+      body: '<p>AutoCheck checks the following to determine if there are potential odometer issues:</p>'
+          + '<p><strong>State Odometer Title Brands.</strong> The following brands and similar brands are checked:</p>'
+          + '<ul>'
+          +   '<li><strong>Not Actual Mileage:</strong> issued when the owner states that the odometer may not reflect the actual mileage of the vehicle. Reasons usually include possible tampering, damage or odometer replacement.</li>'
+          +   '<li><strong>Exceeds Mechanical Limits:</strong> required disclosure under the Truth in Mileage Act when a vehicle with a 5-digit odometer cannot accurately track mileage after 99,999 miles because the odometer rolls over.</li>'
+          +   '<li><strong>Auction Announcements:</strong> sellers must disclose if a vehicle (under 16,000 GVW) has an inoperable odometer, an odometer reading exceeding mechanical limits, or an odometer reading that does not represent the actual mileage.</li>'
+          + '</ul>'
+          + '<p><strong>Odometer Calculation.</strong> AutoCheck examines odometer readings reported to AutoCheck to detect potential odometer rollback or tampering. Business rules flag readings that are significantly less than previously reported values.</p>'
+    },
+    'other-title': {
+      title: 'Other Title Brand and Specific Event Check',
+      body: '<p>AutoCheck reports non-major title brands and specific events listed below. Not all significant events are reported to AutoCheck.</p>'
+          + '<ul>'
+          +   '<li>Insurance loss record</li>'
+          +   '<li>Titled to an insurance company record</li>'
+          +   '<li>Auction Lemon / Manufacturer Buyback record</li>'
+          +   '<li>Abandoned title record</li>'
+          +   '<li>Grey market title</li>'
+          +   '<li>Loan/Lien record(s)</li>'
+          +   '<li>Repossessed record</li>'
+          +   '<li>Corrected title record</li>'
+          +   '<li>Duplicate title record</li>'
+          +   '<li>Theft record</li>'
+          + '</ul>'
+    },
+    'vehicle-usage': {
+      title: 'Vehicle Usage Check',
+      body: '<p>AutoCheck shows other use if any of the following uses are reported. Otherwise, AutoCheck will show the vehicle as <strong>"Personal use"</strong>.</p>'
+          + '<ul>'
+          +   '<li>Fleet, rental and/or lease use</li>'
+          +   '<li>Taxi use</li>'
+          +   '<li>Police use</li>'
+          +   '<li>Government use</li>'
+          +   '<li>Driver Ed</li>'
+          +   '<li>Livery use</li>'
+          +   '<li>Commercial</li>'
+          + '</ul>'
+    },
+    'buyback': {
+      title: 'AutoCheck Buyback Protection',
+      body: '<p>AutoCheck checks the major title brands below from the Division of Motor Vehicles (DMV) in 50 U.S. states. If any of the major state title brand(s) below are reported, or other Buyback Protection terms and conditions are not met, the vehicle will not qualify for Buyback Protection.</p>'
+          + '<ul>'
+          +   '<li>Fire brand</li>'
+          +   '<li>Hail or flood brand</li>'
+          +   '<li>Junk or scrapped brand</li>'
+          +   '<li>Manufacturer buyback</li>'
+          +   '<li>Lemon</li>'
+          +   '<li>Salvage brand</li>'
+          +   '<li>Rebuilt or rebuildable brand</li>'
+          +   '<li>Odometer brand (EML, NAM etc.)</li>'
+          + '</ul>'
+    }
+  };
+
+  (function(){
+    var modal      = document.getElementById('info-modal');
+    var modalTitle = document.getElementById('info-modal-title');
+    var modalBody  = document.getElementById('info-modal-body');
+    if (!modal) return;
+
+    function openModal(key){
+      var data = INFO[key];
+      if (!data){ return; }
+      modalTitle.textContent = data.title;
+      modalBody.innerHTML = data.body;
+      modal.removeAttribute('hidden');
+      document.body.style.overflow = 'hidden';
+    }
+    function closeModal(){
+      modal.setAttribute('hidden','');
+      document.body.style.overflow = '';
+    }
+
+    document.querySelectorAll('.check-list .more').forEach(function(link){
+      link.addEventListener('click', function(e){
+        e.preventDefault();
+        openModal(link.dataset.info);
+      });
+    });
+    modal.querySelectorAll('[data-close]').forEach(function(el){
+      el.addEventListener('click', closeModal);
+    });
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape' && !modal.hasAttribute('hidden')) closeModal();
+    });
+  })();
+</script>
+</body>
+</html>

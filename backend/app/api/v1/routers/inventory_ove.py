@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -40,6 +42,9 @@ from app.services.ove_inventory_service import (
     upsert_ove_vehicle_detail,
     upsert_scraper_heartbeat,
 )
+from app.services.condition_report_ai_review_service import review_condition_report_with_ai
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_service_token)])
 
@@ -503,6 +508,18 @@ def push_ove_detail(vin: str, payload: OveDetailPushRequest, db: Session = Depen
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
+    ai_review_queued = False
+    if app_settings.openai_cr_review_mode == "inline" and app_settings.openai_api_key and detail.condition_report_json:
+        vehicle_payload = {
+            "vin": detail.vin,
+            "title": payload.listing_snapshot.title,
+            "source_platform": payload.source_platform.value,
+        }
+        detail.condition_report_json = review_condition_report_with_ai(
+            detail.condition_report_json,
+            vehicle=vehicle_payload,
+        )
+
     try:
         GHLLifecycleService().handle_condition_report_completion(db, detail=detail, completed_requests=completed_requests)
     except Exception:
@@ -520,6 +537,8 @@ def push_ove_detail(vin: str, payload: OveDetailPushRequest, db: Session = Depen
             payload.listing_snapshot.model_dump(exclude_none=True, exclude_defaults=True)
         ),
         "condition_report_present": bool(payload.condition_report),
+        "ai_review_mode": app_settings.openai_cr_review_mode,
+        "ai_review_queued": ai_review_queued,
         "sync_metadata": payload.sync_metadata,
     }
     log_event(
@@ -530,4 +549,13 @@ def push_ove_detail(vin: str, payload: OveDetailPushRequest, db: Session = Depen
         payload=response,
     )
     db.commit()
+    if app_settings.openai_cr_review_mode == "async" and app_settings.openai_api_key and detail.condition_report_json:
+        try:
+            from app.tasks.jobs import ai_review_ove_detail
+
+            ai_review_ove_detail.delay(detail.vin)
+            ai_review_queued = True
+            response["ai_review_queued"] = True
+        except Exception:
+            logger.warning("condition_report_ai_review_enqueue_failed vin=%s", detail.vin, exc_info=True)
     return ok(response)

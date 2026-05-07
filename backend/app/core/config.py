@@ -229,6 +229,23 @@ class Settings(BaseSettings):
     email_login_expire_minutes: int = Field(default=1440, alias="EMAIL_LOGIN_EXPIRE_MINUTES")
 
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openai_cr_review_mode: Literal["disabled", "inline", "async"] = Field(
+        default="disabled",
+        alias="OPENAI_CR_REVIEW_MODE",
+    )
+    openai_cr_review_model: str = Field(
+        default="gpt-5.4-mini-2026-03-17",
+        alias="OPENAI_CR_REVIEW_MODEL",
+    )
+    openai_cr_review_auto_apply_confidence: float = Field(
+        default=0.82,
+        alias="OPENAI_CR_REVIEW_CONFIDENCE_AUTO_APPLY",
+    )
+    openai_cr_review_input_char_limit: int = Field(
+        default=14000,
+        alias="OPENAI_CR_REVIEW_INPUT_CHAR_LIMIT",
+    )
     datadog_api_key: str = Field(default="", alias="DATADOG_API_KEY")
     mixpanel_token: str = Field(default="", alias="MIXPANEL_TOKEN")
     sentry_dsn: str = Field(default="", alias="SENTRY_DSN")

@@ -9,7 +9,8 @@ from app.core.config import settings
 from app.core.constants import ImageTier
 from app.db.session import SessionLocal
 from app.integrations.marketcheck_client import MarketCheckClient
-from app.models.entities import BuyerProfile, Deal, User, VehicleImageAsset
+from app.models.entities import BuyerProfile, Deal, OveVehicleDetail, User, Vehicle, VehicleImageAsset
+from app.services.condition_report_ai_review_service import review_condition_report_with_ai
 from app.services.inventory_service import (
     cleanup_stale_marketcheck_inventory,
     ingest_marketcheck_inventory,
@@ -158,6 +159,43 @@ def rerun_all_matching() -> dict:
             runs += 1
         db.commit()
     return {"runs": runs}
+
+
+@celery_app.task(name="condition_reports.ai_review_ove_detail")
+def ai_review_ove_detail(vin: str) -> dict:
+    normalized_vin = vin.strip().upper()
+    with SessionLocal() as db:
+        detail = db.get(OveVehicleDetail, normalized_vin)
+        vehicle = db.get(Vehicle, normalized_vin)
+        if not detail or not detail.condition_report_json:
+            return {"status": "skipped", "reason": "missing_condition_report", "vin": normalized_vin}
+        vehicle_payload = _vehicle_ai_payload(vehicle) if vehicle else {}
+        reviewed = review_condition_report_with_ai(
+            detail.condition_report_json,
+            vehicle=vehicle_payload,
+        )
+        detail.condition_report_json = reviewed
+        db.commit()
+        ai_review = reviewed.get("ai_review") if isinstance(reviewed, dict) else {}
+        return {
+            "status": "ok",
+            "vin": normalized_vin,
+            "ai_review": ai_review,
+        }
+
+
+def _vehicle_ai_payload(vehicle: Vehicle) -> dict:
+    return {
+        "vin": vehicle.vin,
+        "year": vehicle.year,
+        "make": vehicle.make,
+        "model": vehicle.model,
+        "trim": vehicle.trim,
+        "body_type": vehicle.body_type,
+        "odometer": vehicle.odometer,
+        "exterior_color": vehicle.exterior_color,
+        "interior_color": vehicle.interior_color,
+    }
 
 
 @celery_app.task(name="sync.ghl_reconcile")

@@ -39,6 +39,10 @@ from app.schemas.ove_inventory import (
     _is_issue_value,
     _normalize_inspection,
 )
+from app.schemas.condition_report_granular import (
+    apply_granular_ai_patches,
+    build_granular_condition_report,
+)
 from app.services import ove_inventory_service
 from app.services.hot_deal_service import get_active_hot_deals
 
@@ -1282,3 +1286,68 @@ class TestNaaaInspection:
         assert img.category == "ext"
         img_default = OveImagePayload(url="https://example.com/img.jpg")
         assert img_default.category == "all"
+
+
+class TestGranularConditionReport:
+    def test_defaults_to_no_damage_reported_for_clean_exterior_fields(self) -> None:
+        report = {
+            "inspection": _normalize_inspection({}, {}),
+            "damage_items": [],
+            "tire_depths": {
+                "lf": {"position_label": "LF", "tread_depth": "7/32", "issue": "No Issues"},
+                "rf": {"position_label": "RF", "tread_depth": "7/32", "issue": "No Issues"},
+                "lr": {"position_label": "LR", "tread_depth": "6/32", "issue": "No Issues"},
+                "rr": {"position_label": "RR", "tread_depth": "6/32", "issue": "No Issues"},
+            },
+        }
+        granular = build_granular_condition_report(report)
+
+        assert granular["exterior"]["fields"]["front_bumper"]["value"] == "Normal - No Damage Reported"
+        assert granular["interior"]["fields"]["passenger_rear_door_panel"]["value"] == "Normal - No Damage Reported"
+        assert granular["tires"]["fields"]["driver_front_tire_depth"]["value"] == "7/32"
+        assert granular["tires"]["issue_count"] == 0
+
+    def test_text_disclosure_maps_to_specific_granular_field(self) -> None:
+        report = {
+            "inspection": _normalize_inspection({}, {}),
+            "damage_items": [],
+            "remarks": ["Rip leather on rear passenger door armrest"],
+        }
+        granular = build_granular_condition_report(report)
+        field = granular["interior"]["fields"]["passenger_rear_door_panel"]
+
+        assert field["status"] == "issue"
+        assert "rear passenger door armrest" in field["value"].lower()
+        assert field["source"] == "remarks"
+        assert granular["interior"]["issue_count"] == 1
+
+    def test_ai_patch_requires_confidence_and_evidence(self) -> None:
+        report = {
+            "granular_inspection": build_granular_condition_report({"inspection": _normalize_inspection({}, {})})
+        }
+        updated, accepted = apply_granular_ai_patches(
+            report,
+            [
+                {
+                    "field_path": "exterior.front_bumper",
+                    "status": "issue",
+                    "value": "Scratch reported on front bumper",
+                    "evidence": "front bumper scratch",
+                    "confidence": 0.9,
+                    "reason": "Direct location and damage phrase.",
+                },
+                {
+                    "field_path": "exterior.hood",
+                    "status": "issue",
+                    "value": "Hood damage",
+                    "evidence": "",
+                    "confidence": 0.95,
+                    "reason": "No evidence should be rejected.",
+                },
+            ],
+            auto_apply_confidence=0.82,
+        )
+
+        assert len(accepted) == 1
+        assert updated["granular_inspection"]["exterior"]["fields"]["front_bumper"]["status"] == "issue"
+        assert updated["granular_inspection"]["exterior"]["fields"]["hood"]["status"] == "normal"

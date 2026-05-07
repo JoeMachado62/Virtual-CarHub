@@ -3,6 +3,21 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  FaArrowLeft,
+  FaCar,
+  FaChevronDown,
+  FaChevronLeft,
+  FaChevronRight,
+  FaCircleDot,
+  FaFileLines,
+  FaGaugeHigh,
+  FaListCheck,
+  FaPrint,
+  FaTriangleExclamation,
+  FaUpRightAndDownLeftFromCenter,
+  FaWrench,
+} from "react-icons/fa6";
 
 import { apiFetch } from "@/lib/api";
 import { isAdminUser, loadValidAuthState } from "@/lib/auth";
@@ -136,6 +151,26 @@ type CategorizedImage = {
   role?: string;
 };
 
+type GranularField = {
+  label: string;
+  group?: string | null;
+  status: "normal" | "issue" | "unknown";
+  value: string;
+  source?: string;
+  confidence?: number;
+  evidence?: string[];
+  image_refs?: string[];
+};
+
+type GranularSection = {
+  label: string;
+  issue_count: number;
+  groups?: Record<string, string>;
+  fields: Record<string, GranularField>;
+};
+
+type GranularInspection = Record<string, GranularSection>;
+
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
 const AUCTION_DEFAULT = "/assets/images/portfolio/VCH Auction default image.webp";
 
@@ -161,6 +196,7 @@ const IMAGE_CATEGORIES = [
 ] as const;
 
 const INSPECTION_SECTION_ORDER = ["drivability", "exterior", "interior", "mechanical", "tires"] as const;
+const GRANULAR_SECTION_ORDER = ["drivability", "exterior", "interior", "mechanical", "tires"] as const;
 const CARFAX_PARTNER_URL = "https://www.carfax.com/VehicleHistory/p/Report.cfx";
 const CARFAX_PARTNER_ID = "DVW_1";
 
@@ -176,6 +212,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [activeCategory, setActiveCategory] = useState("all");
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -291,6 +328,11 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
     return buildLegacyInspection(report);
   }, [report]);
   const visibleInspection = useMemo(() => filterVisibleInspection(inspection), [inspection]);
+  const granularInspection = useMemo(() => {
+    const raw = report.granular_inspection as GranularInspection | undefined;
+    if (raw && typeof raw === "object" && Object.keys(raw).length > 0) return raw;
+    return buildGranularInspectionFallback(report, visibleInspection);
+  }, [report, visibleInspection]);
 
   // Title info
   const titleStatus = typeof report.title_status === "string" ? report.title_status : null;
@@ -333,6 +375,24 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   // Problem highlights
   const problemHighlights = Array.isArray(report.problem_highlights) ? report.problem_highlights.map(String) : [];
 
+  useEffect(() => {
+    if (!granularInspection) return;
+    setOpenSections((current) => {
+      const next = { ...current };
+      for (const sectionId of GRANULAR_SECTION_ORDER) {
+        if (next[`granular-${sectionId}`] === undefined) {
+          next[`granular-${sectionId}`] = Boolean(granularInspection[sectionId]?.issue_count);
+        }
+      }
+      if (next["title-history"] === undefined) next["title-history"] = true;
+      if (next["problem-highlights"] === undefined) next["problem-highlights"] = problemHighlights.length > 0;
+      if (next["equipment"] === undefined) next["equipment"] = false;
+      if (next["damage"] === undefined) next["damage"] = damageItems.length > 0;
+      if (next["vehicle-notes"] === undefined) next["vehicle-notes"] = false;
+      return next;
+    });
+  }, [granularInspection, problemHighlights.length, damageItems.length]);
+
   // Vehicle info
   const vehicleInfo = useMemo(() => {
     if (!vehicle) return {};
@@ -347,6 +407,14 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
       seller: String(vehicle.auction_house || ""),
     };
   }, [vehicle, report]);
+
+  const toggleSection = useCallback((sectionId: string) => {
+    setOpenSections((current) => ({ ...current, [sectionId]: !current[sectionId] }));
+  }, []);
+
+  const isSectionOpen = useCallback((sectionId: string, defaultOpen = false) => {
+    return openSections[sectionId] ?? defaultOpen;
+  }, [openSections]);
 
   if (loading || authorized === null) {
     return (
@@ -387,14 +455,14 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
             <h2 className="cr-doc-brand">VirtualCarHub Inspection Report</h2>
             <div className="cr-doc-header-actions">
               <Link className="button ghost" href={`/vinventory/${encodeURIComponent(vehicle.public_slug || vehicle.vin)}` as any}>
-                Back to Vehicle
+                <FaArrowLeft aria-hidden="true" /> Back to Vehicle
               </Link>
               {isAdmin && crUrl && (
                 <button className="button" onClick={() => window.open(crUrl, "_blank", "noopener,noreferrer")}>
                   See Original Report
                 </button>
               )}
-              <button className="button ghost" onClick={() => window.print()}>Print</button>
+              <button className="button ghost" onClick={() => window.print()}><FaPrint aria-hidden="true" /> Print</button>
             </div>
           </div>
         </section>
@@ -450,13 +518,13 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
               />
               {filteredImages.length > 1 && (
                 <>
-                  <button className="cr-gallery-arrow cr-gallery-arrow-left" onClick={() => navigateGallery(-1)} aria-label="Previous image">&lsaquo;</button>
-                  <button className="cr-gallery-arrow cr-gallery-arrow-right" onClick={() => navigateGallery(1)} aria-label="Next image">&rsaquo;</button>
+                  <button className="cr-gallery-arrow cr-gallery-arrow-left" onClick={() => navigateGallery(-1)} aria-label="Previous image"><FaChevronLeft aria-hidden="true" /></button>
+                  <button className="cr-gallery-arrow cr-gallery-arrow-right" onClick={() => navigateGallery(1)} aria-label="Next image"><FaChevronRight aria-hidden="true" /></button>
                 </>
               )}
               <div className="cr-gallery-counter">
                 {filteredImages.length > 0 ? `${galleryIndex + 1} of ${filteredImages.length}` : "No photos"}
-                <button className="cr-gallery-fullscreen" onClick={() => setLightboxOpen(true)} aria-label="Full screen">&#x26F6;</button>
+                <button className="cr-gallery-fullscreen" onClick={() => setLightboxOpen(true)} aria-label="Full screen"><FaUpRightAndDownLeftFromCenter aria-hidden="true" /></button>
               </div>
             </div>
             {/* Thumbnail strip */}
@@ -540,12 +608,12 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
             )}
 
             {/* Issues Summary */}
-            {visibleInspection && (
+            {granularInspection && (
               <div className="cr-panel-section">
                 <h4 className="cr-panel-heading">Issues</h4>
                 <div className="cr-issues-table">
-                  {INSPECTION_SECTION_ORDER.map((sectionId) => {
-                    const section = visibleInspection[sectionId];
+                  {GRANULAR_SECTION_ORDER.map((sectionId) => {
+                    const section = granularInspection[sectionId];
                     if (!section) return null;
                     const count = section.issue_count;
                     return (
@@ -562,36 +630,35 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         </section>
 
         {/* ── INSPECTION HEADER BAR ── */}
-        {visibleInspection && <div className="cr-inspection-banner">INSPECTION</div>}
+        {granularInspection && <div className="cr-inspection-banner">INSPECTION</div>}
 
-        {/* ── NAAA INSPECTION SECTIONS ── */}
-        {visibleInspection && INSPECTION_SECTION_ORDER.map((sectionId) => {
-          const section = visibleInspection[sectionId];
+        {/* ── GRANULAR INSPECTION SECTIONS ── */}
+        {granularInspection && GRANULAR_SECTION_ORDER.map((sectionId) => {
+          const section = granularInspection[sectionId];
           if (!section) return null;
-          const fields = Object.values(section.fields);
+          const open = isSectionOpen(`granular-${sectionId}`, Boolean(section.issue_count));
           return (
             <section key={sectionId} className="cr-section">
-              <h3 className="cr-section-bar">{section.label}</h3>
-              <div className="cr-inspection-grid">
-                {fields.map((field) => {
-                  const isUnavailable = field.value.toLowerCase() === "not available";
-                  const cls = field.has_issue ? " cr-field-issue" : isUnavailable ? " cr-field-unavailable" : "";
-                  return (
-                    <div key={field.label} className={`cr-field-cell${cls}`}>
-                      <span className="cr-field-label">{field.label}</span>
-                      <span className="cr-field-value">{field.value}</span>
-                    </div>
-                  );
-                })}
-              </div>
+              <button className="cr-section-bar cr-section-toggle" onClick={() => toggleSection(`granular-${sectionId}`)} aria-expanded={open}>
+                <span className="cr-section-title">
+                  {renderSectionIcon(sectionId)}
+                  {section.label}
+                  {section.issue_count > 0 && <span className="cr-section-issue-pill">{section.issue_count}</span>}
+                </span>
+                <FaChevronDown className={`cr-section-chevron${open ? " cr-section-chevron-open" : ""}`} aria-hidden="true" />
+              </button>
+              {open && renderGranularSectionBody(section)}
             </section>
           );
         })}
 
         {/* ── TITLE & VEHICLE HISTORY (AutoCheck integrated) ── */}
         <section className="cr-section">
-          <h3 className="cr-section-bar">TITLE &amp; VEHICLE HISTORY</h3>
-          <div className="cr-title-history-content">
+          <button className="cr-section-bar cr-section-toggle" onClick={() => toggleSection("title-history")} aria-expanded={isSectionOpen("title-history", true)}>
+            <span className="cr-section-title"><FaFileLines aria-hidden="true" /> TITLE &amp; VEHICLE HISTORY</span>
+            <FaChevronDown className={`cr-section-chevron${isSectionOpen("title-history", true) ? " cr-section-chevron-open" : ""}`} aria-hidden="true" />
+          </button>
+          {isSectionOpen("title-history", true) && <div className="cr-title-history-content">
             {/* Title info row */}
             <div className="cr-inspection-grid" style={{ marginBottom: 16 }}>
               <div className="cr-field-cell">
@@ -745,88 +812,110 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
                 )}
               </div>
             )}
-          </div>
+          </div>}
         </section>
 
         {/* ── PROBLEM HIGHLIGHTS ── */}
         {problemHighlights.length > 0 && (
           <section className="cr-section">
-            <h3 className="cr-section-bar">PROBLEM HIGHLIGHTS</h3>
-            <ul className="cr-announce-list cr-problem-list">
-              {problemHighlights.map((h, i) => <li key={i}>{h}</li>)}
-            </ul>
+            <button className="cr-section-bar cr-section-toggle" onClick={() => toggleSection("problem-highlights")} aria-expanded={isSectionOpen("problem-highlights", true)}>
+              <span className="cr-section-title"><FaTriangleExclamation aria-hidden="true" /> PROBLEM HIGHLIGHTS</span>
+              <FaChevronDown className={`cr-section-chevron${isSectionOpen("problem-highlights", true) ? " cr-section-chevron-open" : ""}`} aria-hidden="true" />
+            </button>
+            {isSectionOpen("problem-highlights", true) && (
+              <ul className="cr-announce-list cr-problem-list">
+                {problemHighlights.map((h, i) => <li key={i}>{h}</li>)}
+              </ul>
+            )}
           </section>
         )}
 
         {/* ── EQUIPMENT / FEATURES ── */}
         {equipmentSection.items.length > 0 && (
           <section className="cr-section">
-            <h3 className="cr-section-bar">{equipmentSection.title}</h3>
-            <div className="cr-equipment-wrap">
-              {equipmentSection.subtitle && <p className="cr-comments">{equipmentSection.subtitle}</p>}
-              <div className="cr-equipment-grid">
-                {equipmentSection.items.map((item) => (
-                  <div key={item.key} className="cr-equipment-card">
-                    <strong className="cr-equipment-title">{item.title}</strong>
-                    {item.meta && <span className="cr-equipment-meta">{item.meta}</span>}
-                    {item.detail && <span className="cr-equipment-detail">{item.detail}</span>}
-                  </div>
-                ))}
+            <button className="cr-section-bar cr-section-toggle" onClick={() => toggleSection("equipment")} aria-expanded={isSectionOpen("equipment", false)}>
+              <span className="cr-section-title"><FaListCheck aria-hidden="true" /> {equipmentSection.title}</span>
+              <FaChevronDown className={`cr-section-chevron${isSectionOpen("equipment", false) ? " cr-section-chevron-open" : ""}`} aria-hidden="true" />
+            </button>
+            {isSectionOpen("equipment", false) && (
+              <div className="cr-equipment-wrap">
+                {equipmentSection.subtitle && <p className="cr-comments">{equipmentSection.subtitle}</p>}
+                <div className="cr-equipment-grid">
+                  {equipmentSection.items.map((item) => (
+                    <div key={item.key} className="cr-equipment-card">
+                      <strong className="cr-equipment-title">{item.title}</strong>
+                      {item.meta && <span className="cr-equipment-meta">{item.meta}</span>}
+                      {item.detail && <span className="cr-equipment-detail">{item.detail}</span>}
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </section>
         )}
 
         {/* ── DAMAGE REPORT ── */}
         {damageItems.length > 0 && (
           <section className="cr-section">
-            <h3 className="cr-section-bar">
-              DAMAGE REPORT
-              {damageSummary && <span className="cr-damage-count"> &mdash; {damageSummary.total_items ?? damageItems.length} item{(damageSummary.total_items ?? damageItems.length) !== 1 ? "s" : ""}</span>}
-              {damageSummary?.structural_issue && <span className="cr-structural-flag"> STRUCTURAL ISSUE</span>}
-            </h3>
-            <table className="cr-damage-table">
-              <thead>
-                <tr><th>Location</th><th>Damage Type</th><th>Severity</th><th>Description</th><th>Pics</th></tr>
-              </thead>
-              <tbody>
-                {damageItems.map((d, i) => {
-                  const photoUrls = getDamagePhotoUrls(d);
-                  return (
-                    <tr key={i}>
-                      <td>{getDamageLocation(d)}</td>
-                      <td>{getDamageType(d)}</td>
-                      <td>
-                        <span className={`cr-severity cr-severity-${getDamageSeverityColor(d)}`}>
-                          {getDamageSeverity(d)}
-                        </span>
-                      </td>
-                      <td>{getDamageDescription(d)}</td>
-                      <td>
-                        {photoUrls.length > 0 ? (
-                          <button className="cr-damage-photo-button" onClick={() => openExternal(photoUrls[0])}>
-                            View {photoUrls.length > 1 ? photoUrls.length : ""}
-                          </button>
-                        ) : "\u2014"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {severitySummary && <p className="cr-comments" style={{ fontSize: 13, color: "var(--muted)" }}>{severitySummary}</p>}
+            <button className="cr-section-bar cr-section-toggle" onClick={() => toggleSection("damage")} aria-expanded={isSectionOpen("damage", true)}>
+              <span className="cr-section-title">
+                <FaTriangleExclamation aria-hidden="true" /> DAMAGE REPORT
+                {damageSummary && <span className="cr-damage-count">{damageSummary.total_items ?? damageItems.length} item{(damageSummary.total_items ?? damageItems.length) !== 1 ? "s" : ""}</span>}
+                {damageSummary?.structural_issue && <span className="cr-structural-flag">STRUCTURAL ISSUE</span>}
+              </span>
+              <FaChevronDown className={`cr-section-chevron${isSectionOpen("damage", true) ? " cr-section-chevron-open" : ""}`} aria-hidden="true" />
+            </button>
+            {isSectionOpen("damage", true) && (
+              <>
+                <table className="cr-damage-table">
+                  <thead>
+                    <tr><th>Location</th><th>Damage Type</th><th>Severity</th><th>Description</th><th>Pics</th></tr>
+                  </thead>
+                  <tbody>
+                    {damageItems.map((d, i) => {
+                      const photoUrls = getDamagePhotoUrls(d);
+                      return (
+                        <tr key={i}>
+                          <td>{getDamageLocation(d)}</td>
+                          <td>{getDamageType(d)}</td>
+                          <td>
+                            <span className={`cr-severity cr-severity-${getDamageSeverityColor(d)}`}>
+                              {getDamageSeverity(d)}
+                            </span>
+                          </td>
+                          <td>{getDamageDescription(d)}</td>
+                          <td>
+                            {photoUrls.length > 0 ? (
+                              <button className="cr-damage-photo-button" onClick={() => openExternal(photoUrls[0])}>
+                                View {photoUrls.length > 1 ? photoUrls.length : ""}
+                              </button>
+                            ) : "\u2014"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {severitySummary && <p className="cr-comments" style={{ fontSize: 13, color: "var(--muted)" }}>{severitySummary}</p>}
+              </>
+            )}
           </section>
         )}
 
         {/* ── VEHICLE NOTES ── */}
         <section className="cr-section">
-          <h3 className="cr-section-bar">VEHICLE NOTES</h3>
-          {sellerCommentsItems.length > 0 ? (
-            <ul className="cr-announce-list">
-              {sellerCommentsItems.map((c, i) => <li key={i}>{sanitizePublicText(c)}</li>)}
-            </ul>
-          ) : (
-            <p className="cr-comments">{sanitizePublicText(vehicle.seller_comments || "") || "No comments provided."}</p>
+          <button className="cr-section-bar cr-section-toggle" onClick={() => toggleSection("vehicle-notes")} aria-expanded={isSectionOpen("vehicle-notes", false)}>
+            <span className="cr-section-title"><FaFileLines aria-hidden="true" /> VEHICLE NOTES</span>
+            <FaChevronDown className={`cr-section-chevron${isSectionOpen("vehicle-notes", false) ? " cr-section-chevron-open" : ""}`} aria-hidden="true" />
+          </button>
+          {isSectionOpen("vehicle-notes", false) && (
+            sellerCommentsItems.length > 0 ? (
+              <ul className="cr-announce-list">
+                {sellerCommentsItems.map((c, i) => <li key={i}>{sanitizePublicText(c)}</li>)}
+              </ul>
+            ) : (
+              <p className="cr-comments">{sanitizePublicText(vehicle.seller_comments || "") || "No comments provided."}</p>
+            )
           )}
         </section>
 
@@ -1030,6 +1119,36 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           text-transform: uppercase; letter-spacing: 0.5px;
           border-left: 4px solid #c9a44a;
         }
+        .cr-section-toggle {
+          width: 100%; border-top: 0; border-right: 0; border-bottom: 0;
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 12px; text-align: left; cursor: pointer; font-family: inherit;
+        }
+        .cr-section-toggle:hover { background: #32324a; }
+        .cr-section-title { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+        .cr-section-title svg { color: #c9a44a; flex: 0 0 auto; }
+        .cr-section-chevron { color: #aab; transition: transform 0.15s ease; flex: 0 0 auto; }
+        .cr-section-chevron-open { transform: rotate(180deg); }
+        .cr-section-issue-pill {
+          display: inline-flex; align-items: center; justify-content: center;
+          min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px;
+          background: #e74c3c; color: #fff; font-size: 12px; letter-spacing: 0;
+        }
+        .cr-granular-body { display: grid; gap: 0; }
+        .cr-group-title {
+          padding: 10px 14px 7px; color: #aab; font-size: 11px; font-weight: 800;
+          text-transform: uppercase; letter-spacing: 0.7px; background: rgba(255,255,255,0.02);
+        }
+        .cr-field-source {
+          display: block; margin-top: 5px; color: #8790ad; font-size: 11px;
+          text-transform: capitalize;
+        }
+        .cr-field-evidence {
+          display: block; margin-top: 5px; color: #d6b46a; font-size: 11px; line-height: 1.35;
+        }
+        .cr-tires-grid {
+          display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0;
+        }
 
         /* ── Inspection Grid (3-col) ── */
         .cr-inspection-grid {
@@ -1067,6 +1186,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         .cr-severity { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: 600; }
         .cr-severity-green { background: #1a4d2e; color: #7c7; }
         .cr-severity-yellow { background: #4d3d0a; color: #e7a33e; }
+        .cr-severity-orange { background: #4d2d0a; color: #ffb35c; }
         .cr-severity-red { background: #4d1a1a; color: #e74c3c; }
         .cr-severity-gray { background: #333; color: #aaa; }
         .cr-damage-photo-button {
@@ -1305,6 +1425,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           .cr-gallery-tab { font-size: 11px; padding: 6px 8px; }
           .cr-summary-panel { max-height: none; }
           .cr-inspection-grid { grid-template-columns: 1fr; }
+          .cr-tires-grid { grid-template-columns: 1fr; }
           .cr-image-grid { grid-template-columns: repeat(2, 1fr); }
           .cr-equipment-grid { grid-template-columns: 1fr; }
           .cr-autocheck-hero { grid-template-columns: 1fr; }
@@ -1364,6 +1485,8 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         :global(:root[data-theme="light"]) .cr-issues-count { color: #334155; }
         :global(:root[data-theme="light"]) .cr-inspection-banner { background: #e8edf5; color: #1a2a40; }
         :global(:root[data-theme="light"]) .cr-section-bar { background: #edf0f5; color: #1a2a40; }
+        :global(:root[data-theme="light"]) .cr-section-toggle:hover { background: #e3e8f0; }
+        :global(:root[data-theme="light"]) .cr-group-title { background: #f7f9fc; color: var(--muted); }
         :global(:root[data-theme="light"]) .cr-field-cell { border-bottom-color: var(--line); border-right-color: var(--line); }
         :global(:root[data-theme="light"]) .cr-field-label { color: var(--muted); }
         :global(:root[data-theme="light"]) .cr-field-value { color: #1a2a40; }
@@ -1375,6 +1498,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         :global(:root[data-theme="light"]) .cr-damage-table td { border-bottom-color: var(--line); color: #334155; }
         :global(:root[data-theme="light"]) .cr-severity-green { background: #e6f5ec; color: #276738; }
         :global(:root[data-theme="light"]) .cr-severity-yellow { background: #fef4e1; color: #7a5c10; }
+        :global(:root[data-theme="light"]) .cr-severity-orange { background: #fff0df; color: #a14f0b; }
         :global(:root[data-theme="light"]) .cr-severity-red { background: #fde8e8; color: #b91c1c; }
         :global(:root[data-theme="light"]) .cr-severity-gray { background: #edf0f5; color: var(--muted); }
         :global(:root[data-theme="light"]) .cr-equipment-card { border-color: var(--line); background: var(--surface-soft); }
@@ -1464,6 +1588,100 @@ function renderAutoCheckCheck(label: string, value: string | null | undefined) {
       <span className="cr-autocheck-check-more">More info</span>
     </div>
   );
+}
+
+function renderSectionIcon(sectionId: string) {
+  if (sectionId === "drivability") return <FaCar aria-hidden="true" />;
+  if (sectionId === "mechanical") return <FaWrench aria-hidden="true" />;
+  if (sectionId === "tires") return <FaCircleDot aria-hidden="true" />;
+  if (sectionId === "exterior") return <FaCar aria-hidden="true" />;
+  if (sectionId === "interior") return <FaGaugeHigh aria-hidden="true" />;
+  return <FaListCheck aria-hidden="true" />;
+}
+
+function renderGranularSectionBody(section: GranularSection) {
+  const fields = Object.entries(section.fields || {});
+  const grouped = new Map<string, Array<[string, GranularField]>>();
+  const groupLabels = section.groups || {};
+  for (const entry of fields) {
+    const groupId = entry[1].group || "default";
+    if (!grouped.has(groupId)) grouped.set(groupId, []);
+    grouped.get(groupId)!.push(entry);
+  }
+
+  return (
+    <div className="cr-granular-body">
+      {Array.from(grouped.entries()).map(([groupId, groupFields]) => (
+        <div className="cr-granular-group" key={groupId}>
+          {groupId !== "default" && <div className="cr-group-title">{groupLabels[groupId] || labelize(groupId)}</div>}
+          <div className={section.label === "Tires & Wheels" ? "cr-tires-grid" : "cr-inspection-grid"}>
+            {groupFields.map(([fieldId, field]) => renderGranularField(fieldId, field))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderGranularField(fieldId: string, field: GranularField) {
+  const cls = field.status === "issue" ? " cr-field-issue" : field.status === "unknown" ? " cr-field-unavailable" : "";
+  const evidence = Array.isArray(field.evidence) ? field.evidence.filter(Boolean).slice(0, 2) : [];
+  return (
+    <div key={fieldId} className={`cr-field-cell cr-granular-field${cls}`}>
+      <span className="cr-field-label">{field.label}</span>
+      <span className="cr-field-value">{field.value}</span>
+      {field.source && field.source !== "default" && (
+        <span className="cr-field-source">
+          {field.source.replace(/_/g, " ")}
+          {typeof field.confidence === "number" && field.confidence < 1 ? ` · ${Math.round(field.confidence * 100)}%` : ""}
+        </span>
+      )}
+      {evidence.length > 0 && (
+        <span className="cr-field-evidence">{evidence.join("; ")}</span>
+      )}
+    </div>
+  );
+}
+
+function buildGranularInspectionFallback(report: Record<string, unknown>, inspection: Inspection | null): GranularInspection | null {
+  const existing = report.granular_inspection;
+  if (existing && typeof existing === "object") return existing as GranularInspection;
+  if (!inspection) return null;
+  const sections: GranularInspection = {};
+  for (const [sectionId, section] of Object.entries(inspection)) {
+    sections[sectionId] = {
+      label: section.label,
+      issue_count: section.issue_count,
+      fields: Object.fromEntries(
+        Object.entries(section.fields).map(([fieldId, field]) => [
+          fieldId,
+          {
+            label: field.label,
+            status: field.has_issue ? "issue" : "normal",
+            value: field.has_issue ? field.value : normalizeCleanInspectionValue(sectionId, field.value),
+            source: field.is_default ? "default" : "inspection",
+            confidence: field.is_default ? 1 : 0.9,
+            evidence: field.has_issue ? [field.value] : [],
+            image_refs: [],
+          } satisfies GranularField,
+        ]),
+      ),
+    };
+  }
+  return sections;
+}
+
+function normalizeCleanInspectionValue(sectionId: string, value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "not inspected" || normalized === "not specified" || normalized === "not available") {
+    if (sectionId === "exterior" || sectionId === "interior") return "Normal - No Damage Reported";
+    return "Normal - No Issue Reported";
+  }
+  return value;
+}
+
+function labelize(value: string): string {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function filterVisibleInspection(inspection: Inspection | null): Inspection | null {

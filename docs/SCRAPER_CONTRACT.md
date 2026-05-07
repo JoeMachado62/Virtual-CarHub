@@ -193,6 +193,25 @@ the AutoCheck scrape was attempted but incomplete. Do not leave AutoCheck
 only inside raw listing JSON; raw JSON may be stored for diagnostics, but
 the UI renders from the normalized `condition_report.autocheck` fields.
 
+The redesigned customer report also renders a backend-derived
+`condition_report.granular_inspection` object. Scraper workers do **not**
+need to create this object initially. What the backend and optional AI
+review layer need from the scraper is high-quality source material:
+
+- Preserve inspector remarks, seller disclosures, announcements, and
+  problem highlights as short strings.
+- Preserve `damage_items[].description`, `damage_items[].section_label`,
+  `damage_items[].panel`, severity, and any linked damage photo URLs.
+- Preserve tire/wheel issue text per position.
+- Preserve bounded `metadata.report_page.body_text` when available.
+
+If the scraper can confidently map a source phrase to a granular field
+(for example, "rip leather on rear passenger door armrest" →
+`interior.passenger_rear_door_panel`), it may send
+`condition_report.granular_inspection`, but the VPS will also derive and
+review it server-side. Do not send `condition_report.ai_review`; that is a
+VPS-owned audit block.
+
 ### 3.7 Deprecated: pending poll
 
 `GET /detail/pending` is now marked `deprecated=True` and is read-only.

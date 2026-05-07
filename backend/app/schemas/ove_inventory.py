@@ -6,6 +6,10 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.constants import AuctionPlatform, InventorySourceType, OveDetailRequestStatus
+from app.schemas.condition_report_granular import (
+    build_granular_condition_report,
+    normalize_granular_condition_report,
+)
 
 
 def _normalize_vin(value: str) -> str:
@@ -800,6 +804,9 @@ def _normalize_condition_report_payload(value: Any) -> dict[str, Any]:
         report.get("inspection"),
         report,
     )
+
+    granular = normalize_granular_condition_report(report.get("granular_inspection"))
+    report["granular_inspection"] = granular or build_granular_condition_report(report)
 
     if not _condition_report_has_content(report):
         return {}

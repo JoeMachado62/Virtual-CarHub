@@ -268,6 +268,77 @@ blob into a single bullet — see the inline comment at
 If you send `raw_text`, cap it. Anything over ~16kb is almost certainly
 a bug.
 
+### 3.12 `granular_inspection` — optional scraper input, backend-derived if omitted
+
+The redesigned customer report renders a granular, section-by-section
+inspection view. The VPS now derives this object from the normalized CR
+payload, so the scraper **does not need to populate it** to remain
+compatible. However, scraper-supplied values are accepted when the scraper
+has stronger source-specific structure.
+
+Default clean fields use the customer-safe phrase:
+
+```jsonc
+"value": "Normal - No Damage Reported"
+```
+
+For mechanical/operational fields, the backend may use:
+
+```jsonc
+"value": "Normal - No Issue Reported"
+```
+
+Issue fields should include evidence:
+
+```jsonc
+"granular_inspection": {
+  "interior": {
+    "fields": {
+      "passenger_rear_door_panel": {
+        "status": "issue",
+        "value": "Rip/tear reported on rear passenger door armrest",
+        "source": "scraper",
+        "evidence": ["rip leather on rear passenger door armrest"],
+        "confidence": 0.94,
+        "image_refs": []
+      }
+    }
+  }
+}
+```
+
+Canonical field path examples:
+
+- `exterior.front_bumper`, `exterior.hood`, `exterior.rear_bumper`
+- `exterior.driver_front_door`, `exterior.passenger_rear_door`
+- `interior.driver_seat`, `interior.passenger_rear_door_panel`
+- `interior.dashboard`, `interior.headliner`, `interior.smoke_odor`
+- `mechanical.warning_lights`, `mechanical.active_visible_leaks`
+- `tires.driver_front_tire_issue`, `tires.passenger_rear_tire_depth`
+
+If the scraper cannot map a disclosure confidently, keep the original
+phrase in `remarks`, `seller_comments_items`, `problem_highlights`, or
+`damage_items[].description`. The backend deterministic mapper and
+optional AI review layer will attempt to place it in the best granular
+field.
+
+### 3.13 AI review metadata — VPS-owned
+
+The VPS may add:
+
+```jsonc
+"ai_review": {
+  "status": "completed",
+  "reviewed_at": "2026-05-07T00:00:00+00:00",
+  "model": "gpt-5.4-mini-2026-03-17",
+  "patches_proposed": 2,
+  "patches_accepted": 1
+}
+```
+
+The scraper should not send `ai_review`. It is an audit record for the
+server-side AI review layer.
+
 ---
 
 ## 4. `images` — CR-grade gallery
@@ -459,6 +530,15 @@ condition_report.interior_condition
 condition_report.tire_condition
 condition_report.exterior_color             (fallback)
 condition_report.interior_color             (fallback)
+condition_report.granular_inspection[section].fields[field].status
+condition_report.granular_inspection[section].fields[field].value
+condition_report.granular_inspection[section].fields[field].source
+condition_report.granular_inspection[section].fields[field].evidence[]
+condition_report.granular_inspection[section].fields[field].confidence
+condition_report.granular_inspection[section].fields[field].image_refs[]
+condition_report.ai_review.status           (VPS-owned)
+condition_report.ai_review.model            (VPS-owned)
+condition_report.ai_review.patches_accepted (VPS-owned)
 images[].url
 images[].role
 images[].display_order
