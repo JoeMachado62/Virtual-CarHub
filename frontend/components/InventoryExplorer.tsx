@@ -5,9 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
-import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { AuthModal } from "@/components/AuthModal";
-import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
 import { AuthState, canAccessConditionReports, clearAuthState, isAdminUser, loadValidAuthState } from "@/lib/auth";
 import { normalizeSourceFilterValue, toPublicSourceLabel } from "@/lib/sourceLabels";
@@ -394,6 +392,32 @@ function isChromeDataExterior(url: string | null | undefined): boolean {
   if (!url || !url.includes("media.chromedata.com")) return false;
   const shot = _extractShot(url);
   return !shot || _EXTERIOR_SHOTS.has(shot);
+}
+
+function isSideProfile(url: string | null | undefined): boolean {
+  if (!url) return false;
+  return _extractShot(url) === "03";
+}
+
+function showroomContainerStyle(url: string | null | undefined): React.CSSProperties | undefined {
+  if (!isChromeDataExterior(url)) return undefined;
+  return {
+    background: `url(${SHOWROOM_BG}) center bottom / cover no-repeat`,
+  };
+}
+
+function showroomImageStyle(url: string | null | undefined): React.CSSProperties | undefined {
+  if (!isChromeDataExterior(url)) return undefined;
+  return {
+    objectFit: "contain",
+    objectPosition: "center bottom",
+    transformOrigin: "center bottom",
+  };
+}
+
+function showroomImageClassName(url: string | null | undefined): string | undefined {
+  if (!isChromeDataExterior(url)) return undefined;
+  return isSideProfile(url) ? "inventory-showroom-image inventory-showroom-image-side" : "inventory-showroom-image";
 }
 const SEARCH_CONTEXT_KEY = "vch:inventory:search-context";
 const SEARCH_FILTERS_KEY = "vch:inventory:filters";
@@ -1349,7 +1373,11 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       return;
     }
 
-    if (!currentFilters.zip_code.trim() || !currentFilters.radius.trim()) {
+    // VIN searches (17 alphanumeric chars) bypass zip/radius requirement
+    const qTrimmed = currentFilters.q.trim();
+    const isVinSearch = qTrimmed.length === 17 && /^[A-Za-z0-9]+$/.test(qTrimmed);
+
+    if (!isVinSearch && (!currentFilters.zip_code.trim() || !currentFilters.radius.trim())) {
       setRows([]);
       setPagination(EMPTY_PAGINATION);
       setSyncMeta(EMPTY_SYNC);
@@ -1371,8 +1399,8 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
     }
     if (currentFilters.state.trim()) params.set("state", currentFilters.state.trim().toUpperCase());
 
-    params.set("zip_code", currentFilters.zip_code.trim());
-    params.set("radius", currentFilters.radius.trim());
+    if (currentFilters.zip_code.trim()) params.set("zip_code", currentFilters.zip_code.trim());
+    if (currentFilters.radius.trim()) params.set("radius", currentFilters.radius.trim());
     if (currentFilters.min_price.trim()) params.set("min_price", currentFilters.min_price.trim());
     if (currentFilters.max_price.trim()) params.set("max_price", currentFilters.max_price.trim());
     if (currentFilters.min_year.trim()) params.set("min_year", currentFilters.min_year.trim());
@@ -1451,7 +1479,9 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
   async function submitFilters(event: FormEvent) {
     event.preventDefault();
 
-    if (!filters.zip_code.trim() || !filters.radius.trim()) {
+    const qVal = filters.q.trim();
+    const isVinSubmit = qVal.length === 17 && /^[A-Za-z0-9]+$/.test(qVal);
+    if (!isVinSubmit && (!filters.zip_code.trim() || !filters.radius.trim())) {
       setError("ZIP code and radius are required before searching inventory.");
       setOpenFilter(null);
       return;
@@ -2238,11 +2268,13 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
             {!detailLoading && !detailError && selectedVehicle ? (
               <div className="inventory-modal-body">
                 <section className="inventory-modal-main">
-                  <div className="inventory-modal-image">
+                  <div className="inventory-modal-image" style={showroomContainerStyle(selectedVehiclePrimaryImage || FALLBACK_IMAGE)}>
                       {selectedVehiclePrimaryImage ? (
                         <img
                           src={selectedVehiclePrimaryImage}
                           alt={`${selectedVehicle.year} ${selectedVehicle.make} ${selectedVehicle.model}`}
+                          className={showroomImageClassName(selectedVehiclePrimaryImage)}
+                          style={showroomImageStyle(selectedVehiclePrimaryImage)}
                         />
                       ) : (
                       <img
@@ -2257,9 +2289,16 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                         <button
                           key={image}
                           className={`inventory-thumb ${selectedVehiclePrimaryImage === image ? "active" : ""}`}
+                          style={showroomContainerStyle(image)}
                           onClick={() => setSelectedImage(image)}
                         >
-                          <img src={image} alt="Vehicle thumbnail" loading="lazy" />
+                          <img
+                            src={image}
+                            alt="Vehicle thumbnail"
+                            loading="lazy"
+                            className={showroomImageClassName(image)}
+                            style={showroomImageStyle(image)}
+                          />
                         </button>
                       ))}
                     </div>
@@ -2336,21 +2375,6 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
                       ) : null}
                       <p style={{ marginBottom: 0 }}>{selectedVehicle.display_context.disclaimer}</p>
                     </div>
-                  ) : null}
-
-                  {selectedVehicle.source_type === "ove" || selectedVehicle.source_type === "auction" ? (
-                    <>
-                      <ConditionReportCard
-                        report={selectedVehicle.condition_report}
-                        grade={selectedVehicle.condition_report_grade || selectedVehicle.condition_grade}
-                        sellerComments={selectedVehicle.seller_comments}
-                        pickupLocation={selectedVehicle.pickup_location}
-                        inventoryStatus={selectedVehicle.inventory_status || selectedVehicle.inventory_label}
-                        mmr={selectedVehicle.mmr}
-                        title="Auction Condition Summary"
-                      />
-                      <AuctionSnapshotCard snapshot={selectedVehicle.listing_snapshot} />
-                    </>
                   ) : null}
 
                   <div className="inventory-actions">

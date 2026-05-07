@@ -5,9 +5,7 @@ import Link from "next/link";
 import type { TouchEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import { AuctionSnapshotCard } from "@/components/AuctionSnapshotCard";
 import { AuthModal } from "@/components/AuthModal";
-import { ConditionReportCard } from "@/components/ConditionReportCard";
 import { apiFetch } from "@/lib/api";
 import { AuthState, clearAuthState, isAdminUser, loadValidAuthState } from "@/lib/auth";
 import { normalizeSourceFilterValue, toPublicSourceLabel } from "@/lib/sourceLabels";
@@ -810,9 +808,6 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
 
   const currentVehicle = vehicle;
   const displayImages = resolveDisplayImages(vehicle);
-  const disclosureImages = vehicle.display_context?.disclosure_images || [];
-  const inspectionEvidence = vehicle.display_context?.inspection_images || [];
-  const conditionReport = vehicle.display_context?.condition_report || {};
   const nhtsa = vehicle.nhtsa_decoded;
   const odometerStr = vehicle.odometer != null
     ? `${vehicle.odometer.toLocaleString()} ${vehicle.odometer_units || "mi"}`
@@ -1014,7 +1009,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   const hotDeal = vehicle.hot_deal;
 
   return (
-    <div className={`vdp-wrap${hotDeal ? " vdp-wrap--hot-deal" : ""}`}>
+    <div className="vdp-wrap">
       <a className="vdp-back-link" href="#" onClick={(e) => { e.preventDefault(); window.history.back(); }}>
         &larr; Go back
       </a>
@@ -1310,35 +1305,6 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
               </section>
             ) : null}
 
-            {isAuction ? (
-              <section className="vdp-auction-sections">
-                <div className="grid two">
-                  <article className="card">
-                    <h3>Inspection Evidence</h3>
-                    <p>Inspection images: {inspectionEvidence.length}</p>
-                    <p>Disclosure images: {disclosureImages.length}</p>
-                    {disclosureImages.length > 0 ? (
-                      <div className="inventory-feature-grid">
-                        {disclosureImages.map((image) => (
-                          <a className="badge" key={image} href={image} target="_blank" rel="noreferrer">Disclosure Photo</a>
-                        ))}
-                      </div>
-                    ) : (
-                      <p style={{ marginBottom: 0 }}>No disclosure photos provided.</p>
-                    )}
-                  </article>
-                  <ConditionReportCard
-                    report={vehicle.condition_report || conditionReport}
-                    grade={vehicle.condition_report_grade || vehicle.condition_grade}
-                    sellerComments={sanitizePublicText(vehicle.seller_comments)}
-                    pickupLocation={vehicle.pickup_location}
-                    inventoryStatus={vehicle.inventory_status || vehicle.inventory_label}
-                    mmr={vehicle.mmr}
-                  />
-                </div>
-                <AuctionSnapshotCard snapshot={vehicle.listing_snapshot} />
-              </section>
-            ) : null}
           </div>
 
           {similar.length ? (
