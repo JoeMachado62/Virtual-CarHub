@@ -873,11 +873,11 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           </div>}
         </section>
 
-        {/* ── PROBLEM HIGHLIGHTS ── */}
+        {/* ── INSPECTION QUESTIONNAIRE ── */}
         {problemHighlights.length > 0 && (
           <section className="cr-section">
             <button className="cr-section-bar cr-section-toggle" onClick={() => toggleSection("problem-highlights")} aria-expanded={isSectionOpen("problem-highlights", true)}>
-              <span className="cr-section-title"><FaTriangleExclamation aria-hidden="true" /> PROBLEM HIGHLIGHTS</span>
+              <span className="cr-section-title"><FaTriangleExclamation aria-hidden="true" /> INSPECTION QUESTIONNAIRE</span>
               <FaChevronDown className={`cr-section-chevron${isSectionOpen("problem-highlights", true) ? " cr-section-chevron-open" : ""}`} aria-hidden="true" />
             </button>
             {isSectionOpen("problem-highlights", true) && (
