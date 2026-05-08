@@ -200,6 +200,60 @@ const GRANULAR_SECTION_ORDER = ["drivability", "exterior", "interior", "mechanic
 const CARFAX_PARTNER_URL = "https://www.carfax.com/VehicleHistory/p/Report.cfx";
 const CARFAX_PARTNER_ID = "DVW_1";
 
+const AUTOCHECK_INFO = {
+  titleBrand: {
+    title: "Major State Title Brand Check",
+    body: [
+      "Reviews state title records for major brands such as salvage, rebuilt, flood, fire, hail, lemon, junk, manufacturer buyback, and odometer-related title events.",
+      "An OK result means AutoCheck did not find a major title brand in the records it received. It does not replace an independent title or DMV verification before purchase.",
+    ],
+  },
+  accident: {
+    title: "Accident Check",
+    body: [
+      "Looks for accident events reported by government, auction, insurance, collision, and other independent data sources available to AutoCheck.",
+      "Some accidents are never reported to vehicle-history providers, so this should be read alongside the inspection photos, seller disclosure, and physical condition report.",
+    ],
+  },
+  damage: {
+    title: "Damage Check",
+    body: [
+      "Looks for damage events such as auction announcements, structural notes, insurance-loss records, frame or unibody damage disclosures, and other reported condition events.",
+      "Damage severity and location can vary by source, which is why the condition report sections break visible or disclosed damage into more specific vehicle areas.",
+    ],
+  },
+  odometer: {
+    title: "Odometer Check",
+    body: [
+      "Reviews mileage readings and odometer-related events for possible rollbacks, inconsistencies, branded titles, or auction disclosures.",
+      "An OK result means AutoCheck did not flag an odometer issue in its available records, but current mileage should still be compared with the listing and inspection.",
+    ],
+  },
+  otherTitleEvent: {
+    title: "Other Title Brand and Specific Event Check",
+    body: [
+      "Covers additional reported events such as theft, repossession, lien, corrected title, duplicate title, insurance loss, auction announcements, or other source-specific disclosures.",
+      "These events are not always defects by themselves, but they can affect risk, financing, resale, or buyer confidence.",
+    ],
+  },
+  vehicleUse: {
+    title: "Vehicle Usage Check",
+    body: [
+      "Checks for prior use records such as rental, fleet, lease, taxi, police, government, commercial, or other non-personal usage categories.",
+      "Prior use can affect wear patterns and valuation even when the inspection condition is otherwise normal.",
+    ],
+  },
+  buyback: {
+    title: "AutoCheck Buyback Protection",
+    body: [
+      "Indicates whether AutoCheck reports eligibility for its Buyback Protection program based on the data and terms AutoCheck applies.",
+      "Eligibility and coverage limits are controlled by AutoCheck. Always review the source report terms before relying on this protection.",
+    ],
+  },
+} as const;
+
+type AutoCheckInfoKey = keyof typeof AUTOCHECK_INFO;
+
 export function ConditionReportDocument({ vin }: { vin: string }) {
   const [vehicle, setVehicle] = useState<VehicleDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -213,6 +267,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   const [activeCategory, setActiveCategory] = useState("all");
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  const [autoCheckInfoKey, setAutoCheckInfoKey] = useState<AutoCheckInfoKey | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -312,10 +367,11 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
       if (e.key === "ArrowLeft") navigateGallery(-1);
       else if (e.key === "ArrowRight") navigateGallery(1);
       else if (e.key === "Escape" && lightboxOpen) setLightboxOpen(false);
+      else if (e.key === "Escape" && autoCheckInfoKey) setAutoCheckInfoKey(null);
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [navigateGallery, lightboxOpen]);
+  }, [navigateGallery, lightboxOpen, autoCheckInfoKey]);
 
   // Announcements
   const announcements = useMemo(() => parseAnnouncements(report, crMetadata), [report, crMetadata]);
@@ -342,6 +398,7 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
   // AutoCheck
   const autocheck = useMemo(() => normalizeAutoCheck(report.autocheck), [report]);
   const autoCheckSummary = useMemo(() => summarizeAutoCheck(autocheck), [autocheck]);
+  const activeAutoCheckInfo = autoCheckInfoKey ? AUTOCHECK_INFO[autoCheckInfoKey] : null;
 
   // Vehicle history
   const vehicleHistory = report.vehicle_history as { engine_starts?: boolean; drivable?: boolean; owners?: number; accidents?: number } | undefined;
@@ -764,13 +821,13 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
                 </div>
 
                 <div className="cr-autocheck-check-list">
-                  {renderAutoCheckCheck("Major State Title Brand Check", autocheck.title_brand_check)}
-                  {renderAutoCheckCheck("Accident Check", autocheck.accident_check)}
-                  {renderAutoCheckCheck("Damage Check", autocheck.damage_check)}
-                  {renderAutoCheckCheck("Odometer Check", autocheck.odometer_check)}
-                  {renderAutoCheckCheck("Other Title Brand and Specific Event Check", autocheck.other_title_brand_event_check)}
-                  {renderAutoCheckCheck("Vehicle Usage Check", autocheck.vehicle_use)}
-                  {renderAutoCheckCheck("AutoCheck Buyback Protection", autocheck.buyback_protection)}
+                  {renderAutoCheckCheck("titleBrand", "Major State Title Brand Check", autocheck.title_brand_check, setAutoCheckInfoKey)}
+                  {renderAutoCheckCheck("accident", "Accident Check", autocheck.accident_check, setAutoCheckInfoKey)}
+                  {renderAutoCheckCheck("damage", "Damage Check", autocheck.damage_check, setAutoCheckInfoKey)}
+                  {renderAutoCheckCheck("odometer", "Odometer Check", autocheck.odometer_check, setAutoCheckInfoKey)}
+                  {renderAutoCheckCheck("otherTitleEvent", "Other Title Brand and Specific Event Check", autocheck.other_title_brand_event_check, setAutoCheckInfoKey)}
+                  {renderAutoCheckCheck("vehicleUse", "Vehicle Usage Check", autocheck.vehicle_use, setAutoCheckInfoKey)}
+                  {renderAutoCheckCheck("buyback", "AutoCheck Buyback Protection", autocheck.buyback_protection, setAutoCheckInfoKey)}
                 </div>
 
                 {(autocheck.full_report_text || autocheck.view_report_href) && (
@@ -942,6 +999,32 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           </section>
         )}
       </main>
+
+      {activeAutoCheckInfo && (
+        <div className="cr-info-modal-backdrop" onClick={() => setAutoCheckInfoKey(null)}>
+          <section
+            className="cr-info-modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cr-autocheck-info-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="cr-info-modal-close"
+              aria-label="Close AutoCheck information"
+              onClick={() => setAutoCheckInfoKey(null)}
+            >
+              &times;
+            </button>
+            <span className="cr-info-modal-eyebrow">AutoCheck Reference</span>
+            <h3 id="cr-autocheck-info-title">{activeAutoCheckInfo.title}</h3>
+            {activeAutoCheckInfo.body.map((paragraph) => (
+              <p key={paragraph}>{paragraph}</p>
+            ))}
+          </section>
+        </div>
+      )}
 
       {/* ── LIGHTBOX MODAL (fullscreen overlay with arrows) ── */}
       {lightboxOpen && (
@@ -1134,10 +1217,11 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px;
           background: #e74c3c; color: #fff; font-size: 12px; letter-spacing: 0;
         }
-        .cr-granular-body { display: grid; gap: 0; }
+        .cr-granular-body { display: grid; gap: 14px; padding-top: 12px; }
+        .cr-granular-group { display: grid; gap: 10px; }
         .cr-group-title {
-          padding: 10px 14px 7px; color: #aab; font-size: 11px; font-weight: 800;
-          text-transform: uppercase; letter-spacing: 0.7px; background: rgba(255,255,255,0.02);
+          padding: 0 2px; color: #aab; font-size: 11px; font-weight: 800;
+          text-transform: uppercase; letter-spacing: 0.7px;
         }
         .cr-field-source {
           display: block; margin-top: 5px; color: #8790ad; font-size: 11px;
@@ -1147,28 +1231,32 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           display: block; margin-top: 5px; color: #d6b46a; font-size: 11px; line-height: 1.35;
         }
         .cr-tires-grid {
-          display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0;
+          display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
         }
 
         /* ── Inspection Grid (3-col) ── */
         .cr-inspection-grid {
           display: grid; grid-template-columns: repeat(3, 1fr);
-          gap: 0; padding: 0;
+          gap: 12px; padding: 0;
         }
         .cr-field-cell {
-          padding: 10px 14px;
-          border-bottom: 1px solid #333;
-          border-right: 1px solid #333;
+          min-height: 62px; padding: 14px 16px;
+          border: 1px solid #33384c; border-radius: 6px;
+          background: rgba(32,34,68,0.92);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
         }
-        .cr-field-cell:nth-child(3n) { border-right: none; }
         .cr-field-label {
           display: block; font-size: 11px; font-weight: 700;
           text-transform: uppercase; letter-spacing: 0.3px;
           color: #aaa; margin-bottom: 2px;
         }
         .cr-field-value { display: block; font-size: 14px; color: #e0e0e0; font-weight: 500; }
-        .cr-field-issue .cr-field-label { color: #e74c3c; }
-        .cr-field-issue .cr-field-value { color: #e74c3c; font-weight: 700; }
+        .cr-field-issue {
+          border-color: rgba(231,76,60,0.58);
+          background: linear-gradient(180deg, rgba(82,38,54,0.82), rgba(32,34,68,0.94));
+        }
+        .cr-field-issue .cr-field-label { color: #ff9a8f; }
+        .cr-field-issue .cr-field-value { color: #fff; font-weight: 700; }
         .cr-field-unavailable .cr-field-label { color: #666; }
         .cr-field-unavailable .cr-field-value { color: #666; font-style: italic; }
 
@@ -1313,7 +1401,12 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         .cr-autocheck-check-value-info { color: #6f93ff; }
         .cr-autocheck-check-value-issue { color: #ff9a8f; }
         .cr-autocheck-check-value-muted { color: #b5bfd2; }
-        .cr-autocheck-check-more { color: #7da0ff; font-size: 16px; white-space: nowrap; }
+        .cr-autocheck-check-more {
+          display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+          padding: 8px 0; border: 0; background: transparent; color: #7da0ff;
+          font: inherit; font-size: 16px; font-weight: 700; white-space: nowrap; cursor: pointer;
+        }
+        .cr-autocheck-check-more:hover { color: #a9c1ff; text-decoration: underline; text-underline-offset: 3px; }
         .cr-autocheck-check-more::after { content: "›"; margin-left: 18px; font-size: 24px; line-height: 0; }
         .cr-autocheck-check-icon {
           position: relative; width: 42px; height: 42px; border-radius: 50%;
@@ -1366,6 +1459,33 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           white-space: pre-wrap;
           font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
         }
+
+        .cr-info-modal-backdrop {
+          position: fixed; inset: 0; display: grid; place-items: center;
+          padding: 20px; background: rgba(4,6,18,0.76); backdrop-filter: blur(5px);
+          z-index: 10002;
+        }
+        .cr-info-modal-card {
+          position: relative; width: min(92vw, 560px); padding: 28px 30px 26px;
+          border: 1px solid rgba(125,113,205,0.58); border-radius: 14px;
+          background:
+            linear-gradient(145deg, rgba(34,37,78,0.98), rgba(18,22,44,0.98)),
+            radial-gradient(circle at top right, rgba(201,164,74,0.18), transparent 42%);
+          color: #edf2ff; box-shadow: 0 24px 70px rgba(0,0,0,0.5);
+        }
+        .cr-info-modal-close {
+          position: absolute; top: 12px; right: 14px; width: 34px; height: 34px;
+          border: 0; border-radius: 50%; background: rgba(255,255,255,0.08);
+          color: #fff; font-size: 25px; line-height: 1; cursor: pointer;
+        }
+        .cr-info-modal-close:hover { background: rgba(255,255,255,0.16); color: #d8b968; }
+        .cr-info-modal-eyebrow {
+          display: block; margin-bottom: 10px; color: #d8b968; font-size: 11px;
+          font-weight: 900; text-transform: uppercase; letter-spacing: 0.8px;
+        }
+        .cr-info-modal-card h3 { margin: 0 34px 14px 0; color: #fff; font-size: 25px; line-height: 1.18; }
+        .cr-info-modal-card p { margin: 0 0 12px; color: #dbe3f6; font-size: 15px; line-height: 1.6; }
+        .cr-info-modal-card p:last-child { margin-bottom: 0; }
 
         /* ── Fullscreen Lightbox Overlay ── */
         .cr-overlay {
@@ -1447,9 +1567,9 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
           .cr-autocheck-check-list { padding: 10px 12px; }
           .cr-autocheck-check-row { grid-template-columns: 40px minmax(0, 1fr); gap: 14px; font-size: 18px; padding: 12px 0; }
           .cr-autocheck-check-icon { width: 36px; height: 36px; }
-          .cr-autocheck-check-more { grid-column: 2; font-size: 14px; }
+          .cr-autocheck-check-more { grid-column: 2; justify-content: flex-start; font-size: 14px; padding: 0; }
           .cr-autocheck-unavailable { flex-direction: column; }
-          .cr-field-cell { border-right: none; }
+          .cr-info-modal-card { padding: 24px 22px; }
           .cr-overlay-arrow { width: 40px; height: 40px; font-size: 24px; }
           .cr-overlay-arrow-left { left: 8px; }
           .cr-overlay-arrow-right { right: 8px; }
@@ -1486,8 +1606,16 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         :global(:root[data-theme="light"]) .cr-inspection-banner { background: #e8edf5; color: #1a2a40; }
         :global(:root[data-theme="light"]) .cr-section-bar { background: #edf0f5; color: #1a2a40; }
         :global(:root[data-theme="light"]) .cr-section-toggle:hover { background: #e3e8f0; }
-        :global(:root[data-theme="light"]) .cr-group-title { background: #f7f9fc; color: var(--muted); }
-        :global(:root[data-theme="light"]) .cr-field-cell { border-bottom-color: var(--line); border-right-color: var(--line); }
+        :global(:root[data-theme="light"]) .cr-group-title { color: var(--muted); }
+        :global(:root[data-theme="light"]) .cr-field-cell {
+          border-color: var(--line);
+          background: #f7f9fc;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+        }
+        :global(:root[data-theme="light"]) .cr-field-issue {
+          border-color: rgba(185,28,28,0.38);
+          background: linear-gradient(180deg, #fff4f4, #f7f9fc);
+        }
         :global(:root[data-theme="light"]) .cr-field-label { color: var(--muted); }
         :global(:root[data-theme="light"]) .cr-field-value { color: #1a2a40; }
         :global(:root[data-theme="light"]) .cr-field-unavailable .cr-field-label { color: #aab; }
@@ -1529,6 +1657,14 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         :global(:root[data-theme="light"]) .cr-autocheck-check-list { background: #fff; border-color: #7383d1; }
         :global(:root[data-theme="light"]) .cr-autocheck-check-row { color: #101827; border-bottom-color: rgba(71,91,160,0.12); }
         :global(:root[data-theme="light"]) .cr-autocheck-check-more { color: #40599f; }
+        :global(:root[data-theme="light"]) .cr-info-modal-card {
+          border-color: rgba(71,91,160,0.42);
+          background: #fff;
+          color: #101827;
+        }
+        :global(:root[data-theme="light"]) .cr-info-modal-card h3 { color: #101827; }
+        :global(:root[data-theme="light"]) .cr-info-modal-card p { color: #334155; }
+        :global(:root[data-theme="light"]) .cr-info-modal-close { background: #edf0f5; color: #1a2a40; }
         :global(:root[data-theme="light"]) .cr-autocheck-attempted { color: var(--muted); }
         :global(:root[data-theme="light"]) .cr-autocheck-details summary { color: #1a2a40; }
         :global(:root[data-theme="light"]) .cr-autocheck-details-hint { color: var(--muted); }
@@ -1575,7 +1711,12 @@ function renderAutoCheckScoreGauge(score: number, rangeLow: number, rangeHigh: n
   );
 }
 
-function renderAutoCheckCheck(label: string, value: string | null | undefined) {
+function renderAutoCheckCheck(
+  infoKey: AutoCheckInfoKey,
+  label: string,
+  value: string | null | undefined,
+  onInfoClick: (key: AutoCheckInfoKey) => void,
+) {
   if (!value) return null;
   const tone = classifyAutoCheckValue(value);
   const displayValue = formatAutoCheckCheckValue(value, tone);
@@ -1585,7 +1726,9 @@ function renderAutoCheckCheck(label: string, value: string | null | undefined) {
       <span className="cr-autocheck-check-label">
         {label} - <strong className={`cr-autocheck-check-value cr-autocheck-check-value-${tone}`}>{displayValue}</strong>
       </span>
-      <span className="cr-autocheck-check-more">More info</span>
+      <button type="button" className="cr-autocheck-check-more" onClick={() => onInfoClick(infoKey)}>
+        More info
+      </button>
     </div>
   );
 }
@@ -1633,7 +1776,6 @@ function renderGranularField(fieldId: string, field: GranularField) {
       {field.source && field.source !== "default" && (
         <span className="cr-field-source">
           {field.source.replace(/_/g, " ")}
-          {typeof field.confidence === "number" && field.confidence < 1 ? ` · ${Math.round(field.confidence * 100)}%` : ""}
         </span>
       )}
       {evidence.length > 0 && (
