@@ -173,6 +173,7 @@ type GranularInspection = Record<string, GranularSection>;
 
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
 const AUCTION_DEFAULT = "/assets/images/portfolio/VCH Auction default image.webp";
+const TIRES_ICON_IMAGE = "/assets/images/portfolio/tires%20icon.png";
 
 const GRADE_LABELS: Record<string, string> = {
   "5.0": "Extra Clean",
@@ -1673,6 +1674,285 @@ export function ConditionReportDocument({ vin }: { vin: string }) {
         :global(:root[data-theme="light"]) .cr-autocheck-unavailable strong { color: #1a2a40; }
         :global(:root[data-theme="light"]) .cr-autocheck-unavailable p { color: #334155; }
       `}</style>
+
+      <style jsx global>{`
+        .cr-granular-body {
+          display: grid;
+          gap: 14px;
+          padding-top: 12px;
+        }
+        .cr-granular-group {
+          display: grid;
+          gap: 10px;
+        }
+        .cr-group-title {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 0 2px;
+          color: #aab;
+          font-size: 11px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.7px;
+        }
+        .cr-inspection-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 12px;
+          padding: 0;
+        }
+        .cr-tires-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(150px, 0.52fr) minmax(0, 1fr);
+          align-items: center;
+          gap: 16px;
+        }
+        .cr-tires-column {
+          display: grid;
+          gap: 12px;
+        }
+        .cr-tires-visual {
+          display: grid;
+          place-items: center;
+          min-height: 330px;
+        }
+        .cr-tires-visual img {
+          display: block;
+          width: min(100%, 190px);
+          height: auto;
+          object-fit: contain;
+          filter: drop-shadow(0 12px 24px rgba(0,0,0,0.34));
+        }
+        .cr-field-cell {
+          min-height: 62px;
+          padding: 14px 16px;
+          border: 1px solid #33384c;
+          border-radius: 6px;
+          background: rgba(32,34,68,0.92);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+        }
+        .cr-field-label {
+          display: block;
+          margin-bottom: 4px;
+          color: #aaa;
+          font-size: 11px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.3px;
+        }
+        .cr-field-value {
+          display: block;
+          color: #f1f4ff;
+          font-size: 14px;
+          font-weight: 700;
+          line-height: 1.35;
+        }
+        .cr-field-source {
+          display: block;
+          margin-top: 6px;
+          color: #8790ad;
+          font-size: 11px;
+          text-transform: capitalize;
+        }
+        .cr-field-evidence {
+          display: block;
+          margin-top: 6px;
+          color: #d6b46a;
+          font-size: 11px;
+          line-height: 1.35;
+        }
+        .cr-field-issue {
+          border-color: rgba(231,76,60,0.58);
+          background: linear-gradient(180deg, rgba(82,38,54,0.82), rgba(32,34,68,0.94));
+        }
+        .cr-field-issue .cr-field-label {
+          color: #ff9a8f;
+        }
+        .cr-field-issue .cr-field-value {
+          color: #fff;
+          font-weight: 800;
+        }
+        .cr-field-unavailable .cr-field-label,
+        .cr-field-unavailable .cr-field-value {
+          color: #747a91;
+          font-style: italic;
+        }
+        .cr-autocheck-check-row {
+          display: grid;
+          grid-template-columns: 48px minmax(0, 1fr);
+          align-items: center;
+          gap: 18px;
+          min-height: 72px;
+          border-bottom: 1px solid rgba(193,202,226,0.15);
+          color: #f7f9ff;
+          font-size: 23px;
+        }
+        .cr-autocheck-check-row:last-child {
+          border-bottom: 0;
+        }
+        .cr-autocheck-check-label {
+          display: flex;
+          align-items: baseline;
+          flex-wrap: wrap;
+          gap: 0 14px;
+          min-width: 0;
+        }
+        .cr-autocheck-check-text {
+          min-width: 0;
+        }
+        .cr-autocheck-check-value {
+          color: #9fe176;
+          font-weight: 800;
+        }
+        .cr-autocheck-check-value-info {
+          color: #6f93ff;
+        }
+        .cr-autocheck-check-value-issue {
+          color: #ff9a8f;
+        }
+        .cr-autocheck-check-value-muted {
+          color: #b5bfd2;
+        }
+        .cr-autocheck-check-more {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 0;
+          padding: 0;
+          border: 0;
+          border-radius: 0;
+          background: transparent;
+          color: #7da0ff;
+          box-shadow: none;
+          appearance: none;
+          font: inherit;
+          font-size: 16px;
+          font-weight: 800;
+          line-height: 1.2;
+          white-space: nowrap;
+          cursor: pointer;
+        }
+        .cr-autocheck-check-more:hover,
+        .cr-autocheck-check-more:focus-visible {
+          color: #a9c1ff;
+          text-decoration: underline;
+          text-underline-offset: 3px;
+          outline: none;
+        }
+        .cr-autocheck-check-more::after {
+          content: "›";
+          margin-left: 9px;
+          font-size: 24px;
+          line-height: 0;
+        }
+        .cr-autocheck-check-icon {
+          position: relative;
+          width: 42px;
+          height: 42px;
+          border: 2px solid rgba(255,255,255,0.72);
+          border-radius: 50%;
+          box-shadow: inset 0 0 0 2px rgba(0,0,0,0.16), 0 2px 7px rgba(0,0,0,0.25);
+        }
+        .cr-autocheck-check-icon-ok {
+          background: linear-gradient(135deg, #9dcf72, #52762e);
+        }
+        .cr-autocheck-check-icon-info,
+        .cr-autocheck-check-icon-muted {
+          background: linear-gradient(135deg, #7796df, #304b90);
+        }
+        .cr-autocheck-check-icon-issue {
+          width: 0;
+          height: 0;
+          border-right: 22px solid transparent;
+          border-bottom: 40px solid #a54442;
+          border-left: 22px solid transparent;
+          border-radius: 0;
+          background: transparent;
+          box-shadow: none;
+        }
+        .cr-autocheck-check-icon-ok::after {
+          content: "";
+          position: absolute;
+          left: 12px;
+          top: 8px;
+          width: 12px;
+          height: 21px;
+          border-right: 5px solid #fff;
+          border-bottom: 5px solid #fff;
+          transform: rotate(45deg);
+        }
+        .cr-autocheck-check-icon-info::after,
+        .cr-autocheck-check-icon-muted::after {
+          content: "i";
+          position: absolute;
+          inset: 0;
+          display: grid;
+          place-items: center;
+          color: #fff;
+          font-family: Georgia, serif;
+          font-size: 28px;
+          font-weight: 900;
+        }
+        .cr-autocheck-check-icon-issue::before {
+          content: "!";
+          position: absolute;
+          left: -4px;
+          top: 10px;
+          color: #fff;
+          font-size: 24px;
+          font-weight: 900;
+          line-height: 1;
+        }
+        :root[data-theme="light"] .cr-field-cell {
+          border-color: var(--line);
+          background: #f7f9fc;
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+        }
+        :root[data-theme="light"] .cr-field-issue {
+          border-color: rgba(185,28,28,0.38);
+          background: linear-gradient(180deg, #fff4f4, #f7f9fc);
+        }
+        :root[data-theme="light"] .cr-field-label,
+        :root[data-theme="light"] .cr-group-title {
+          color: var(--muted);
+        }
+        :root[data-theme="light"] .cr-field-value,
+        :root[data-theme="light"] .cr-autocheck-check-row {
+          color: #101827;
+        }
+        :root[data-theme="light"] .cr-autocheck-check-more {
+          color: #40599f;
+        }
+        @media (max-width: 768px) {
+          .cr-inspection-grid {
+            grid-template-columns: 1fr;
+          }
+          .cr-tires-layout {
+            grid-template-columns: 1fr;
+          }
+          .cr-tires-visual {
+            order: -1;
+            min-height: 190px;
+          }
+          .cr-tires-visual img {
+            width: min(60%, 150px);
+          }
+          .cr-autocheck-check-row {
+            grid-template-columns: 40px minmax(0, 1fr);
+            gap: 14px;
+            padding: 12px 0;
+            font-size: 18px;
+          }
+          .cr-autocheck-check-icon {
+            width: 36px;
+            height: 36px;
+          }
+          .cr-autocheck-check-more {
+            font-size: 14px;
+          }
+        }
+      `}</style>
     </>
   );
 }
@@ -1724,11 +2004,13 @@ function renderAutoCheckCheck(
     <div className="cr-autocheck-check-row">
       <span className={`cr-autocheck-check-icon cr-autocheck-check-icon-${tone}`} aria-hidden="true" />
       <span className="cr-autocheck-check-label">
-        {label} - <strong className={`cr-autocheck-check-value cr-autocheck-check-value-${tone}`}>{displayValue}</strong>
+        <span className="cr-autocheck-check-text">
+          {label} - <strong className={`cr-autocheck-check-value cr-autocheck-check-value-${tone}`}>{displayValue}</strong>
+        </span>
+        <button type="button" className="cr-autocheck-check-more" onClick={() => onInfoClick(infoKey)}>
+          More info
+        </button>
       </span>
-      <button type="button" className="cr-autocheck-check-more" onClick={() => onInfoClick(infoKey)}>
-        More info
-      </button>
     </div>
   );
 }
@@ -1744,6 +2026,10 @@ function renderSectionIcon(sectionId: string) {
 
 function renderGranularSectionBody(section: GranularSection) {
   const fields = Object.entries(section.fields || {});
+  if (section.label === "Tires & Wheels") {
+    return renderTiresSectionBody(fields);
+  }
+
   const grouped = new Map<string, Array<[string, GranularField]>>();
   const groupLabels = section.groups || {};
   for (const entry of fields) {
@@ -1757,11 +2043,39 @@ function renderGranularSectionBody(section: GranularSection) {
       {Array.from(grouped.entries()).map(([groupId, groupFields]) => (
         <div className="cr-granular-group" key={groupId}>
           {groupId !== "default" && <div className="cr-group-title">{groupLabels[groupId] || labelize(groupId)}</div>}
-          <div className={section.label === "Tires & Wheels" ? "cr-tires-grid" : "cr-inspection-grid"}>
+          <div className="cr-inspection-grid">
             {groupFields.map(([fieldId, field]) => renderGranularField(fieldId, field))}
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function renderTiresSectionBody(fields: Array<[string, GranularField]>) {
+  const left = fields.filter(([, field]) => field.label.toLowerCase().startsWith("driver"));
+  const right = fields.filter(([, field]) => field.label.toLowerCase().startsWith("passenger"));
+  const uncategorized = fields.filter(([, field]) => {
+    const label = field.label.toLowerCase();
+    return !label.startsWith("driver") && !label.startsWith("passenger");
+  });
+
+  const leftFields = left.length || right.length ? [...left, ...uncategorized] : fields.slice(0, Math.ceil(fields.length / 2));
+  const rightFields = left.length || right.length ? right : fields.slice(Math.ceil(fields.length / 2));
+
+  return (
+    <div className="cr-granular-body cr-tires-body">
+      <div className="cr-tires-layout">
+        <div className="cr-tires-column">
+          {leftFields.map(([fieldId, field]) => renderGranularField(fieldId, field))}
+        </div>
+        <div className="cr-tires-visual" aria-hidden="true">
+          <img src={TIRES_ICON_IMAGE} alt="" />
+        </div>
+        <div className="cr-tires-column">
+          {rightFields.map(([fieldId, field]) => renderGranularField(fieldId, field))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2285,8 +2599,7 @@ function clampScore(value: number): number {
 function formatAutoCheckCheckValue(value: string, tone: "ok" | "issue" | "info" | "muted"): string {
   const normalized = value.trim().toLowerCase();
   if (tone === "ok") {
-    if (normalized.includes("eligible")) return "Qualifies";
-    return "OK";
+    return normalized === "ok" ? "OK" : value.trim();
   }
   if (normalized.includes("other use")) return "Other Use Reported";
   const countMatch = normalized.match(/\((\d+)\)|\b(\d+)\b/);
@@ -2299,8 +2612,8 @@ function formatAutoCheckCheckValue(value: string, tone: "ok" | "issue" | "info" 
 function classifyAutoCheckValue(value: string): "ok" | "issue" | "info" | "muted" {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return "muted";
-  if (normalized === "ok" || normalized.includes("no accidents reported") || normalized.includes("no damage reported") || normalized.includes("no problem") || normalized.includes("no issues") || normalized.includes("clear") || normalized.includes("eligible") || normalized.includes("qualifies")) return "ok";
   if (normalized.includes("not eligible") || normalized.includes("severe") || normalized.includes("salvage") || normalized.includes("junk") || normalized.includes("branded title")) return "issue";
+  if (normalized === "ok" || normalized.includes("no accidents reported") || normalized.includes("no damage reported") || normalized.includes("no problem") || normalized.includes("no issues") || normalized.includes("clear") || normalized.includes("eligible") || normalized.includes("qualifies")) return "ok";
   if (normalized.includes("information reported") || normalized.includes("reported") || normalized.includes("other use") || normalized.includes("accident") || normalized.includes("damage") || normalized.includes("brand")) return "info";
   if (normalized.includes("unknown") || normalized.includes("not attempted")) return "muted";
   return "info";
