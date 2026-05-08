@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -48,6 +49,26 @@ READY_INSPECTION_STATUSES = {
     InspectionStatus.VERIFIED,
 }
 
+_VOLATILE_IMAGE_QUERY_PARAMS = {
+    "cache",
+    "cachebuster",
+    "cb",
+    "expires",
+    "format",
+    "h",
+    "height",
+    "key-pair-id",
+    "policy",
+    "q",
+    "quality",
+    "signature",
+    "size",
+    "token",
+    "ts",
+    "w",
+    "width",
+}
+
 
 @dataclass(slots=True)
 class VehicleCardMedia:
@@ -76,6 +97,26 @@ def sync_marketcheck_source_assets(
     )
 
 
+def canonical_source_image_url(url: str) -> str:
+    """Build a stable image identity while preserving the original URL for display."""
+    clean = str(url).strip()
+    if not clean:
+        return ""
+    parts = urlsplit(clean)
+    if not parts.scheme or not parts.netloc:
+        return clean
+    query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+            if key.lower() not in _VOLATILE_IMAGE_QUERY_PARAMS
+        ],
+        doseq=True,
+    )
+    path = parts.path.rstrip("/") or parts.path
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
+
+
 def sync_source_assets(
     db: Session,
     *,
@@ -86,15 +127,14 @@ def sync_source_assets(
     source_platform: AuctionPlatform | None = None,
     context: ImageContext = ImageContext.MARKETING,
     role: str = "reference",
+    deactivate_missing: bool = False,
 ) -> None:
-    if not image_urls:
-        return
-
     # Filter out GIF/SVG files — these are typically UI elements (logos, icons)
     # scraped from auction sites, not actual vehicle photos
     BLOCKED_EXTENSIONS = (".gif", ".svg")
     BLOCKED_FILENAMES = {"ready_logistics.png"}
-    normalized = []
+    normalized: list[tuple[str, str]] = []
+    seen_keys: set[str] = set()
     for url in image_urls:
         clean = str(url).strip()
         if not clean:
@@ -107,20 +147,37 @@ def sync_source_assets(
         filename = path_part.rsplit("/", 1)[-1]
         if filename in BLOCKED_FILENAMES:
             continue
-        normalized.append(clean)
+        key = canonical_source_image_url(clean)
+        if not key or key in seen_keys:
+            continue
+        seen_keys.add(key)
+        normalized.append((key, clean))
+
+    filters = [
+        VehicleImageAsset.vin == vin,
+        VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
+        VehicleImageAsset.source_kind == source_kind,
+    ]
+    if source_platform is not None:
+        filters.append(VehicleImageAsset.source_platform == source_platform)
+    existing_assets = db.scalars(select(VehicleImageAsset).where(*filters)).all()
+    existing_by_key: dict[str, VehicleImageAsset] = {}
+    existing_by_url = {asset.external_url: asset for asset in existing_assets if asset.external_url}
+    for asset in existing_assets:
+        key = canonical_source_image_url(asset.external_url or "")
+        if key and key not in existing_by_key:
+            existing_by_key[key] = asset
+
     if not normalized:
+        if deactivate_missing:
+            for asset in existing_assets:
+                asset.active = False
+                asset.is_primary = False
         return
 
-    existing_assets = db.scalars(
-        select(VehicleImageAsset).where(
-            VehicleImageAsset.vin == vin,
-            VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
-        )
-    ).all()
-    existing_by_url = {asset.external_url: asset for asset in existing_assets if asset.external_url}
-
-    for index, url in enumerate(normalized):
-        asset = existing_by_url.get(url)
+    retained_asset_ids: set[str] = set()
+    for index, (key, url) in enumerate(normalized):
+        asset = existing_by_url.get(url) or existing_by_key.get(key)
         if not asset:
             asset = VehicleImageAsset(
                 vin=vin,
@@ -146,10 +203,18 @@ def sync_source_assets(
         asset.source_platform = source_platform
         asset.context = context
         asset.role = role
+        asset.external_url = url
         asset.display_order = index
         asset.is_primary = index == 0
         asset.active = True
         asset.processing_status = ImageJobStatus.COMPLETED
+        retained_asset_ids.add(asset.id)
+
+    if deactivate_missing:
+        for asset in existing_assets:
+            if asset.id not in retained_asset_ids:
+                asset.active = False
+                asset.is_primary = False
 
 
 def ensure_tier2_hero_job(

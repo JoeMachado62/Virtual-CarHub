@@ -18,10 +18,10 @@ from app.api.v1.routers.inventory_ove import (
     request_ove_detail,
     terminal_ove_detail,
 )
-from app.core.constants import OveDetailRequestStatus
+from app.core.constants import ImageTier, OveDetailRequestStatus
 from app.db.init_db import init_db
 from app.db.session import SessionLocal
-from app.models.entities import HotDeal, OveDetailRequest, OveVehicleDetail, User, Vehicle
+from app.models.entities import HotDeal, OveDetailRequest, OveVehicleDetail, User, Vehicle, VehicleImageAsset
 from app.schemas.hot_deals import HotDealIngestRequest
 from app.schemas.ove_inventory import (
     NAAA_INSPECTION_TEMPLATE,
@@ -539,6 +539,108 @@ def test_ove_detail_push_request_normalizes_legacy_grade_and_report_link_fields(
     assert payload.condition_report["overall_grade"] == "3.5"
     assert payload.condition_report["metadata"]["report_link"]["href"] == "http://content.liquidmotors.com/IR/15614/38020972.html"
     assert payload.condition_report["announcements"] == ["Open Recall"]
+
+
+def test_ove_detail_push_dedupes_images_and_reconciles_source_assets() -> None:
+    init_db()
+    vin = "1HGCM82633A400001"
+
+    with SessionLocal() as db:
+        db.execute(delete(VehicleImageAsset).where(VehicleImageAsset.vin == vin))
+        db.execute(delete(OveVehicleDetail).where(OveVehicleDetail.vin == vin))
+        db.execute(delete(Vehicle).where(Vehicle.vin == vin))
+        db.add(
+            Vehicle(
+                vin=vin,
+                listing_id="ove-image-dedupe-test",
+                year=2024,
+                make="Honda",
+                model="Accord",
+                price_asking=25000,
+                source_type="ove",
+                images=[],
+            )
+        )
+        db.commit()
+
+        first_payload = OveDetailPushRequest(
+            images=[
+                OveImagePayload(
+                    url="https://images.manheim.example/cr/front.jpg?size=640&token=old",
+                    display_order=0,
+                    is_primary=True,
+                ),
+                OveImagePayload(
+                    url="https://images.manheim.example/cr/side.jpg?size=640&token=old",
+                    display_order=1,
+                ),
+                OveImagePayload(
+                    url="https://images.manheim.example/cr/stale.jpg?size=640&token=old",
+                    display_order=2,
+                ),
+            ],
+            listing_snapshot=OveListingSnapshot(page_url="https://example.com/ove/image-dedupe"),
+        )
+        ove_inventory_service.upsert_ove_vehicle_detail(db, vin=vin, payload=first_payload)
+        db.commit()
+
+        second_payload = OveDetailPushRequest(
+            images=[
+                OveImagePayload(
+                    url="https://images.manheim.example/cr/front.jpg?size=1024&token=new",
+                    display_order=0,
+                    source_image_id="front-photo",
+                ),
+                OveImagePayload(
+                    url="https://images.manheim.example/cr/front.jpg?size=320&token=thumb",
+                    display_order=1,
+                    source_image_id="front-photo",
+                ),
+                OveImagePayload(
+                    url="https://images.manheim.example/cr/side.jpg?size=1024&token=new",
+                    display_order=2,
+                ),
+            ],
+            listing_snapshot=OveListingSnapshot(page_url="https://example.com/ove/image-dedupe"),
+        )
+        detail, _, _ = ove_inventory_service.upsert_ove_vehicle_detail(db, vin=vin, payload=second_payload)
+        db.commit()
+        db.refresh(detail)
+        vehicle = db.get(Vehicle, vin)
+
+        active_assets = db.scalars(
+            select(VehicleImageAsset)
+            .where(
+                VehicleImageAsset.vin == vin,
+                VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
+                VehicleImageAsset.source_kind == "ove",
+                VehicleImageAsset.active.is_(True),
+            )
+            .order_by(VehicleImageAsset.display_order.asc())
+        ).all()
+        inactive_stale = db.scalar(
+            select(func.count())
+            .select_from(VehicleImageAsset)
+            .where(
+                VehicleImageAsset.vin == vin,
+                VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
+                VehicleImageAsset.source_kind == "ove",
+                VehicleImageAsset.external_url.like("%stale.jpg%"),
+                VehicleImageAsset.active.is_(False),
+            )
+        )
+
+    stored_urls = [row["url"] for row in detail.images_json]
+    assert stored_urls == [
+        "https://images.manheim.example/cr/front.jpg?size=1024&token=new",
+        "https://images.manheim.example/cr/side.jpg?size=1024&token=new",
+    ]
+    assert detail.images_json[0]["is_primary"] is True
+    assert vehicle is not None
+    assert vehicle.images == stored_urls
+    assert [asset.external_url for asset in active_assets] == stored_urls
+    assert inactive_stale == 1
+    assert detail.sync_metadata_json["image_dedupe"]["removed_count"] == 1
 
 
 def test_ove_detail_push_request_accepts_liquid_motors_equipment_and_empty_mirrored_announcements() -> None:

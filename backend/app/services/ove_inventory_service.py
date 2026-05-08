@@ -17,9 +17,10 @@ from app.schemas.ove_inventory import (
     OveBulkIngestRequest,
     OveDetailPushRequest,
     OveDetailRequestEnqueueRequest,
+    OveImagePayload,
 )
 from app.services.chromedata_service import build_chromedata_manifest, sync_chromedata_source_assets
-from app.services.image_pipeline_service import ensure_tier2_hero_job, sync_source_assets
+from app.services.image_pipeline_service import canonical_source_image_url, ensure_tier2_hero_job, sync_source_assets
 
 
 # Statuses that represent active in-flight work that should not be re-claimed
@@ -579,6 +580,45 @@ def _enrich_vehicle_from_ove_detail(vehicle: Vehicle, payload: OveDetailPushRequ
     vehicle.features_normalized = normalized
 
 
+def _image_payload_key(row: OveImagePayload) -> str:
+    source_image_id = str(row.source_image_id or "").strip().lower()
+    if source_image_id:
+        return f"id:{source_image_id}"
+    return f"url:{canonical_source_image_url(row.url)}"
+
+
+def _dedupe_ove_detail_images(images: list[OveImagePayload]) -> tuple[list[OveImagePayload], int]:
+    deduped: list[OveImagePayload] = []
+    seen: set[str] = set()
+    for row in images:
+        clean_url = row.url.strip()
+        if not clean_url:
+            continue
+        key = _image_payload_key(row)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+
+    saw_primary = False
+    normalized: list[OveImagePayload] = []
+    for index, row in enumerate(deduped):
+        data = row.model_dump()
+        data["url"] = row.url.strip()
+        data["display_order"] = index
+        data["is_primary"] = bool(row.is_primary and not saw_primary)
+        if data["is_primary"]:
+            saw_primary = True
+        normalized.append(OveImagePayload.model_validate(data))
+
+    if normalized and not saw_primary:
+        data = normalized[0].model_dump()
+        data["is_primary"] = True
+        normalized[0] = OveImagePayload.model_validate(data)
+
+    return normalized, max(0, len(images) - len(normalized))
+
+
 def upsert_ove_vehicle_detail(
     db: Session,
     *,
@@ -595,7 +635,19 @@ def upsert_ove_vehicle_detail(
         detail = OveVehicleDetail(vin=normalized_vin, source_platform=payload.source_platform)
         db.add(detail)
 
-    image_urls = [row.url.strip() for row in payload.images if row.url.strip()]
+    images, removed_image_duplicates = _dedupe_ove_detail_images(payload.images)
+    image_urls = [row.url.strip() for row in images if row.url.strip()]
+    sync_metadata = dict(payload.sync_metadata or {})
+    if removed_image_duplicates:
+        sync_metadata["image_dedupe"] = {
+            "input_count": len(payload.images),
+            "stored_count": len(images),
+            "removed_count": removed_image_duplicates,
+        }
+    raw_payload = payload.model_dump()
+    raw_payload["images"] = [row.model_dump() for row in images]
+    raw_payload["sync_metadata"] = sync_metadata
+
     vehicle.images = image_urls or vehicle.images
     vehicle.source_type = InventorySourceType.OVE.value
     if payload.listing_snapshot.page_url:
@@ -603,11 +655,11 @@ def upsert_ove_vehicle_detail(
 
     detail.source_platform = payload.source_platform
     detail.seller_comments = payload.seller_comments
-    detail.images_json = [row.model_dump() for row in payload.images]
+    detail.images_json = [row.model_dump() for row in images]
     detail.condition_report_json = payload.condition_report
     detail.listing_snapshot_json = payload.listing_snapshot.model_dump()
-    detail.sync_metadata_json = payload.sync_metadata
-    detail.raw_payload_json = payload.model_dump()
+    detail.sync_metadata_json = sync_metadata
+    detail.raw_payload_json = raw_payload
     detail.page_url = payload.listing_snapshot.page_url
     detail.last_synced_at = datetime.now(UTC)
 
@@ -621,6 +673,7 @@ def upsert_ove_vehicle_detail(
         image_urls=image_urls,
         source_kind=InventorySourceType.OVE.value,
         source_platform=payload.source_platform,
+        deactivate_missing=True,
     )
     chromedata_manifest = build_chromedata_manifest(vehicle, detail_level="card")
     if chromedata_manifest:

@@ -529,7 +529,7 @@ def push_ove_detail(vin: str, payload: OveDetailPushRequest, db: Session = Depen
         "vin": detail.vin,
         "source_platform": detail.source_platform.value,
         "detail_saved": True,
-        "images_synced": len(payload.images),
+        "images_synced": len(detail.images_json or []),
         "hero_job_queued": hero_job_queued,
         "completed_request_ids": [row.id for row in completed_requests],
         "seller_comments_present": bool(payload.seller_comments),
@@ -539,7 +539,7 @@ def push_ove_detail(vin: str, payload: OveDetailPushRequest, db: Session = Depen
         "condition_report_present": bool(payload.condition_report),
         "ai_review_mode": app_settings.openai_cr_review_mode,
         "ai_review_queued": ai_review_queued,
-        "sync_metadata": payload.sync_metadata,
+        "sync_metadata": detail.sync_metadata_json or payload.sync_metadata,
     }
     log_event(
         db,
