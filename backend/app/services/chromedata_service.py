@@ -1017,25 +1017,26 @@ def _select_listing_aware_color(
     candidates = _style_body_color_candidates(colors, style_id=style_id)
     installed = [item for item in candidates if _is_exact_color(item)]
 
-    if exterior_color_text:
-        text_match = _match_color_by_text(installed, exterior_color_text) if installed else None
-        if text_match:
-            return _select_color_info(candidates, style_id=style_id, preferred_code=text_match, match_source="vin_listing_text")
+    # Priority 1: Factory-confirmed color from CVD (installCause B/E/V/I).
+    # This is the most authoritative source — ChromeData decoded the VIN and
+    # confirmed which color the vehicle was built with.  Trust it over the
+    # listing's free-text color description.
+    if installed:
+        return _to_color_info(installed[0], exact_override=True, match_source="vin_installed")
 
+    # Priority 2: Text-match listing color against CVD genericDesc/description
+    # (only reached when CVD returned no factory-confirmed color for this VIN).
+    if exterior_color_text:
         text_match = _match_color_by_text(candidates, exterior_color_text)
         if text_match:
             return _select_color_info(candidates, style_id=style_id, preferred_code=text_match, match_source="listing_text")
 
-        if _has_color_token(exterior_color_text):
-            return None
-
+    # Priority 3: Stored paint code from auction/dealer metadata.
     selected = _select_color_info(candidates, style_id=style_id, preferred_code=preferred_code, match_source="stored_code")
     if selected and selected.color_code:
         return selected
 
-    if installed:
-        return _to_color_info(installed[0], exact_override=True, match_source="vin_installed")
-
+    # Priority 4: CVD primary color (last resort).
     return _select_color_info(candidates, style_id=style_id, preferred_code=None, match_source="cvd_primary")
 
 
@@ -1192,6 +1193,7 @@ _COLOR_ALIASES = {
     "charcoal": "gray",
     "pearl": "white",
     "beige": "tan",
+    "gold": "tan",
     "bronze": "brown",
     "copper": "brown",
     "maroon": "red",
