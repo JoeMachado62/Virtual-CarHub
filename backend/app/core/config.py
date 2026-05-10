@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     snapshot_min_miles: int = Field(default=300, alias="SNAPSHOT_MIN_MILES")
     snapshot_max_miles: int = Field(default=120000, alias="SNAPSHOT_MAX_MILES")
     snapshot_max_per_state: int = Field(default=50000, alias="SNAPSHOT_MAX_PER_STATE")
-    marketcheck_stale_threshold_days: int = Field(default=7, alias="MARKETCHECK_STALE_THRESHOLD_DAYS")
+    marketcheck_stale_threshold_days: int = Field(default=1, alias="MARKETCHECK_STALE_THRESHOLD_DAYS")
     marketcheck_stale_cleanup_max_per_run: int = Field(default=5000, alias="MARKETCHECK_STALE_CLEANUP_MAX_PER_RUN")
     marketcheck_history_enrichment_enabled: bool = Field(default=True, alias="MARKETCHECK_HISTORY_ENRICHMENT_ENABLED")
     marketcheck_history_enrichment_interval_seconds: int = Field(default=900, alias="MARKETCHECK_HISTORY_ENRICHMENT_INTERVAL_SECONDS")
@@ -308,6 +308,10 @@ class Settings(BaseSettings):
     @property
     def has_anthropic(self) -> bool:
         return bool(self.anthropic_api_key)
+
+    @property
+    def has_openai(self) -> bool:
+        return bool(self.openai_api_key)
 
     @property
     def has_imagin(self) -> bool:

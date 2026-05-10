@@ -521,17 +521,10 @@ def _apply_zip_radius_filter(stmt, zip_code: str | None, radius: int | None):
         return stmt
     if not zip_values:
         return stmt.where(false())
-    # Include auction/OVE vehicles even when their location_zip is NULL,
-    # since auction vehicles are nationwide and can be shipped anywhere.
-    auction_expr = func.lower(Vehicle.source_type).in_(
-        [InventorySourceType.AUCTION.value, InventorySourceType.OVE.value]
-    )
-    return stmt.where(
-        or_(
-            Vehicle.location_zip.in_(zip_values),
-            auction_expr & Vehicle.location_zip.is_(None),
-        )
-    )
+    # Only match vehicles that have a known zip code within the radius.
+    # Vehicles with NULL location_zip are excluded — they cannot be placed
+    # geographically and would leak into every radius search.
+    return stmt.where(Vehicle.location_zip.in_(zip_values))
 
 
 def _normalized_pick(normalized: dict[str, Any], *keys: str) -> Any:

@@ -119,6 +119,18 @@ SOURCE_PRIORITY: dict[str, int] = {
     InventorySourceType.OVE.value: 4,
 }
 
+# Fields that change between MarketCheck snapshots and must always be refreshed.
+_MC_VOLATILE_FIELDS = (
+    "listing_id",
+    "odometer",
+    "price_asking",
+    "price_wholesale_est",
+    "location_zip",
+    "location_state",
+    "condition_grade",
+    "source_url",
+)
+
 PRIMARY_SOURCE_FIELDS = (
     "listing_id",
     "year",
@@ -418,6 +430,30 @@ def upsert_vehicle_with_source_priority(
     incoming_priority = SOURCE_PRIORITY.get(incoming_source, 0)
     existing_priority = SOURCE_PRIORITY.get((existing.source_type or "").lower(), 0)
     now = incoming.get("last_seen_active") or datetime.now(UTC)
+
+    # MarketCheck reactivation: when a previously-seen MarketCheck VIN
+    # reappears, only refresh volatile fields (price, odometer, location)
+    # and preserve enrichment data we already collected (images, features,
+    # specs).  This avoids redundant API calls for VINs we've enriched.
+    existing_is_mc = (existing.source_type or "").lower() == InventorySourceType.MARKETCHECK.value
+    incoming_is_mc = incoming_source == InventorySourceType.MARKETCHECK.value
+    if existing_is_mc and incoming_is_mc:
+        for field in _MC_VOLATILE_FIELDS:
+            value = incoming.get(field)
+            if value is not None:
+                setattr(existing, field, value)
+        # Back-fill stable fields only when the existing row lacks them.
+        for field in PRIMARY_SOURCE_FIELDS:
+            if field in _MC_VOLATILE_FIELDS:
+                continue
+            current = getattr(existing, field, None)
+            if is_missing_value(current):
+                value = incoming.get(field)
+                if not is_missing_value(value):
+                    setattr(existing, field, value)
+        existing.available = True
+        existing.last_seen_active = now
+        return "updated"
 
     if incoming_priority >= existing_priority:
         for field in PRIMARY_SOURCE_FIELDS:
