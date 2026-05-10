@@ -15,7 +15,9 @@ logger = logging.getLogger(__name__)
 
 SELLER_COMMENT_CACHE_KEY = "seller_comment_rewrite"
 SELLER_COMMENT_CACHE_VERSION = 2
-LLM_MODEL = "claude-haiku-4-5-20251001"
+OPENAI_MODEL = "gpt-5.4-mini-2026-03-17"
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 _URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
@@ -226,20 +228,14 @@ def _fallback_rewrite(vehicle: Vehicle, source_text: str | None, metadata: dict[
     return _finalize_rewritten_comment(" ".join(part for part in (opening, middle, closing) if part))
 
 
-def _llm_rewrite(vehicle: Vehicle, source_text: str, metadata: dict[str, Any] | None = None) -> str | None:
-    import anthropic
-
+def _build_rewrite_prompt(vehicle: Vehicle, source_text: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     cleaned = _clean_source_comment(source_text)
-    if not cleaned:
-        return None
-
     context = _vehicle_context(vehicle, metadata)
     feature_highlights = _top_feature_highlights(metadata, limit=8)
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    prompt = {
+    return {
         "vehicle": context,
         "feature_highlights": feature_highlights,
-        "source_comment": cleaned[:2400],
+        "source_comment": (cleaned or "")[:2400],
         "instructions": [
             "Rewrite the source comment as a short Virtual CarHub listing description.",
             "Write 2 to 4 sentences in a polished, neutral, trustworthy tone.",
@@ -252,16 +248,84 @@ def _llm_rewrite(vehicle: Vehicle, source_text: str, metadata: dict[str, Any] | 
             "Return plain text only.",
         ],
     }
+
+
+_REWRITE_SYSTEM = "You rewrite dealer vehicle descriptions into concise Virtual CarHub marketing copy while preserving factual accuracy."
+
+
+def _openai_rewrite(vehicle: Vehicle, source_text: str, metadata: dict[str, Any] | None = None) -> str | None:
+    import httpx
+
+    cleaned = _clean_source_comment(source_text)
+    if not cleaned:
+        return None
+
+    prompt = _build_rewrite_prompt(vehicle, source_text, metadata)
+    payload = {
+        "model": OPENAI_MODEL,
+        "input": [
+            {"role": "system", "content": _REWRITE_SYSTEM},
+            {"role": "user", "content": json.dumps(prompt, ensure_ascii=True)},
+        ],
+    }
+    with httpx.Client(timeout=30.0) as client:
+        response = client.post(
+            OPENAI_RESPONSES_URL,
+            headers={
+                "Authorization": f"Bearer {settings.openai_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    text = data.get("output_text") or ""
+    if not text:
+        for output in data.get("output", []):
+            if not isinstance(output, dict):
+                continue
+            for content in output.get("content", []):
+                if isinstance(content, dict) and content.get("type") in {"output_text", "text"}:
+                    text += content.get("text", "")
+    return _finalize_rewritten_comment(text.strip())
+
+
+def _anthropic_rewrite(vehicle: Vehicle, source_text: str, metadata: dict[str, Any] | None = None) -> str | None:
+    import anthropic
+
+    cleaned = _clean_source_comment(source_text)
+    if not cleaned:
+        return None
+
+    prompt = _build_rewrite_prompt(vehicle, source_text, metadata)
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     message = client.messages.create(
-        model=LLM_MODEL,
+        model=ANTHROPIC_MODEL,
         max_tokens=220,
         temperature=0.2,
-        system="You rewrite dealer vehicle descriptions into concise Virtual CarHub marketing copy while preserving factual accuracy.",
+        system=_REWRITE_SYSTEM,
         messages=[{"role": "user", "content": json.dumps(prompt, ensure_ascii=True)}],
     )
     parts = getattr(message, "content", None) or []
     text = "".join(getattr(part, "text", "") for part in parts).strip()
     return _finalize_rewritten_comment(text)
+
+
+def _llm_rewrite(vehicle: Vehicle, source_text: str, metadata: dict[str, Any] | None = None) -> str | None:
+    """Try OpenAI first, fall back to Anthropic."""
+    if settings.has_openai:
+        try:
+            result = _openai_rewrite(vehicle, source_text, metadata)
+            if result:
+                return result
+        except Exception:
+            logger.warning("seller_comment_openai_rewrite_failed vin=%s, falling back to anthropic", vehicle.vin, exc_info=True)
+
+    if settings.has_anthropic:
+        return _anthropic_rewrite(vehicle, source_text, metadata)
+
+    return None
 
 
 def build_virtualcarhub_seller_comment(
@@ -274,11 +338,11 @@ def build_virtualcarhub_seller_comment(
     if not cleaned:
         return None, "empty"
 
-    if settings.has_anthropic:
+    if settings.has_openai or settings.has_anthropic:
         try:
             rewritten = _llm_rewrite(vehicle, cleaned, metadata)
             if rewritten:
-                return rewritten, "anthropic"
+                return rewritten, "llm"
         except Exception:
             logger.warning("seller_comment_llm_rewrite_failed vin=%s", vehicle.vin, exc_info=True)
 

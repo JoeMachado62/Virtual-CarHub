@@ -1,8 +1,8 @@
 """Natural-language vehicle query parser.
 
-Uses Claude API to extract structured search filters from free-text input.
-Falls back to regex-based extraction when no API key is configured or
-when the LLM call fails.
+Uses OpenAI (primary) or Claude (fallback) to extract structured search
+filters from free-text input.  Falls back to regex-based extraction when
+no API key is configured or when both LLM calls fail.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import json
 import logging
 import re
 
+import httpx
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -122,7 +123,7 @@ def parse_vehicle_query(query: str) -> ParsedVehicleQuery:
             parse_method="vin",
         )
 
-    if settings.has_anthropic:
+    if settings.has_openai or settings.has_anthropic:
         try:
             return _llm_parse(clean)
         except Exception as exc:
@@ -133,20 +134,13 @@ def parse_vehicle_query(query: str) -> ParsedVehicleQuery:
 
 # ── LLM-based parser ─────────────────────────────────────────────────
 
-def _llm_parse(query: str) -> ParsedVehicleQuery:
-    import anthropic
+OPENAI_MODEL = "gpt-5.4-mini-2026-03-17"
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    message = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=300,
-        temperature=0,
-        system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": query}],
-    )
 
-    raw_text = message.content[0].text.strip()
-    # Strip markdown fences if the model wraps them
+def _parse_llm_json(raw_text: str, query: str) -> ParsedVehicleQuery:
+    """Parse raw LLM text into a ParsedVehicleQuery."""
     if raw_text.startswith("```"):
         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
         raw_text = re.sub(r"\s*```$", "", raw_text)
@@ -161,10 +155,69 @@ def _llm_parse(query: str) -> ParsedVehicleQuery:
         parsed=True,
         parse_method="llm",
     )
-    # Normalize VIN to uppercase
     if result.vin:
         result.vin = result.vin.upper()
     return result
+
+
+def _openai_parse(query: str) -> ParsedVehicleQuery:
+    payload = {
+        "model": OPENAI_MODEL,
+        "input": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": query},
+        ],
+    }
+    with httpx.Client(timeout=30.0) as client:
+        response = client.post(
+            OPENAI_RESPONSES_URL,
+            headers={
+                "Authorization": f"Bearer {settings.openai_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    text = data.get("output_text") or ""
+    if not text:
+        for output in data.get("output", []):
+            if not isinstance(output, dict):
+                continue
+            for content in output.get("content", []):
+                if isinstance(content, dict) and content.get("type") in {"output_text", "text"}:
+                    text += content.get("text", "")
+    return _parse_llm_json(text.strip(), query)
+
+
+def _anthropic_parse(query: str) -> ParsedVehicleQuery:
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    message = client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=300,
+        temperature=0,
+        system=_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": query}],
+    )
+    raw_text = message.content[0].text.strip()
+    return _parse_llm_json(raw_text, query)
+
+
+def _llm_parse(query: str) -> ParsedVehicleQuery:
+    """Try OpenAI first, fall back to Anthropic."""
+    if settings.has_openai:
+        try:
+            return _openai_parse(query)
+        except Exception as exc:
+            logger.warning("openai_parse_failed, trying anthropic", extra={"error": str(exc)})
+
+    if settings.has_anthropic:
+        return _anthropic_parse(query)
+
+    raise RuntimeError("No LLM API key configured")
 
 
 # ── Regex fallback parser ────────────────────────────────────────────
