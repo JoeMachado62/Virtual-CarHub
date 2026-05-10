@@ -42,3 +42,12 @@ wordpress/themes/virtualcarhub-motors-child/
 
 # Blog static site (managed separately)
 blog/
+
+# Local data files, reports, and one-off scripts
+*.csv
+*.xlsx
+*.png
+apply-backend.sh
+backend/scripts/
+docs/*.pdf
+LibraryAPI-FTP*.pdf
