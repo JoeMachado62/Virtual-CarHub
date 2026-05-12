@@ -767,7 +767,7 @@ main {
   object-fit: contain;
   object-position: center bottom;
   display: block;
-  transform: translateY(9%) scale(1.08);
+  transform: translateY(7%) scale(1.03);
   transform-origin: center bottom;
 }
 
@@ -2520,12 +2520,20 @@ textarea {
   transform: translateY(24%) scale(1.36);
 }
 
+.vdp-gallery-stage .vdp-showroom-image {
+  transform: translateY(10%) scale(1.07);
+}
+
+.vdp-gallery-stage .vdp-showroom-image-side {
+  transform: translateY(20%) scale(1.30);
+}
+
 .vdp-gallery-preview .vdp-showroom-image {
-  transform: translateY(10%) scale(1.06);
+  transform: translateY(8%) scale(1.01);
 }
 
 .vdp-gallery-preview .vdp-showroom-image-side {
-  transform: translateY(18%) scale(1.24);
+  transform: translateY(15%) scale(1.19);
 }
 
 .vdp-gallery-preview-stack {
@@ -3372,6 +3380,13 @@ textarea {
   background: color-mix(in srgb, var(--surface-soft) 86%, #edf2f8 14%);
 }
 
+.vdp-similar-img-wrap .vdp-similar-showroom-img {
+  object-fit: contain;
+  object-position: center bottom;
+  transform: translateY(12%) scale(1.08);
+  transform-origin: center bottom;
+}
+
 .vdp-similar-info {
   display: grid;
   gap: 0.35rem;
@@ -3582,6 +3597,10 @@ textarea {
     position: static;
   }
 
+  .vdp-similar-img-wrap .vdp-similar-showroom-img {
+    transform: translateY(18%) scale(1.25);
+  }
+
   .vdp-market-metrics {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -3591,6 +3610,46 @@ textarea {
     justify-items: center;
     text-align: center;
     min-height: 150px;
+  }
+}
+
+@media (min-width: 641px) and (max-width: 1080px) {
+  .vdp-similar-scroll {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vdp-similar-card {
+    align-content: start;
+  }
+
+  .vdp-similar-img-wrap {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+
+  .vdp-similar-img-wrap .vdp-similar-showroom-img {
+    transform: translateY(18%) scale(1.25);
+  }
+}
+
+@media (max-width: 760px) and (orientation: landscape) {
+  .vdp-similar-scroll {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vdp-similar-card {
+    align-content: start;
+  }
+
+  .vdp-similar-img-wrap {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+
+  .vdp-similar-img-wrap .vdp-similar-showroom-img {
+    transform: translateY(18%) scale(1.25);
   }
 }
 

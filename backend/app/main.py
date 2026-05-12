@@ -13,7 +13,11 @@ from app.db.session import SessionLocal
 from app.middleware.http_middleware import request_context_middleware
 from app.observability.metrics import metrics_payload
 from app.services.marketcheck_history_enrichment_service import run_history_enrichment_batch
-from app.services.ove_inventory_service import cleanup_stale_ove_inventory, prune_unavailable_ove_inventory
+from app.services.ove_inventory_service import (
+    cleanup_stale_ove_inventory,
+    deactivate_missing_zip_ove_inventory,
+    prune_unavailable_ove_inventory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,20 +156,31 @@ def create_app() -> FastAPI:
                                 stale_threshold_days=settings.ove_stale_threshold_days,
                                 max_mark=settings.ove_stale_cleanup_max_per_run,
                             )
+                            missing_zip_result = deactivate_missing_zip_ove_inventory(
+                                db,
+                                max_mark=settings.ove_stale_cleanup_max_per_run,
+                            )
                             prune_result = prune_unavailable_ove_inventory(
                                 db,
                                 retention_days=settings.ove_unavailable_retention_days,
                                 max_delete=settings.ove_unavailable_cleanup_max_per_run,
                             )
-                            if result.get("marked_unavailable", 0) > 0 or prune_result.get("deleted", 0) > 0:
+                            if (
+                                result.get("marked_unavailable", 0) > 0
+                                or missing_zip_result.get("marked_unavailable", 0) > 0
+                                or prune_result.get("deleted", 0) > 0
+                            ):
                                 db.commit()
                                 logger.info(
-                                    "ove_stale_cleanup_worker marked %d vehicles, "
+                                    "ove_stale_cleanup_worker marked %d stale vehicles, "
+                                    "marked %d missing-zip vehicles, "
                                     "deleted %d unavailable OVE rows "
-                                    "(remaining_stale=%d, remaining_prunable=%d)",
+                                    "(remaining_stale=%d, remaining_missing_zip=%d, remaining_prunable=%d)",
                                     result.get("marked_unavailable"),
+                                    missing_zip_result.get("marked_unavailable"),
                                     prune_result.get("deleted"),
                                     result.get("remaining_stale", 0),
+                                    missing_zip_result.get("remaining_missing_zip", 0),
                                     prune_result.get("remaining_prunable", 0),
                                 )
                     except Exception:

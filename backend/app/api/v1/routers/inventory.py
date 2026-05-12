@@ -515,6 +515,19 @@ def _zip_radius_values(zip_code: str | None, radius: int | None) -> tuple[str, .
     return zip_codes_within_radius(normalized, radius)
 
 
+def _vehicle_zip_expr():
+    return func.substr(func.trim(func.coalesce(Vehicle.location_zip, "")), 1, 5)
+
+
+def _vehicle_has_usable_zip_expr():
+    return func.length(_vehicle_zip_expr()) == 5
+
+
+def _apply_public_location_required_filter(stmt):
+    auction_expr = func.lower(Vehicle.source_type).in_([InventorySourceType.OVE.value, InventorySourceType.AUCTION.value])
+    return stmt.where(or_(~auction_expr, _vehicle_has_usable_zip_expr()))
+
+
 def _apply_zip_radius_filter(stmt, zip_code: str | None, radius: int | None):
     zip_values = _zip_radius_values(zip_code, radius)
     if zip_values is None:
@@ -524,7 +537,7 @@ def _apply_zip_radius_filter(stmt, zip_code: str | None, radius: int | None):
     # Only match vehicles that have a known zip code within the radius.
     # Vehicles with NULL location_zip are excluded — they cannot be placed
     # geographically and would leak into every radius search.
-    return stmt.where(Vehicle.location_zip.in_(zip_values))
+    return stmt.where(_vehicle_zip_expr().in_(zip_values))
 
 
 def _normalized_pick(normalized: dict[str, Any], *keys: str) -> Any:
@@ -1000,7 +1013,7 @@ def _build_marketcheck_search_params(
         "model": model or inferred_model,
         "trim": trim or inferred_trim,
         "body_type": body_type,
-        "car_type": body_type,
+        "car_type": "used",
         "state": state.upper() if state else None,
         "exterior_color": exterior_color,
         "interior_color": interior_color,
@@ -1199,6 +1212,7 @@ def _local_facets(
     source_type: str | None,
 ) -> dict[str, Any]:
     stmt = select(Vehicle).where(Vehicle.available.is_(True))
+    stmt = _apply_public_location_required_filter(stmt)
     advertised_price = _advertised_price_expr()
     if q:
         clean_q = q.strip()
@@ -1312,7 +1326,7 @@ def ingest_inventory(
         "make": make,
         "model": model,
         "body_type": body_type,
-        "car_type": body_type,
+        "car_type": "used",
         "price_range": f"{int(min_price)}-{int(max_price)}" if min_price is not None and max_price is not None else None,
         "year": year,
     }
@@ -1637,6 +1651,7 @@ def search_inventory(
                 [InventorySourceType.AUCTION.value, InventorySourceType.OVE.value]
             ),
         )
+        auction_count_stmt = _apply_public_location_required_filter(auction_count_stmt)
         auction_count_stmt = _apply_make_model_filters(auction_count_stmt, make, model, make_model_pairs)
         if min_year is not None:
             auction_count_stmt = auction_count_stmt.where(Vehicle.year >= min_year)
@@ -1714,6 +1729,7 @@ def search_inventory(
                 Vehicle.quality_firewall_pass.is_(None),
             ),
         )
+        stmt = _apply_public_location_required_filter(stmt)
     if q:
         clean_q = q.strip()
         # VIN exact match (17 alphanumeric characters)

@@ -540,8 +540,10 @@ def test_search_applies_zip_radius_to_auction_inventory() -> None:
     init_db()
     near_vin = "2T1BURHE0JC074111"
     far_vin = "2T1BURHE0JC074112"
+    near_zip4_vin = "2T1BURHE0JC074113"
+    missing_zip_vin = "2T1BURHE0JC074114"
     with SessionLocal() as db:
-        for vin in [near_vin, far_vin]:
+        for vin in [near_vin, far_vin, near_zip4_vin, missing_zip_vin]:
             db.execute(delete(Vehicle).where(Vehicle.vin == vin))
         db.commit()
 
@@ -561,6 +563,19 @@ def test_search_applies_zip_radius_to_auction_inventory() -> None:
                     quality_firewall_pass=True,
                 ),
                 Vehicle(
+                    vin=near_zip4_vin,
+                    listing_id="ove-near-zip4-1",
+                    year=2022,
+                    make="Toyota",
+                    model="Camry",
+                    price_asking=28000,
+                    location_zip="33312-1234",
+                    location_state="FL",
+                    source_type="ove",
+                    available=True,
+                    quality_firewall_pass=True,
+                ),
+                Vehicle(
                     vin=far_vin,
                     listing_id="ove-far-1",
                     year=2022,
@@ -569,6 +584,19 @@ def test_search_applies_zip_radius_to_auction_inventory() -> None:
                     price_asking=28000,
                     location_zip="90210",
                     location_state="CA",
+                    source_type="ove",
+                    available=True,
+                    quality_firewall_pass=True,
+                ),
+                Vehicle(
+                    vin=missing_zip_vin,
+                    listing_id="ove-missing-zip-1",
+                    year=2022,
+                    make="Toyota",
+                    model="Camry",
+                    price_asking=28000,
+                    location_zip=None,
+                    location_state="FL",
                     source_type="ove",
                     available=True,
                     quality_firewall_pass=True,
@@ -617,7 +645,9 @@ def test_search_applies_zip_radius_to_auction_inventory() -> None:
         assert response["status"] == "ok"
         vins = {item["vin"] for item in response["data"]["items"]}
     assert near_vin in vins
+    assert near_zip4_vin in vins
     assert far_vin not in vins
+    assert missing_zip_vin not in vins
 
 
 def test_search_infers_body_type_for_thin_auction_inventory() -> None:

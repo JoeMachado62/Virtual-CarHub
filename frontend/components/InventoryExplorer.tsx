@@ -955,6 +955,12 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
           (restored as Record<string, unknown>)[k] = (restored[k] as unknown as string).split(",").filter(Boolean);
         }
       }
+      // Coerce numeric-ish fields back to strings (JSON.parse may restore them as numbers)
+      for (const k of ["q", "source_type", "state", "zip_code", "radius", "min_price", "max_price", "min_year", "max_year", "min_miles", "max_miles"] as const) {
+        if (typeof restored[k] !== "string") {
+          (restored as Record<string, unknown>)[k] = restored[k] != null ? String(restored[k]) : "";
+        }
+      }
       return restored;
     };
     const readStoredFilters = (): FilterState | null => {
@@ -1034,6 +1040,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
       const interiorColor = csvToArr(searchParams.get("interior_color"));
       const state = searchParams.get("state") || "";
       const zipCode = searchParams.get("zip_code") || "";
+      const radius = searchParams.get("radius") || INITIAL_FILTERS.radius;
 
       // Preserve localStorage zip if none provided in URL
       let resolvedZip = zipCode;
@@ -1064,6 +1071,7 @@ export function InventoryExplorer({ initialMake, initialModel, initialTrim }: In
         exterior_color: exteriorColor,
         interior_color: interiorColor,
         state,
+        radius,
         ...(resolvedZip ? { zip_code: resolvedZip } : {}),
       };
       applyInitialFilters(nextFilters, "inventory", {

@@ -922,6 +922,87 @@ def test_ove_full_snapshot_marks_missing_rows_sold(monkeypatch: pytest.MonkeyPat
         assert stale is not None and stale.available is False
 
 
+def test_ove_ingest_deactivates_missing_zip_and_reactivates_when_zip_returns() -> None:
+    init_db()
+    vin = "1HGCM82633A004356"
+
+    with SessionLocal() as db:
+        db.execute(delete(OveDetailRequest))
+        db.execute(delete(OveVehicleDetail))
+        db.execute(delete(Vehicle).where(func.lower(Vehicle.source_type) == "ove"))
+        db.execute(delete(Vehicle).where(Vehicle.vin == vin))
+        db.commit()
+
+        first = ove_inventory_service.ingest_ove_inventory(
+            db,
+            OveBulkIngestRequest(
+                vehicles=[
+                    OveVehicleIngestItem(
+                        vin=vin,
+                        listing_id="ove-missing-zip-1",
+                        year=2023,
+                        make="Honda",
+                        model="Civic",
+                        price_asking=21000,
+                        location_zip=None,
+                        location_state="FL",
+                        features_normalized={"marketcheck_enriched": "keep-me"},
+                    )
+                ],
+                sync_metadata={"batch_id": "missing-zip-1"},
+            ),
+        )
+        db.commit()
+
+        assert first.inserted == 1
+        assert first.unavailable_missing_zip == 1
+        db.expire_all()
+        missing_zip_row = db.get(Vehicle, vin)
+        assert missing_zip_row is not None
+        assert missing_zip_row.available is False
+        assert missing_zip_row.location_zip is None
+        assert missing_zip_row.features_normalized["unavailable_reason"] == "missing_location_zip"
+
+        # Simulate enrichment added after the bad scraper row was retained.
+        missing_zip_row.features_normalized = {
+            **(missing_zip_row.features_normalized or {}),
+            "history_enrichment": "preserved",
+        }
+        db.commit()
+
+        second = ove_inventory_service.ingest_ove_inventory(
+            db,
+            OveBulkIngestRequest(
+                vehicles=[
+                    OveVehicleIngestItem(
+                        vin=vin,
+                        listing_id="ove-missing-zip-1",
+                        year=2023,
+                        make="Honda",
+                        model="Civic",
+                        price_asking=21250,
+                        location_zip="33445-1234",
+                        location_state="FL",
+                    )
+                ],
+                sync_metadata={"batch_id": "zip-restored-1"},
+            ),
+            min_count_override=0,
+            min_ratio_override=0.0,
+        )
+        db.commit()
+
+        assert second.inserted == 1
+        assert second.unavailable_missing_zip == 0
+        db.expire_all()
+        restored = db.get(Vehicle, vin)
+        assert restored is not None
+        assert restored.available is True
+        assert restored.location_zip == "33445"
+        assert restored.features_normalized["history_enrichment"] == "preserved"
+        assert "unavailable_reason" not in restored.features_normalized
+
+
 # ---------------------------------------------------------------------------
 # Lease-based claim queue tests
 # ---------------------------------------------------------------------------

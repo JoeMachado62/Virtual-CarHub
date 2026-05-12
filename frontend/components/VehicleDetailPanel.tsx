@@ -253,6 +253,7 @@ function showroomImageClassName(url: string | null | undefined): string | undefi
   if (!isChromeDataExterior(url)) return undefined;
   return isSideProfile(url) ? "vdp-showroom-image vdp-showroom-image-side" : "vdp-showroom-image";
 }
+
 const SEARCH_FILTERS_KEY = "vch:inventory:filters";
 
 type InventorySearchItem = {
@@ -1315,35 +1316,45 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
               </div>
 
               <div className="vdp-similar-scroll">
-                {similar.map((item) => (
-                  <Link key={item.vin} href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}` as any} className="vdp-similar-card">
-                    <div className="vdp-similar-img-wrap">
-                      <img src={item.hero_image || FALLBACK_IMAGE} alt={`${item.year} ${item.make} ${item.model}`} />
-                    </div>
-                    <div className="vdp-similar-info">
-                      <div className="vdp-similar-topline">
-                        <strong>{item.year} {item.make} {item.model}</strong>
-                        {item.source_label ? <span className="vdp-similar-source">{item.source_label}</span> : null}
+                {similar.map((item) => {
+                  const image = item.hero_image || FALLBACK_IMAGE;
+                  return (
+                    <Link key={item.vin} href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}` as any} className="vdp-similar-card">
+                      <div
+                        className="vdp-similar-img-wrap"
+                        style={{ background: `url(${SHOWROOM_BG}) center bottom / cover no-repeat` }}
+                      >
+                        <img
+                          src={image}
+                          alt={`${item.year} ${item.make} ${item.model}`}
+                          className="vdp-similar-showroom-img"
+                        />
                       </div>
-                      <p className="vdp-similar-price">{formatCurrency(item.price_asking)}</p>
-                      <p className="vdp-similar-meta">
-                        {item.trim || item.body_type || "Vehicle detail available"}
-                      </p>
-                      <p className="vdp-similar-meta">
-                        {item.odometer != null ? `${item.odometer.toLocaleString()} miles` : "Mileage unavailable"}
-                        {(item.location_state || item.location_zip) ? ` • ${item.location_state || ""} ${item.location_zip || ""}`.trim() : ""}
-                      </p>
-                      {(item.exterior_color || item.interior_color) ? (
-                        <p className="vdp-similar-colors">
-                          {item.exterior_color ? `Exterior: ${item.exterior_color}` : ""}
-                          {item.exterior_color && item.interior_color ? " • " : ""}
-                          {item.interior_color ? `Interior: ${item.interior_color}` : ""}
+                      <div className="vdp-similar-info">
+                        <div className="vdp-similar-topline">
+                          <strong>{item.year} {item.make} {item.model}</strong>
+                          {item.source_label ? <span className="vdp-similar-source">{item.source_label}</span> : null}
+                        </div>
+                        <p className="vdp-similar-price">{formatCurrency(item.price_asking)}</p>
+                        <p className="vdp-similar-meta">
+                          {item.trim || item.body_type || "Vehicle detail available"}
                         </p>
-                      ) : null}
-                      <span className="vdp-similar-view">View details</span>
-                    </div>
-                  </Link>
-                ))}
+                        <p className="vdp-similar-meta">
+                          {item.odometer != null ? `${item.odometer.toLocaleString()} miles` : "Mileage unavailable"}
+                          {(item.location_state || item.location_zip) ? ` • ${item.location_state || ""} ${item.location_zip || ""}`.trim() : ""}
+                        </p>
+                        {(item.exterior_color || item.interior_color) ? (
+                          <p className="vdp-similar-colors">
+                            {item.exterior_color ? `Exterior: ${item.exterior_color}` : ""}
+                            {item.exterior_color && item.interior_color ? " • " : ""}
+                            {item.interior_color ? `Interior: ${item.interior_color}` : ""}
+                          </p>
+                        ) : null}
+                        <span className="vdp-similar-view">View details</span>
+                      </div>
+                    </Link>
+                  );
+                })}
               </div>
             </aside>
           ) : null}
@@ -1525,24 +1536,25 @@ function parseDownPaymentInput(value: string, vehiclePrice: number): ParsedDownP
 function buildStoredSearchParams(filters: StoredSearchFilters | null): URLSearchParams | null {
   if (!filters) return null;
 
+  const s = (v: unknown): string => (v != null ? String(v).trim() : "");
   const params = new URLSearchParams();
-  if (filters.q?.trim()) params.set("q", filters.q.trim());
-  if (filters.make?.trim()) params.set("make", filters.make.trim());
-  if (filters.model?.trim()) params.set("model", filters.model.trim());
-  if (filters.trim?.trim()) params.set("trim", filters.trim.trim());
-  if (filters.body_type?.trim()) params.set("body_type", filters.body_type.trim());
-  if (filters.source_type?.trim()) params.set("source_type", normalizeSourceFilterValue(filters.source_type));
-  if (filters.state?.trim()) params.set("state", filters.state.trim().toUpperCase());
-  if (filters.zip_code?.trim()) params.set("zip_code", filters.zip_code.trim());
-  if (filters.radius?.trim()) params.set("radius", filters.radius.trim());
-  if (filters.min_price?.trim()) params.set("min_price", filters.min_price.trim());
-  if (filters.max_price?.trim()) params.set("max_price", filters.max_price.trim());
-  if (filters.min_year?.trim()) params.set("min_year", filters.min_year.trim());
-  if (filters.max_year?.trim()) params.set("max_year", filters.max_year.trim());
-  if (filters.min_miles?.trim()) params.set("min_miles", filters.min_miles.trim());
-  if (filters.max_miles?.trim()) params.set("max_miles", filters.max_miles.trim());
-  if (filters.exterior_color?.trim()) params.set("exterior_color", filters.exterior_color.trim());
-  if (filters.interior_color?.trim()) params.set("interior_color", filters.interior_color.trim());
+  if (s(filters.q)) params.set("q", s(filters.q));
+  if (s(filters.make)) params.set("make", s(filters.make));
+  if (s(filters.model)) params.set("model", s(filters.model));
+  if (s(filters.trim)) params.set("trim", s(filters.trim));
+  if (s(filters.body_type)) params.set("body_type", s(filters.body_type));
+  if (s(filters.source_type)) params.set("source_type", normalizeSourceFilterValue(String(filters.source_type)));
+  if (s(filters.state)) params.set("state", s(filters.state).toUpperCase());
+  if (s(filters.zip_code)) params.set("zip_code", s(filters.zip_code));
+  if (s(filters.radius)) params.set("radius", s(filters.radius));
+  if (s(filters.min_price)) params.set("min_price", s(filters.min_price));
+  if (s(filters.max_price)) params.set("max_price", s(filters.max_price));
+  if (s(filters.min_year)) params.set("min_year", s(filters.min_year));
+  if (s(filters.max_year)) params.set("max_year", s(filters.max_year));
+  if (s(filters.min_miles)) params.set("min_miles", s(filters.min_miles));
+  if (s(filters.max_miles)) params.set("max_miles", s(filters.max_miles));
+  if (s(filters.exterior_color)) params.set("exterior_color", s(filters.exterior_color));
+  if (s(filters.interior_color)) params.set("interior_color", s(filters.interior_color));
 
   if (!Array.from(params.keys()).length) return null;
 

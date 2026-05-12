@@ -21,6 +21,7 @@ from app.schemas.ove_inventory import (
 )
 from app.services.chromedata_service import build_chromedata_manifest, sync_chromedata_source_assets
 from app.services.image_pipeline_service import canonical_source_image_url, ensure_tier2_hero_job, sync_source_assets
+from app.services.zip_radius_service import normalize_zip_code
 
 
 # Statuses that represent active in-flight work that should not be re-claimed
@@ -68,6 +69,7 @@ class OveBulkIngestReport:
     skipped_priority: int = 0
     skipped_invalid: int = 0
     skipped_quality: int = 0
+    unavailable_missing_zip: int = 0
     marked_sold: int = 0
     synced_vins: list[str] = field(default_factory=list)
     source_platforms: list[str] = field(default_factory=list)
@@ -97,10 +99,16 @@ def _build_vehicle_row(item, now: datetime) -> dict[str, Any]:
     """Transform an OveVehicleIngestItem into a flat dict for Vehicle upsert."""
     source_platform = item.source_platform.value
     source_type = item.source_type.value
+    location_zip = normalize_zip_code(item.location_zip)
+    has_location_zip = location_zip is not None
 
     # Build features_normalized with display fields for frontend consistency
     normalized_features = dict(item.features_normalized or {})
     normalized_features["source_platform"] = source_platform
+    if not has_location_zip:
+        normalized_features["status"] = "Unavailable"
+        normalized_features["unavailable_reason"] = "missing_location_zip"
+        normalized_features["missing_location_zip_at"] = now.isoformat()
 
     display_map = {
         "exterior_color": "exterior_color",
@@ -146,14 +154,14 @@ def _build_vehicle_row(item, now: datetime) -> dict[str, Any]:
         "condition_grade": item.condition_grade,
         "price_asking": item.price_asking,
         "price_wholesale_est": item.price_wholesale_est,
-        "location_zip": item.location_zip,
+        "location_zip": location_zip,
         "location_state": item.location_state,
         "source_type": source_type,
         "source_url": item.source_url,
         "images": item.images,
         "features_raw": item.features_raw,
         "features_normalized": normalized_features,
-        "available": True,
+        "available": has_location_zip,
         "quality_firewall_pass": item.quality_firewall_pass,
         "last_seen_active": now,
     }
@@ -211,6 +219,137 @@ def _bulk_upsert_vehicles_pg(db: Session, rows: list[dict[str, Any]]) -> None:
             set_=set_clause,
         )
         db.execute(stmt)
+
+
+def _apply_missing_zip_availability_metadata(db: Session, rows: list[dict[str, Any]], now: datetime) -> None:
+    valid_vins = [row["vin"] for row in rows if row["available"]]
+    missing_zip_vins = [row["vin"] for row in rows if not row["available"]]
+
+    if valid_vins:
+        features_without_missing_zip_flags = cast(
+            cast(Vehicle.features_normalized, PG_JSONB)
+            .op("-")("unavailable_reason")
+            .op("-")("missing_location_zip_at"),
+            PG_JSONB,
+        )
+        cleaned_features = case(
+            (
+                Vehicle.features_normalized["status"].as_string() == "Unavailable",
+                features_without_missing_zip_flags.op("-")("status"),
+            ),
+            else_=features_without_missing_zip_flags,
+        )
+        db.execute(
+            update(Vehicle)
+            .where(Vehicle.vin.in_(valid_vins))
+            .values(features_normalized=cast(cleaned_features, SA_JSON))
+        )
+
+    if missing_zip_vins:
+        unavailable_metadata = func.jsonb_build_object(
+            "status",
+            "Unavailable",
+            "unavailable_reason",
+            "missing_location_zip",
+            "missing_location_zip_at",
+            now.isoformat(),
+        )
+        db.execute(
+            update(Vehicle)
+            .where(Vehicle.vin.in_(missing_zip_vins))
+            .values(
+                available=False,
+                features_normalized=cast(
+                    func.coalesce(
+                        cast(Vehicle.features_normalized, PG_JSONB),
+                        cast(func.cast("{}", SA_JSON), PG_JSONB),
+                    ).op("||")(unavailable_metadata),
+                    SA_JSON,
+                ),
+            )
+        )
+
+
+def deactivate_missing_zip_ove_inventory(
+    db: Session,
+    *,
+    max_mark: int = 5000,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Mark active OVE rows unavailable when they cannot be geographically placed."""
+    now = datetime.now(UTC)
+    missing_zip_filter = [
+        func.lower(Vehicle.source_type) == InventorySourceType.OVE.value,
+        Vehicle.available.is_(True),
+        or_(
+            Vehicle.location_zip.is_(None),
+            func.length(func.trim(func.coalesce(Vehicle.location_zip, ""))) < 5,
+        ),
+    ]
+
+    total_missing = db.scalar(
+        select(func.count()).select_from(Vehicle).where(*missing_zip_filter)
+    ) or 0
+
+    if dry_run or total_missing == 0:
+        return {
+            "dry_run": dry_run,
+            "total_missing_zip_found": total_missing,
+            "marked_unavailable": 0,
+            "capped": False,
+            "remaining_missing_zip": total_missing if dry_run else 0,
+        }
+
+    vins = [
+        row[0]
+        for row in db.execute(
+            select(Vehicle.vin)
+            .where(*missing_zip_filter)
+            .order_by(Vehicle.updated_at.asc())
+            .limit(max_mark)
+        ).all()
+    ]
+
+    if not vins:
+        return {
+            "dry_run": False,
+            "total_missing_zip_found": total_missing,
+            "marked_unavailable": 0,
+            "capped": False,
+            "remaining_missing_zip": 0,
+        }
+
+    unavailable_metadata = func.jsonb_build_object(
+        "status",
+        "Unavailable",
+        "unavailable_reason",
+        "missing_location_zip",
+        "missing_location_zip_at",
+        now.isoformat(),
+    )
+    marked = db.execute(
+        update(Vehicle)
+        .where(Vehicle.vin.in_(vins))
+        .values(
+            available=False,
+            updated_at=now,
+            features_normalized=cast(
+                func.coalesce(
+                    cast(Vehicle.features_normalized, PG_JSONB),
+                    cast(func.cast("{}", SA_JSON), PG_JSONB),
+                ).op("||")(unavailable_metadata),
+                SA_JSON,
+            ),
+        )
+    ).rowcount or 0
+
+    return {
+        "dry_run": False,
+        "total_missing_zip_found": total_missing,
+        "marked_unavailable": marked,
+        "capped": total_missing > max_mark,
+        "remaining_missing_zip": max(0, total_missing - marked),
+    }
 
 
 def ingest_ove_inventory(
@@ -287,20 +426,24 @@ def ingest_ove_inventory(
     source_platforms: set[str] = set()
     for item in payload.vehicles:
         source_platforms.add(item.source_platform.value)
+    missing_zip_count = sum(1 for row in rows if not row["available"])
 
     dialect = db.bind.dialect.name if db.bind is not None else ""
     if dialect != "postgresql":
         raise RuntimeError(f"OVE inventory ingest requires PostgreSQL, got {dialect or 'unknown'}")
     _bulk_upsert_vehicles_pg(db, rows)
+    _apply_missing_zip_availability_metadata(db, rows, now)
 
     report.inserted = len(rows)
+    report.unavailable_missing_zip = missing_zip_count
     report.synced_vins = [r["vin"] for r in rows]
     report.source_platforms = sorted(source_platforms)
 
     db.flush()
     logger.info(
-        "OVE bulk ingest complete: %d vehicles upserted, %d old marked unavailable.",
+        "OVE bulk ingest complete: %d vehicles upserted, %d missing zip left unavailable, %d old marked unavailable.",
         len(rows),
+        missing_zip_count,
         marked_unavailable,
     )
     return report

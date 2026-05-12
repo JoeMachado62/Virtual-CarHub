@@ -30,6 +30,7 @@ from app.services.ove_inventory_service import (
     claim_ove_detail_requests,
     cleanup_stale_ove_inventory,
     complete_ove_detail_request,
+    deactivate_missing_zip_ove_inventory,
     enqueue_ove_detail_request,
     fail_ove_detail_request,
     get_ove_inventory_health,
@@ -116,6 +117,7 @@ def ingest_ove(payload: OveBulkIngestRequest, db: Session = Depends(get_db)) -> 
             "requested": report.requested,
             "inserted": report.inserted,
             "updated": report.updated,
+            "unavailable_missing_zip": report.unavailable_missing_zip,
             "synced_vins": report.synced_vins,
             "sync_metadata": report.sync_metadata,
         },
@@ -293,6 +295,11 @@ def cleanup_stale_ove(
         max_mark=cap,
         dry_run=dry_run,
     )
+    missing_zip_result = deactivate_missing_zip_ove_inventory(
+        db,
+        max_mark=cap,
+        dry_run=dry_run,
+    )
     prune_result = None
     if prune_unavailable:
         prune_result = prune_unavailable_ove_inventory(
@@ -306,9 +313,16 @@ def cleanup_stale_ove(
             dry_run=dry_run,
         )
 
-    result = {"stale": stale_result, "pruned_unavailable": prune_result}
+    result = {
+        "stale": stale_result,
+        "missing_zip": missing_zip_result,
+        "pruned_unavailable": prune_result,
+    }
 
-    changed = stale_result.get("marked_unavailable", 0) > 0 or (
+    changed = (
+        stale_result.get("marked_unavailable", 0) > 0
+        or missing_zip_result.get("marked_unavailable", 0) > 0
+    ) or (
         prune_result is not None and prune_result.get("deleted", 0) > 0
     )
     if not dry_run and changed:
