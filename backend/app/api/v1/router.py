@@ -2,7 +2,10 @@ from fastapi import APIRouter
 
 from app.api.v1.routers import (
     admin,
+    admin_actions,
     admin_preapproval,
+    agent_actions,
+    agent_healthcheck,
     auth,
     chat,
     funding,
@@ -30,3 +33,6 @@ api_router.include_router(funding.router, prefix="/funding", tags=["funding"])
 api_router.include_router(sourcing.router, prefix="/sourcing", tags=["sourcing"])
 api_router.include_router(logistics.router, prefix="/logistics", tags=["logistics"])
 api_router.include_router(returns.router, prefix="/returns", tags=["returns"])
+api_router.include_router(agent_actions.router, prefix="/agent-actions", tags=["agent-actions"])
+api_router.include_router(admin_actions.router, prefix="/admin-actions", tags=["admin-actions"])
+api_router.include_router(agent_healthcheck.router, tags=["agent-auth"])
