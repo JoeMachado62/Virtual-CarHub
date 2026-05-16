@@ -1097,6 +1097,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                     See price details
                   </button>
                 </div>
+                <p className="vdp-price-disclaimer">* Taxes, title, registration, and transport are excluded.</p>
                 <p className="vdp-price-subtitle">
                   {toPublicSourceLabel(vehicle.source_label, vehicle.source_type)}
                   {vehicle.condition_grade ? ` • Grade ${vehicle.condition_grade}` : ""}
@@ -1156,7 +1157,6 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
             <p className="vdp-payment-disclosure">
               Estimated using {selectedTier.apr.toFixed(2)}% APR for {DEFAULT_LOAN_TERM_MONTHS} months
               {downPayment.amount > 0 ? ` with ${formatCurrency(downPayment.amount)} down payment` : " with no down payment"}.
-              Taxes, title, registration, and transport are excluded.
             </p>
 
             <div className="vdp-disclosure-card">

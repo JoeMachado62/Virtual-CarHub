@@ -2647,6 +2647,11 @@ textarea {
   color: var(--muted);
   font-size: 0.92rem;
 }
+.vdp-price-disclaimer {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
 
 .vdp-payment-options,
 .vdp-payment-cards {
