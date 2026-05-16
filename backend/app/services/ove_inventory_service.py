@@ -207,6 +207,7 @@ def _bulk_upsert_vehicles_pg(db: Session, rows: list[dict[str, Any]]) -> None:
             (
                 and_(
                     Vehicle.features_raw.isnot(None),
+                    func.json_typeof(Vehicle.features_raw) == "array",
                     func.json_array_length(Vehicle.features_raw) > 0,
                 ),
                 Vehicle.features_raw,
