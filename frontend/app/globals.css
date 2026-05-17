@@ -1510,60 +1510,98 @@ textarea {
 .dashboard-garage-item.is-sold {
   opacity: 0.85;
   border-color: rgba(220, 38, 38, 0.3);
-}
-
-.dashboard-garage-item-thumb {
   position: relative;
-  width: 100%;
-  height: 160px;
   overflow: hidden;
-  border-radius: 14px;
-  background: linear-gradient(145deg, rgba(120, 131, 235, 0.1), rgba(216, 104, 67, 0.08));
 }
 
-.dashboard-garage-thumb-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
+.dashboard-garage-sold-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 0;
+  pointer-events: none;
 }
 
-.is-sold .dashboard-garage-thumb-img {
-  filter: grayscale(0.5);
-  opacity: 0.6;
+.dashboard-garage-sold-text {
+  font-size: 2.2rem;
+  font-weight: 900;
+  color: #dc2626;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transform: rotate(-4deg);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-.dashboard-garage-sold-overlay {
+/* Spotlight sold overlay — layered on top of showroom bg + vehicle image */
+.dashboard-sold-overlay {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  z-index: 2;
 }
 
-.dashboard-garage-sold-text {
-  font-size: 3rem;
+.dashboard-sold-overlay-text {
+  font-size: 4rem;
   font-weight: 900;
   color: #dc2626;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   transform: rotate(-12deg);
-  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  text-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   -webkit-text-stroke: 1px rgba(220, 38, 38, 0.6);
-}
-
-.spotlight-sold-overlay .dashboard-garage-sold-text {
-  font-size: 4rem;
-}
-
-.dashboard-spotlight-media.is-sold img {
-  filter: grayscale(0.5);
-  opacity: 0.6;
 }
 
 .dashboard-spotlight-media.is-sold {
   position: relative;
+}
+
+.dashboard-spotlight-media.is-sold img {
+  filter: grayscale(0.4);
+  opacity: 0.65;
+}
+
+/* VDP sold overlay — same 3-layer treatment */
+.vdp-sold-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.vdp-sold-overlay-text {
+  font-size: 4.5rem;
+  font-weight: 900;
+  color: #dc2626;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transform: rotate(-12deg);
+  text-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  -webkit-text-stroke: 1px rgba(220, 38, 38, 0.6);
+}
+
+.vdp-gallery-stage.is-sold img {
+  filter: grayscale(0.4);
+  opacity: 0.65;
+}
+
+.vdp-gallery-preview.is-sold img {
+  filter: grayscale(0.4);
+  opacity: 0.65;
+}
+
+.vdp-photo-stage.is-sold {
+  position: relative;
+}
+
+.vdp-photo-stage.is-sold img {
+  filter: grayscale(0.4);
+  opacity: 0.65;
 }
 
 .badge-sold {

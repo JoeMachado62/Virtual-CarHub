@@ -855,6 +855,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   const previewIndices = getPreviewIndices(displayImages.length, galleryIndex);
   const activeModalIndex = photoModalIndex ?? galleryIndex;
   const activeModalImage = displayImages[activeModalIndex] || galleryMain;
+  const vehicleSold = !vehicle.available && inGarage;
 
   function prevGallery() {
     if (displayImages.length < 2) return;
@@ -1029,7 +1030,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
         <div className="vdp-hero-grid">
           <div className="vdp-gallery-shell">
             <div className="vdp-gallery-grid">
-              <div className="vdp-gallery-stage" style={showroomContainerStyle(galleryMain)} onClick={() => openPhotoModal(galleryIndex)} role="button" tabIndex={0} onKeyDown={(event) => {
+              <div className={`vdp-gallery-stage${vehicleSold ? " is-sold" : ""}`} style={showroomContainerStyle(galleryMain)} onClick={() => openPhotoModal(galleryIndex)} role="button" tabIndex={0} onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   openPhotoModal(galleryIndex);
@@ -1041,6 +1042,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                   className={showroomImageClassName(galleryMain)}
                   style={showroomImageStyle(galleryMain)}
                 />
+                {vehicleSold ? (
+                  <div className="vdp-sold-overlay">
+                    <span className="vdp-sold-overlay-text">SOLD</span>
+                  </div>
+                ) : null}
                 {displayImages.length > 1 ? (
                   <>
                   <button className="vdp-gallery-arrow vdp-gallery-arrow-left" type="button" aria-label="Previous photo" onClick={(event) => { event.stopPropagation(); prevGallery(); }}>
@@ -1059,7 +1065,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                   return (
                     <button
                       key={`${image}-${index}`}
-                      className="vdp-gallery-preview"
+                      className={`vdp-gallery-preview${vehicleSold ? " is-sold" : ""}`}
                       style={showroomContainerStyle(image)}
                       onClick={() => setGalleryIndex(index)}
                     >
@@ -1378,7 +1384,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
             </header>
 
             <div
-              className="vdp-photo-stage"
+              className={`vdp-photo-stage${vehicleSold ? " is-sold" : ""}`}
               style={showroomContainerStyle(activeModalImage)}
               onTouchStart={handlePhotoTouchStart}
               onTouchEnd={handlePhotoTouchEnd}
@@ -1389,6 +1395,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 className={showroomImageClassName(activeModalImage)}
                 style={showroomImageStyle(activeModalImage)}
               />
+              {vehicleSold ? (
+                <div className="vdp-sold-overlay">
+                  <span className="vdp-sold-overlay-text">SOLD</span>
+                </div>
+              ) : null}
               {displayImages.length > 1 ? (
                 <>
                   <button className="vdp-gallery-nav vdp-gallery-prev" type="button" aria-label="Previous photo" onClick={prevModalImage}>&lsaquo;</button>

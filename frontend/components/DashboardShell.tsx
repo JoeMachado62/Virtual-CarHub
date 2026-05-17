@@ -896,18 +896,11 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                     key={item.id}
                     className={`inventory-garage-item dashboard-garage-item${isSpotlight ? " is-spotlight" : ""}${isSold ? " is-sold" : ""}`}
                   >
-                    <div className="dashboard-garage-item-thumb">
-                      <img
-                        src={item.vehicle.thumbnail || FALLBACK_IMAGE}
-                        alt={garageTitle(item)}
-                        className="dashboard-garage-thumb-img"
-                      />
-                      {isSold ? (
-                        <div className="dashboard-garage-sold-overlay">
-                          <span className="dashboard-garage-sold-text">SOLD</span>
-                        </div>
-                      ) : null}
-                    </div>
+                    {isSold ? (
+                      <div className="dashboard-garage-sold-banner">
+                        <span className="dashboard-garage-sold-text">SOLD</span>
+                      </div>
+                    ) : null}
                     <div className="dashboard-garage-item-copy">
                       <div className="dashboard-garage-item-head">
                         <strong className="dashboard-garage-title">{garageTitle(item)}</strong>
@@ -1004,8 +997,8 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                   alt={garageTitle(spotlightItem)}
                 />
                 {spotlightItem.status === "sold" ? (
-                  <div className="dashboard-garage-sold-overlay spotlight-sold-overlay">
-                    <span className="dashboard-garage-sold-text">SOLD</span>
+                  <div className="dashboard-sold-overlay">
+                    <span className="dashboard-sold-overlay-text">SOLD</span>
                   </div>
                 ) : null}
               </div>
