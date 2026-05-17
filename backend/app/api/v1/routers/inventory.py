@@ -1713,22 +1713,16 @@ def search_inventory(
                 }
             )
 
-    # VIN searches return a specific vehicle regardless of availability status
-    if is_vin_search:
-        stmt = select(Vehicle).where(
-            or_(
-                Vehicle.quality_firewall_pass.is_(True),
-                Vehicle.quality_firewall_pass.is_(None),
-            ),
-        )
-    else:
-        stmt = select(Vehicle).where(
-            Vehicle.available.is_(True),
-            or_(
-                Vehicle.quality_firewall_pass.is_(True),
-                Vehicle.quality_firewall_pass.is_(None),
-            ),
-        )
+    # All searches — including VIN lookups — must respect the availability
+    # gate.  Unavailable vehicles should not appear as active inventory.
+    stmt = select(Vehicle).where(
+        Vehicle.available.is_(True),
+        or_(
+            Vehicle.quality_firewall_pass.is_(True),
+            Vehicle.quality_firewall_pass.is_(None),
+        ),
+    )
+    if not is_vin_search:
         stmt = _apply_public_location_required_filter(stmt)
     if q:
         clean_q = q.strip()
