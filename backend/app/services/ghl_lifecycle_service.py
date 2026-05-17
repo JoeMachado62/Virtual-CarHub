@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.constants import DealState, FundingState
 from app.integrations import GHLClient
-from app.models.entities import BuyerProfile, Deal, FundingCase, OveDetailRequest, OveVehicleDetail, User, Vehicle
+from app.models.entities import BuyerProfile, Deal, FundingCase, GarageItem, OveDetailRequest, OveVehicleDetail, User, Vehicle
 from app.services.audit_service import log_event
-from app.services.email_service import send_condition_report_ready_email
+from app.services.email_service import send_condition_report_ready_email, send_vehicle_sold_notification_email
 from app.services.notification_service import create_notification
 
 logger = logging.getLogger("vch.ghl_lifecycle")
@@ -50,6 +50,85 @@ def _parse_datetime(value: Any) -> datetime | None:
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     except ValueError:
         return None
+
+
+def handle_vehicle_sold(
+    db: Session,
+    *,
+    vin: str,
+    reason: str = "vehicle_sold",
+) -> dict[str, Any]:
+    """Notify all garage holders that a saved vehicle is no longer available.
+
+    Called from:
+      1. OVE detail not-found handler (CR request → VIN unavailable)
+      2. Stale inventory cleanup (hourly sync removes VIN from active inventory)
+
+    Actions per affected garage item:
+      - Status transitions to 'sold'
+      - In-app notification created
+      - 'This One Got Away' email sent
+      - Audit event logged
+    """
+    vehicle = db.get(Vehicle, vin)
+
+    affected_items = db.scalars(
+        select(GarageItem).where(
+            GarageItem.vin == vin,
+            GarageItem.status.notin_(["removed", "sold"]),
+        )
+    ).all()
+
+    if not affected_items:
+        return {"vin": vin, "notified_count": 0, "reason": reason}
+
+    now = datetime.now(UTC)
+    notified_users: list[str] = []
+
+    for item in affected_items:
+        item.status = "sold"
+
+        user = db.get(User, item.user_id)
+        if not user:
+            continue
+
+        create_notification(
+            db,
+            user_id=user.id,
+            deal_id=item.deal_id,
+            message=f"The vehicle you saved ({vin}) is no longer available at auction.",
+        )
+
+        send_vehicle_sold_notification_email(
+            user=user,
+            vin=vin,
+            vehicle=vehicle,
+        )
+
+        log_event(
+            db,
+            deal_id=item.deal_id,
+            event_type="garage_vehicle_sold",
+            actor="system",
+            payload={
+                "vin": vin,
+                "garage_item_id": item.id,
+                "user_id": user.id,
+                "reason": reason,
+            },
+        )
+        notified_users.append(user.id)
+
+    logger.info(
+        "vehicle_sold_notifications vin=%s affected=%d notified=%d reason=%s",
+        vin, len(affected_items), len(notified_users), reason,
+    )
+    return {
+        "vin": vin,
+        "notified_count": len(notified_users),
+        "notified_user_ids": notified_users,
+        "reason": reason,
+    }
 
 
 class GHLLifecycleService:

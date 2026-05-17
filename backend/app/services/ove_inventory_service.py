@@ -495,6 +495,9 @@ def cleanup_stale_ove_inventory(
         .limit(max_mark)
     ).all()
 
+    from app.services.ghl_lifecycle_service import handle_vehicle_sold
+
+    notified_total = 0
     for row in rows:
         row.available = False
         normalized = dict(row.features_normalized or {})
@@ -503,6 +506,13 @@ def cleanup_stale_ove_inventory(
         normalized["cleanup_at"] = now.isoformat()
         row.features_normalized = normalized
 
+        # Notify garage holders that this vehicle sold
+        try:
+            result = handle_vehicle_sold(db, vin=row.vin, reason="stale_threshold")
+            notified_total += result.get("notified_count", 0)
+        except Exception:
+            logger.warning("vehicle_sold_notification_failed vin=%s", row.vin, exc_info=True)
+
     marked = len(rows)
     return {
         "dry_run": False,
@@ -510,6 +520,7 @@ def cleanup_stale_ove_inventory(
         "cutoff": cutoff.isoformat(),
         "total_stale_found": total_stale,
         "marked_unavailable": marked,
+        "notified_garage_holders": notified_total,
         "capped": total_stale > max_mark,
         "remaining_stale": max(0, total_stale - marked),
     }

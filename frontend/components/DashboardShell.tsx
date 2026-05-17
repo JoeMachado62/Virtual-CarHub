@@ -889,19 +889,36 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                 const isSpotlight = item.vin === spotlightItem?.vin;
                 const isSelected = item.vin === deal?.selected_vin;
                 const itemActionLoading = garageActionVin === item.vin;
+                const isSold = item.status === "sold";
 
                 return (
                   <article
                     key={item.id}
-                    className={`inventory-garage-item dashboard-garage-item${isSpotlight ? " is-spotlight" : ""}`}
+                    className={`inventory-garage-item dashboard-garage-item${isSpotlight ? " is-spotlight" : ""}${isSold ? " is-sold" : ""}`}
                   >
+                    <div className="dashboard-garage-item-thumb">
+                      <img
+                        src={item.vehicle.thumbnail || FALLBACK_IMAGE}
+                        alt={garageTitle(item)}
+                        className="dashboard-garage-thumb-img"
+                      />
+                      {isSold ? (
+                        <div className="dashboard-garage-sold-overlay">
+                          <span className="dashboard-garage-sold-text">SOLD</span>
+                        </div>
+                      ) : null}
+                    </div>
                     <div className="dashboard-garage-item-copy">
                       <div className="dashboard-garage-item-head">
                         <strong className="dashboard-garage-title">{garageTitle(item)}</strong>
                         <div className="dashboard-garage-badges">
                           {isSelected ? <span className="badge">Selected</span> : null}
                           {isSpotlight ? <span className="badge">Focused</span> : null}
-                          <span className="badge">{statusLabel(item.status)}</span>
+                          {isSold ? (
+                            <span className="badge badge-sold">Sold</span>
+                          ) : (
+                            <span className="badge">{statusLabel(item.status)}</span>
+                          )}
                         </div>
                       </div>
                       <p className="dashboard-garage-price">
@@ -924,30 +941,41 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                       <Link className="button secondary" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}`}>
                         View Details
                       </Link>
-                      {item.has_inspection_report ? (
-                        <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}/condition-report`}>
-                          Inspection Report Ready
-                        </Link>
-                      ) : null}
-                      {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
-                      !item.has_inspection_report && pendingReportVins.has(item.vin) ? (
-                        <button className="button ghost-mint" disabled>
-                          Inspection Report Pending
-                        </button>
-                      ) : null}
-                      {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
-                      !item.has_inspection_report && !pendingReportVins.has(item.vin) ? (
-                        <button
-                          className="button ghost-mint"
-                          onClick={() => requestConditionReport(item.vin)}
-                          disabled={itemActionLoading}
+                      {isSold ? (
+                        <Link
+                          className="button ghost-accent"
+                          href={`/inventory?${item.vehicle.year ? `year=${item.vehicle.year}&` : ""}${item.vehicle.make ? `make=${encodeURIComponent(item.vehicle.make)}&` : ""}${item.vehicle.model ? `model=${encodeURIComponent(item.vehicle.model)}` : ""}`}
                         >
-                          {itemActionLoading ? "Requesting..." : item.cr_request_status === "terminal" ? "Retry Report" : "Request Inspection Report"}
-                        </button>
-                      ) : null}
-                      <button className="button" onClick={() => startGarageAcquisition(item.vin)} disabled={itemActionLoading}>
-                        {itemActionLoading ? "Starting..." : "Start Purchase"}
-                      </button>
+                          Find Similar Vehicles
+                        </Link>
+                      ) : (
+                        <>
+                          {item.has_inspection_report ? (
+                            <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}/condition-report`}>
+                              Inspection Report Ready
+                            </Link>
+                          ) : null}
+                          {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
+                          !item.has_inspection_report && pendingReportVins.has(item.vin) ? (
+                            <button className="button ghost-mint" disabled>
+                              Inspection Report Pending
+                            </button>
+                          ) : null}
+                          {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
+                          !item.has_inspection_report && !pendingReportVins.has(item.vin) ? (
+                            <button
+                              className="button ghost-mint"
+                              onClick={() => requestConditionReport(item.vin)}
+                              disabled={itemActionLoading}
+                            >
+                              {itemActionLoading ? "Requesting..." : item.cr_request_status === "terminal" ? "Retry Report" : "Request Inspection Report"}
+                            </button>
+                          ) : null}
+                          <button className="button" onClick={() => startGarageAcquisition(item.vin)} disabled={itemActionLoading}>
+                            {itemActionLoading ? "Starting..." : "Start Purchase"}
+                          </button>
+                        </>
+                      )}
                       <button className="button ghost-danger" onClick={() => removeFromGarage(item.vin)} disabled={itemActionLoading}>
                         Remove
                       </button>
@@ -970,11 +998,16 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
 
           {spotlightItem ? (
             <>
-              <div className="dashboard-spotlight-media">
+              <div className={`dashboard-spotlight-media${spotlightItem.status === "sold" ? " is-sold" : ""}`}>
                 <img
                   src={spotlightItem.vehicle.thumbnail || FALLBACK_IMAGE}
                   alt={garageTitle(spotlightItem)}
                 />
+                {spotlightItem.status === "sold" ? (
+                  <div className="dashboard-garage-sold-overlay spotlight-sold-overlay">
+                    <span className="dashboard-garage-sold-text">SOLD</span>
+                  </div>
+                ) : null}
               </div>
               <div className="dashboard-spotlight-facts">
                 <div className="vinv-modal-data-row">

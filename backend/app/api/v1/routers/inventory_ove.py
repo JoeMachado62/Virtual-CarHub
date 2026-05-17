@@ -1,12 +1,16 @@
 import logging
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_service_token
 from app.core.config import settings as app_settings
+from app.core.constants import OveDetailRequestStatus
 from app.core.responses import ok
 from app.db.session import get_db
+from app.models.entities import OveDetailRequest
 from app.schemas.ove_inventory import (
     OveBulkIngestRequest,
     OveDetailClaimRequest,
@@ -19,7 +23,7 @@ from app.schemas.ove_inventory import (
     OveScraperHeartbeatRequest,
 )
 from app.services.audit_service import log_event
-from app.services.ghl_lifecycle_service import GHLLifecycleService
+from app.services.ghl_lifecycle_service import GHLLifecycleService, handle_vehicle_sold
 from app.schemas.hot_deals import HotDealIngestRequest
 from app.services.hot_deal_service import HotDealBatchValidationError, ingest_hot_deals, ingest_hot_deals_resilient
 from app.services.ove_inventory_service import (
@@ -513,10 +517,76 @@ def heartbeat_ove_detail(
 # (claim, {request_id}/complete, etc.) are matched before this catch-all.
 # ---------------------------------------------------------------------------
 
+_NOT_FOUND_ACTIVE_STATUSES = (
+    OveDetailRequestStatus.PENDING,
+    OveDetailRequestStatus.CLAIMED,
+    OveDetailRequestStatus.IN_PROGRESS,
+)
+
+
+def _handle_not_found_detail(db: Session, *, vin: str, payload: OveDetailPushRequest) -> dict:
+    """Terminalize all active detail requests for a VIN confirmed unavailable."""
+    active_requests = db.scalars(
+        select(OveDetailRequest)
+        .where(
+            OveDetailRequest.vin == vin,
+            OveDetailRequest.status.in_(list(_NOT_FOUND_ACTIVE_STATUSES)),
+        )
+    ).all()
+
+    now = datetime.now(UTC)
+    terminal_reason = (payload.sync_metadata or {}).get("failure_category", "vin_not_found")
+    terminal_message = (payload.sync_metadata or {}).get("failure_message") or "VIN not available in auction search results"
+
+    for request in active_requests:
+        request.status = OveDetailRequestStatus.TERMINAL
+        request.terminal_reason = terminal_reason
+        request.terminal_message = terminal_message
+        request.completed_at = now
+        request.leased_to = None
+        request.lease_expires_at = None
+        request.next_retry_at = None
+
+    # Notify garage holders that this vehicle is no longer available
+    sold_result = handle_vehicle_sold(db, vin=vin, reason="vin_not_found")
+
+    response = {
+        "vin": vin,
+        "source_platform": payload.source_platform.value,
+        "detail_saved": False,
+        "scrape_status": "not_found",
+        "terminalized_request_ids": [r.id for r in active_requests],
+        "terminalized_count": len(active_requests),
+        "terminal_reason": terminal_reason,
+        "notified_count": sold_result.get("notified_count", 0),
+        "sync_metadata": payload.sync_metadata,
+    }
+    log_event(
+        db,
+        deal_id=None,
+        event_type="inventory_ove_detail_not_found",
+        actor="system",
+        payload=response,
+    )
+    db.commit()
+    return ok(response)
+
 
 @router.post("/detail/{vin}")
 def push_ove_detail(vin: str, payload: OveDetailPushRequest, db: Session = Depends(get_db)) -> dict:
     vin = _normalized_vin(vin)
+
+    # Detect not-found payloads: scraper confirmed VIN unavailable in auction.
+    # Terminalize pending requests without persisting detail data.
+    sync_meta = payload.sync_metadata or {}
+    is_not_found = (
+        sync_meta.get("scrape_status") == "not_found"
+        or sync_meta.get("listing_available") is False
+        or sync_meta.get("failure_category") == "vin_not_found"
+    )
+    if is_not_found:
+        return _handle_not_found_detail(db, vin=vin, payload=payload)
+
     try:
         detail, completed_requests, hero_job_queued = upsert_ove_vehicle_detail(db, vin=vin, payload=payload)
     except LookupError as exc:

@@ -568,6 +568,14 @@ def _normalize_condition_report_payload(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("condition_report must be an object")
 
+    # Short-circuit: if the original payload has no meaningful CR content,
+    # return empty immediately.  This prevents downstream enrichment steps
+    # (inspection, granular_inspection) from synthesizing keys that would
+    # make _condition_report_has_content() return True and trigger full
+    # field validation — which would fail for not-found/unavailable VINs.
+    if not _condition_report_has_content(value):
+        return {}
+
     report = dict(value)
 
     overall_grade = _clean_text(report.get("overall_grade")) or _clean_text(report.get("grade"))

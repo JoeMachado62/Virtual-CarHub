@@ -131,3 +131,103 @@ def send_condition_report_ready_email(
         html_body=html_body,
         text_body=text_body,
     )
+
+
+def _search_similar_url(vehicle: Vehicle | None) -> str:
+    """Build a search URL for same year/make/model."""
+    base = settings.public_web_base_url.rstrip("/")
+    if not vehicle or not vehicle.make or not vehicle.model:
+        return f"{base}/inventory"
+    params: list[str] = []
+    if vehicle.year:
+        params.append(f"year={quote(str(vehicle.year))}")
+    params.append(f"make={quote(vehicle.make)}")
+    params.append(f"model={quote(vehicle.model)}")
+    if vehicle.trim:
+        params.append(f"trim={quote(vehicle.trim)}")
+    return f"{base}/inventory?{'&'.join(params)}"
+
+
+def send_vehicle_sold_notification_email(
+    *,
+    user: User,
+    vin: str,
+    vehicle: Vehicle | None,
+) -> None:
+    """Send 'This One Got Away' email when a garage vehicle becomes unavailable."""
+    if not user.email:
+        logger.warning("vehicle_sold_email_skipped_missing_email user_id=%s vin=%s", user.id, vin)
+        return
+
+    vehicle_title = _vehicle_title(vehicle, vin)
+    hero_image = _extract_best_vehicle_image(None, vehicle)
+    dashboard_url = _dashboard_magic_link(user=user, vin=vin)
+    search_url = _search_similar_url(vehicle)
+    greeting = f"Hi {user.first_name}" if user.first_name else "Hi"
+
+    hero_block = (
+        f"""
+  <div style="margin:0 0 20px;position:relative;">
+    <img src="{hero_image}" alt="{vehicle_title}" style="width:100%;display:block;border-radius:18px;object-fit:cover;max-height:280px;opacity:0.7;" />
+    <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-12deg);font-size:48px;font-weight:900;color:#dc2626;text-transform:uppercase;letter-spacing:0.08em;text-shadow:0 2px 8px rgba(0,0,0,0.2);">
+      SOLD
+    </div>
+  </div>
+"""
+        if hero_image
+        else ""
+    )
+
+    similar_label = vehicle_title if vehicle_title != vin else "similar vehicles"
+
+    html_body = f"""\
+<div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto;padding:28px;background:#f5f1e8;">
+  <div style="background:linear-gradient(180deg,#fff9f0 0%,#ffffff 100%);border:1px solid #eadfce;border-radius:28px;padding:28px;box-shadow:0 14px 40px rgba(70,54,32,0.08);">
+    <div style="display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:#fde8e8;color:#991b1b;font-size:12px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;">
+      Vehicle Sold
+    </div>
+    <h2 style="margin:16px 0 8px;color:#1f2937;font-size:28px;line-height:1.15;">This one got away.</h2>
+    <p style="margin:0 0 18px;color:#51606f;font-size:16px;line-height:1.6;">
+      {greeting}, the <strong>{vehicle_title}</strong> you saved in your garage is no longer available at auction.
+      Great wholesale deals move fast &mdash; the best strategy is to strike while the iron is hot.
+    </p>
+    {hero_block}
+    <div style="display:grid;gap:10px;margin:0 0 18px;">
+      <a href="{search_url}" style="display:block;text-align:center;background:#1d4ed8;color:#ffffff;padding:14px 18px;border-radius:14px;text-decoration:none;font-weight:700;">
+        Find More {similar_label} Deals
+      </a>
+      <a href="{dashboard_url}" style="display:block;text-align:center;background:#f8fafc;color:#1d4ed8;padding:14px 18px;border-radius:14px;text-decoration:none;font-weight:700;border:1px solid #e5e7eb;">
+        Open My Garage
+      </a>
+    </div>
+    <div style="display:grid;gap:8px;padding:16px 18px;border-radius:18px;background:#f8fafc;border:1px solid #e5e7eb;">
+      <div style="font-size:13px;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;font-weight:700;">Vehicle</div>
+      <div style="font-size:18px;color:#111827;font-weight:700;">{vehicle_title}</div>
+      <div style="font-size:14px;color:#6b7280;">VIN {vin}</div>
+    </div>
+    <p style="margin:18px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
+      Don&rsquo;t miss the next one. Browse fresh auction listings daily in your Virtual CarHub dashboard.
+    </p>
+    <p style="margin:10px 0 0;color:#6b7280;font-size:12px;line-height:1.6;">
+      This sign-in link expires in {settings.email_login_expire_minutes} minutes for security.
+    </p>
+  </div>
+</div>"""
+
+    text_body = (
+        f"{greeting},\n\n"
+        f"The {vehicle_title} you saved in your garage is no longer available at auction.\n"
+        f"Great wholesale deals move fast — the best strategy is to strike while the iron is hot.\n\n"
+        f"Find similar deals: {search_url}\n\n"
+        f"Open My Garage: {dashboard_url}\n\n"
+        f"VIN: {vin}\n\n"
+        f"This sign-in link expires in {settings.email_login_expire_minutes} minutes.\n\n"
+        "Virtual CarHub"
+    )
+
+    _send_email(
+        to_email=user.email,
+        subject=f"This One Got Away: {vehicle_title}",
+        html_body=html_body,
+        text_body=text_body,
+    )
