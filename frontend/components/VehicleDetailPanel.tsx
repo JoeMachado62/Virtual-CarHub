@@ -214,10 +214,16 @@ type MarketComparisonData = {
 
 const FALLBACK_IMAGE = "/assets/images/portfolio/VCH Auction default image.webp";
 const SHOWROOM_BG = "/assets/images/portfolio/vch-showroom.webp";
+const INTERIOR_BG = "/assets/images/portfolio/Interior Image background.jpg";
 
 const _EXTERIOR_SHOT_CODES = new Set(["01", "02", "03", "05", "06", "07"]);
+const _INTERIOR_SHOT_CODES = new Set(["11", "12", "13", "17", "18", "20", "21", "28", "29", "32", "43", "44", "45", "46", "47"]);
 
 function _extractShotCode(url: string): string | null {
+  // cc_ prefixed chromedata URLs: cc_{styleId}_{shotCode}_{width}_{height}.ext
+  const ccMatch = url.match(/cc_\w+_(\d{2})_\d+/);
+  if (ccMatch) return ccMatch[1];
+  // Legacy format: ..._{shotCode}.ext
   const match = url.match(/_(\d{2})\.\w{3,4}$/);
   return match ? match[1] : null;
 }
@@ -228,12 +234,23 @@ function isChromeDataExterior(url: string | null | undefined): boolean {
   return !shot || _EXTERIOR_SHOT_CODES.has(shot);
 }
 
+function isChromeDataInterior(url: string | null | undefined): boolean {
+  if (!url || !url.includes("media.chromedata.com")) return false;
+  const shot = _extractShotCode(url);
+  return Boolean(shot && _INTERIOR_SHOT_CODES.has(shot));
+}
+
 function isSideProfile(url: string | null | undefined): boolean {
   if (!url) return false;
   return _extractShotCode(url) === "03";
 }
 
 function showroomContainerStyle(url: string | null | undefined): React.CSSProperties | undefined {
+  if (isChromeDataInterior(url)) {
+    return {
+      background: `url("${INTERIOR_BG}") center center / cover no-repeat`,
+    };
+  }
   if (!isChromeDataExterior(url)) return undefined;
   return {
     background: `url(${SHOWROOM_BG}) center bottom / cover no-repeat`,
@@ -241,17 +258,44 @@ function showroomContainerStyle(url: string | null | undefined): React.CSSProper
 }
 
 function showroomImageStyle(url: string | null | undefined): React.CSSProperties | undefined {
-  if (!isChromeDataExterior(url)) return undefined;
+  if (!isChromeDataExterior(url) && !isChromeDataInterior(url)) return undefined;
+  if (isSideProfile(url)) {
+    return {
+      objectFit: "contain" as const,
+      objectPosition: "center center",
+      transformOrigin: "center center",
+    };
+  }
+  if (isChromeDataInterior(url)) {
+    return {
+      objectFit: "cover" as const,
+      objectPosition: "center center",
+      transformOrigin: "center center",
+    };
+  }
   return {
     objectFit: "contain" as const,
-    objectPosition: "center bottom",
-    transformOrigin: "center bottom",
+    objectPosition: "center center",
+    transformOrigin: "center center",
   };
 }
 
 function showroomImageClassName(url: string | null | undefined): string | undefined {
+  if (isChromeDataInterior(url)) return "vdp-showroom-image vdp-showroom-image-interior";
   if (!isChromeDataExterior(url)) return undefined;
-  return isSideProfile(url) ? "vdp-showroom-image vdp-showroom-image-side" : "vdp-showroom-image";
+  return isSideProfile(url)
+    ? "vdp-showroom-image vdp-showroom-image-side"
+    : "vdp-showroom-image vdp-showroom-image-angle";
+}
+
+function shouldCropDealerOverlayPhoto(url: string | null | undefined): boolean {
+  if (!url || isChromeDataExterior(url) || isChromeDataInterior(url)) return false;
+  const lower = url.toLowerCase();
+  return (
+    lower.includes("images.cdn.manheim.com") ||
+    lower.includes("marketcheck") ||
+    lower.includes("mc-api")
+  );
 }
 
 const SEARCH_FILTERS_KEY = "vch:inventory:filters";
@@ -1009,6 +1053,57 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   const isAuction = vehicle.source_type === "ove" || vehicle.source_type === "auction";
   const sellerSummary = sanitizePublicText((vehicle.seller_comments || "").trim()) || buildFallbackSellerSummary(vehicle);
   const hotDeal = vehicle.hot_deal;
+  const renderPriceHeader = (className = "") => (
+    <div className={`vdp-price-header${className ? ` ${className}` : ""}`}>
+      <div>
+        <span className="vdp-price-pill">{pricingBadge}</span>
+        <div className="vdp-price-row">
+          <strong className="vdp-price-amount">{formatCurrency(pricingDetails.total)}</strong>
+          <button className="vdp-link-button" onClick={() => setShowPriceModal(true)}>
+            See price details
+          </button>
+        </div>
+        <p className="vdp-price-disclaimer">* Taxes, title, registration, and transport are excluded.</p>
+        <p className="vdp-price-subtitle">
+          {toPublicSourceLabel(vehicle.source_label, vehicle.source_type)}
+          {vehicle.condition_grade ? ` • Grade ${vehicle.condition_grade}` : ""}
+        </p>
+        {vehicle.badges && vehicle.badges.length > 0 && (
+          <div className="inventory-badges" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+            {vehicle.badges.map((b) => (
+              <span key={b.type} className={`badge badge--${b.color}`} title={b.ratio ? `Price/MMR: ${b.ratio}` : undefined}>
+                {b.label}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+  const renderListingSummaryCard = (className: string) => sellerSummary ? (
+    <section className={`vdp-summary-card ${className}`}>
+      <div className="vdp-summary-header">
+        <div>
+          <h3>VirtualCarHub Listing Summary</h3>
+          <p>
+            {vehicle.seller_comments
+              ? "Curated from listing data for VirtualCarHub shoppers."
+              : "Generated from verified vehicle data."}
+          </p>
+        </div>
+        <div className="inventory-feature-grid vdp-summary-badges">
+          {(vehicle.city || vehicle.location_state) ? (
+            <span className="badge">
+              {[vehicle.city, vehicle.location_state].filter(Boolean).join(", ")}
+            </span>
+          ) : null}
+          {/* dealer_name hidden — must not expose sourcing partner identity */}
+          {vehicle.source_label ? <span className="badge">{toPublicSourceLabel(vehicle.source_label, vehicle.source_type)}</span> : null}
+        </div>
+      </div>
+      <p className="vdp-summary-copy">{sellerSummary}</p>
+    </section>
+  ) : null;
 
   return (
     <div className="vdp-wrap">
@@ -1093,32 +1188,13 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
             </div>
           </div>
 
+          <div className="vdp-mobile-pricing-summary-row">
+            {renderPriceHeader("vdp-mobile-price-header")}
+            {renderListingSummaryCard("vdp-mobile-summary-card")}
+          </div>
+
           <aside className="vdp-purchase-panel">
-            <div className="vdp-price-header">
-              <div>
-                <span className="vdp-price-pill">{pricingBadge}</span>
-                <div className="vdp-price-row">
-                  <strong className="vdp-price-amount">{formatCurrency(pricingDetails.total)}</strong>
-                  <button className="vdp-link-button" onClick={() => setShowPriceModal(true)}>
-                    See price details
-                  </button>
-                </div>
-                <p className="vdp-price-disclaimer">* Taxes, title, registration, and transport are excluded.</p>
-                <p className="vdp-price-subtitle">
-                  {toPublicSourceLabel(vehicle.source_label, vehicle.source_type)}
-                  {vehicle.condition_grade ? ` • Grade ${vehicle.condition_grade}` : ""}
-                </p>
-                {vehicle.badges && vehicle.badges.length > 0 && (
-                  <div className="inventory-badges" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                    {vehicle.badges.map((b) => (
-                      <span key={b.type} className={`badge badge--${b.color}`} title={b.ratio ? `Price/MMR: ${b.ratio}` : undefined}>
-                        {b.label}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
+            {renderPriceHeader()}
 
             <div className="vdp-payment-options">
               <div className="vdp-payment-choice active vdp-finance-card">
@@ -1170,6 +1246,8 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
               <p>{disclosureText}</p>
             </div>
           </aside>
+
+          {renderListingSummaryCard("vdp-hero-summary-card")}
         </div>
       </section>
 
@@ -1261,31 +1339,6 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 <button className="vdp-view-all-btn" onClick={() => setShowAllFeatures(!showAllFeatures)}>
                   {showAllFeatures ? "Hide Features" : "View All Features"}
                 </button>
-              </section>
-            ) : null}
-
-            {sellerSummary ? (
-              <section className="card vdp-summary-card">
-                <div className="vdp-summary-header">
-                  <div>
-                    <h3>VirtualCarHub Listing Summary</h3>
-                    <p>
-                      {vehicle.seller_comments
-                        ? "Curated from listing data for VirtualCarHub shoppers."
-                        : "Generated from verified vehicle data."}
-                    </p>
-                  </div>
-                  <div className="inventory-feature-grid vdp-summary-badges">
-                    {(vehicle.city || vehicle.location_state) ? (
-                      <span className="badge">
-                        {[vehicle.city, vehicle.location_state].filter(Boolean).join(", ")}
-                      </span>
-                    ) : null}
-                    {/* dealer_name hidden — must not expose sourcing partner identity */}
-                    {vehicle.source_label ? <span className="badge">{toPublicSourceLabel(vehicle.source_label, vehicle.source_type)}</span> : null}
-                  </div>
-                </div>
-                <p className="vdp-summary-copy">{sellerSummary}</p>
               </section>
             ) : null}
 
@@ -1384,7 +1437,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
             </header>
 
             <div
-              className={`vdp-photo-stage${vehicleSold ? " is-sold" : ""}`}
+              className={`vdp-photo-stage${vehicleSold ? " is-sold" : ""}${shouldCropDealerOverlayPhoto(activeModalImage) ? " crop-dealer-overlays" : ""}`}
               style={showroomContainerStyle(activeModalImage)}
               onTouchStart={handlePhotoTouchStart}
               onTouchEnd={handlePhotoTouchEnd}
@@ -1413,9 +1466,16 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 <button
                   key={`${image}-${index}`}
                   className={`inventory-thumb${activeModalIndex === index ? " active" : ""}`}
+                  style={showroomContainerStyle(image)}
                   onClick={() => setPhotoModalIndex(index)}
                 >
-                  <img src={image} alt={`Vehicle thumbnail ${index + 1}`} loading="lazy" />
+                  <img
+                    src={image}
+                    alt={`Vehicle thumbnail ${index + 1}`}
+                    loading="lazy"
+                    className={showroomImageClassName(image)}
+                    style={showroomImageStyle(image)}
+                  />
                 </button>
               ))}
             </div>
@@ -2022,11 +2082,12 @@ function resolveDisplayImages(vehicle: VehicleDetail | null | undefined): string
   const hero = resolveHeroImage(vehicle);
   const supplemental = vehicle.supplemental_photo_links || vehicle.photo_links_cached || vehicle.photo_links || [];
   const referenceDetail = ctx?.reference_detail_images || [];
+  const withHero = (urls: string[]) => Array.from(new Set([hero, ...urls].filter(Boolean) as string[]));
   if (referenceDetail.length) {
     const base = ctx?.gallery_images || vehicle.display_images || [];
     const seen = new Set(referenceDetail);
-    const merged = [hero, ...base.filter((url: string) => !seen.has(url)), ...referenceDetail, ...supplemental];
-    return Array.from(new Set(merged.filter(Boolean) as string[]));
+    const merged = [...base.filter((url: string) => !seen.has(url)), ...referenceDetail];
+    return withHero(merged);
   }
   const extStills = ctx?.evox_exterior_stills || [];
   const intStills = ctx?.evox_interior_stills || [];
@@ -2036,14 +2097,14 @@ function resolveDisplayImages(vehicle: VehicleDetail | null | undefined): string
     const curatedExt = extStills.filter((_: string, i: number) => i % 4 === 0);
     const evoxDetail = [...curatedExt, ...intStills, ...intPano];
     const seen = new Set(evoxDetail);
-    const merged = [hero, ...base.filter((url: string) => !seen.has(url)), ...evoxDetail, ...supplemental];
-    return Array.from(new Set(merged.filter(Boolean) as string[]));
+    const merged = [...base.filter((url: string) => !seen.has(url)), ...evoxDetail];
+    return withHero(merged);
   }
   const primary = vehicle.display_images || ctx?.gallery_images || [];
   if (primary.length) {
-    return Array.from(new Set([hero, ...primary, ...supplemental].filter(Boolean) as string[]));
+    return withHero(primary);
   }
-  return Array.from(new Set([hero, ...(vehicle.images || []), ...supplemental].filter(Boolean) as string[]));
+  return withHero([...(vehicle.images || []), ...supplemental]);
 }
 
 function resolveHeroImage(vehicle: VehicleDetail | null | undefined): string | null {

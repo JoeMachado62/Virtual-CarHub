@@ -17,6 +17,7 @@
   --shadow: 0 18px 54px rgba(2, 7, 20, 0.34);
   --shell-width: 1240px;
   --inventory-shell-width: 1390px;
+  --site-header-height: 138px;
 }
 
 :root[data-theme="light"] {
@@ -56,7 +57,8 @@ body {
     radial-gradient(circle at top left, rgba(120, 131, 235, 0.18), transparent 28%),
     radial-gradient(circle at 85% 15%, rgba(216, 104, 67, 0.16), transparent 26%),
     linear-gradient(180deg, var(--bg) 0%, color-mix(in srgb, var(--bg) 86%, #02050f) 100%);
-  min-height: 100%;
+  background-color: var(--bg);
+  min-height: 100dvh;
   overflow-x: hidden;
   max-width: 100%;
 }
@@ -94,8 +96,10 @@ textarea {
 }
 
 .site-header {
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  right: 0;
   z-index: 50;
   backdrop-filter: blur(14px);
 }
@@ -255,7 +259,7 @@ textarea {
 }
 
 /* ── Mobile breakpoint ── */
-@media (max-width: 900px) {
+@media (max-width: 900px), ((max-width: 960px) and (max-height: 500px) and (orientation: landscape) and (hover: none)) {
   .hamburger-btn {
     display: flex;
     align-items: center;
@@ -270,8 +274,9 @@ textarea {
   .nav-actions-inline {
     display: flex;
     gap: 0.5rem;
-    margin-left: auto;
-    margin-right: 0.5rem;
+    margin-left: 0;
+    margin-right: 0;
+    min-width: 0;
   }
 
   .nav-actions-inline .button {
@@ -285,11 +290,17 @@ textarea {
     flex-direction: row;
     flex-wrap: nowrap;
     align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
     padding: 0;
   }
 
   .brand-mark {
     height: 38px;
+  }
+
+  .brand-lockup {
+    min-width: 0;
   }
 
   .topbar-inner {
@@ -365,6 +376,38 @@ textarea {
   }
 }
 
+@media (max-width: 430px) {
+  .navbar {
+    position: relative;
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) 30px;
+    gap: 0.3rem;
+  }
+
+  .brand-mark {
+    height: 34px;
+  }
+
+  .nav-actions-inline {
+    gap: 0.28rem;
+    margin-right: 2rem;
+  }
+
+  .nav-actions-inline .button {
+    font-size: 0.68rem;
+    padding: 0.34rem 0.5rem;
+  }
+
+  .hamburger-btn {
+    padding: 0.25rem;
+  }
+
+  .hamburger-icon {
+    width: 24px;
+    height: 24px;
+  }
+}
+
 .theme-toggle {
   appearance: none;
   border: none;
@@ -396,7 +439,7 @@ textarea {
 }
 
 .page-body {
-  padding: 1.25rem 0 4rem;
+  padding: calc(var(--site-header-height) + 1.25rem) 0 4rem;
 }
 
 .page-body-embed {
@@ -2451,7 +2494,8 @@ textarea {
 
 .inventory-thumb {
   width: 96px;
-  height: 70px;
+  aspect-ratio: 14 / 9;
+  height: auto;
   padding: 0;
   border-radius: 10px;
   border: 1px solid var(--line);
@@ -2577,11 +2621,23 @@ textarea {
 .vdp-hero-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.95fr);
+  grid-template-areas:
+    "gallery purchase"
+    "summary purchase";
   gap: 1.25rem;
   align-items: start;
 }
 
+.vdp-hero-grid > *,
+.vdp-gallery-shell,
+.vdp-purchase-panel,
+.vdp-payment-options > *,
+.vdp-summary-header > * {
+  min-width: 0;
+}
+
 .vdp-gallery-shell {
+  grid-area: gallery;
   display: grid;
   gap: 0.85rem;
 }
@@ -2590,11 +2646,19 @@ textarea {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 190px;
   gap: 0.8rem;
+  align-items: start;
+}
+
+.vdp-gallery-grid > * {
+  min-width: 0;
 }
 
 .vdp-gallery-stage {
   position: relative;
-  min-height: 430px;
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 14 / 9;
+  min-height: 0;
   border: 1px solid var(--line);
   border-radius: 24px;
   overflow: hidden;
@@ -2607,9 +2671,16 @@ textarea {
 }
 
 .vdp-gallery-stage img,
-.vdp-gallery-preview img,
 .vdp-similar-img-wrap img,
 .vdp-photo-stage img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: transparent;
+  display: block;
+}
+
+.vdp-gallery-preview img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -2617,37 +2688,65 @@ textarea {
 }
 
 .vdp-showroom-image {
-  transform: translateY(12%) scale(1.12);
-  transform-origin: center bottom;
+  transform: scale(1);
+  transform-origin: center center;
+}
+
+.vdp-showroom-image-angle {
+  transform: translateY(20%) scale(0.9375);
 }
 
 .vdp-showroom-image-side {
-  transform: translateY(24%) scale(1.36);
+  transform: translateY(20%) scale(1.2125);
+}
+
+.vdp-showroom-image-interior {
+  transform: scale(1);
 }
 
 .vdp-gallery-stage .vdp-showroom-image {
-  transform: translateY(10%) scale(1.07);
+  transform: scale(1);
+}
+
+.vdp-gallery-stage .vdp-showroom-image-angle {
+  transform: translateY(20%) scale(0.9375);
 }
 
 .vdp-gallery-stage .vdp-showroom-image-side {
-  transform: translateY(20%) scale(1.30);
+  transform: translateY(20%) scale(1.2125);
+}
+
+.vdp-gallery-stage .vdp-showroom-image-interior {
+  transform: scale(1);
 }
 
 .vdp-gallery-preview .vdp-showroom-image {
-  transform: translateY(8%) scale(1.01);
+  transform: scale(1);
+}
+
+.vdp-gallery-preview .vdp-showroom-image-angle {
+  transform: translateY(20%) scale(0.9375);
 }
 
 .vdp-gallery-preview .vdp-showroom-image-side {
-  transform: translateY(15%) scale(1.19);
+  transform: translateY(20%) scale(1.2125);
+}
+
+.vdp-gallery-preview .vdp-showroom-image-interior {
+  transform: scale(1);
 }
 
 .vdp-gallery-preview-stack {
   display: grid;
   gap: 0.8rem;
+  min-width: 0;
 }
 
 .vdp-gallery-preview {
-  height: 210px;
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 14 / 9;
+  height: auto;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 20px;
@@ -2668,11 +2767,22 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--surface-strong) 88%, #ffffff 12%);
-  color: var(--ink);
-  box-shadow: 0 12px 24px rgba(8, 12, 24, 0.28);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.68);
+  box-shadow: none;
   cursor: pointer;
   z-index: 2;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.vdp-gallery-arrow:hover,
+.vdp-gallery-arrow:focus-visible,
+.vdp-gallery-nav:hover,
+.vdp-gallery-nav:focus-visible {
+  background: color-mix(in srgb, var(--surface-strong) 78%, transparent 22%);
+  color: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 12px 24px rgba(8, 12, 24, 0.28);
 }
 
 .vdp-gallery-arrow-left,
@@ -2713,6 +2823,7 @@ textarea {
 }
 
 .vdp-purchase-panel {
+  grid-area: purchase;
   display: grid;
   gap: 1rem;
   padding: 0.2rem 0;
@@ -2756,6 +2867,7 @@ textarea {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .vdp-payment-options,
@@ -2774,6 +2886,7 @@ textarea {
   padding: 1rem;
   display: grid;
   gap: 0.2rem;
+  min-width: 0;
 }
 
 .vdp-payment-choice {
@@ -3158,8 +3271,24 @@ textarea {
 }
 
 .vdp-summary-card {
+  grid-area: summary;
   display: grid;
   gap: 0.9rem;
+}
+
+.vdp-hero-summary-card {
+  align-self: stretch;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--surface-strong) 82%, transparent 18%);
+  padding: 1rem 1.1rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.vdp-mobile-pricing-summary-row,
+.vdp-mobile-summary-card {
+  display: none;
 }
 
 .vdp-summary-header {
@@ -3184,6 +3313,7 @@ textarea {
 .vdp-summary-copy {
   color: var(--ink);
   font-size: 0.95rem;
+  overflow-wrap: anywhere;
 }
 
 .vdp-summary-badges {
@@ -3557,13 +3687,14 @@ textarea {
 }
 
 .vdp-photo-modal {
-  width: 90vw;
-  max-width: 1080px;
+  width: min(94vw, 1280px);
+  max-width: 1280px;
   height: 90vh;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
+  overflow: auto;
 }
 
 .vdp-modal-header {
@@ -3576,18 +3707,38 @@ textarea {
 
 .vdp-photo-stage {
   position: relative;
-  height: 520px;
+  aspect-ratio: 14 / 9;
+  width: min(100%, 1160px);
+  align-self: center;
+  flex: 0 0 auto;
   border-radius: 24px;
   overflow: hidden;
   background: color-mix(in srgb, var(--surface-soft) 86%, #eef2f8 14%);
 }
 
 .vdp-photo-stage .vdp-showroom-image {
-  transform: translateY(8%) scale(1.04);
+  transform: scale(1);
+}
+
+.vdp-photo-stage .vdp-showroom-image-angle {
+  transform: translateY(20%) scale(0.9375);
 }
 
 .vdp-photo-stage .vdp-showroom-image-side {
-  transform: translateY(14%) scale(1.16);
+  transform: translateY(20%) scale(1.2125);
+}
+
+.vdp-photo-stage .vdp-showroom-image-interior {
+  transform: scale(1);
+}
+
+.vdp-photo-modal .vdp-photo-stage .vdp-showroom-image-interior {
+  transform: scale(1.05);
+}
+
+.vdp-photo-stage.crop-dealer-overlays img {
+  object-fit: cover;
+  object-position: center center;
 }
 
 .vdp-photo-thumbs {
@@ -3677,6 +3828,13 @@ textarea {
     position: static;
   }
 
+  .vdp-photo-modal {
+    width: 90vw;
+    max-width: 1080px;
+    height: 90vh;
+    max-height: 90vh;
+  }
+
   .inventory-filter-toggle {
     display: flex;
     align-items: center;
@@ -3720,6 +3878,66 @@ textarea {
     justify-items: center;
     text-align: center;
     min-height: 150px;
+  }
+
+  .vdp-hero-grid {
+    grid-template-columns: minmax(0, 0.66fr) minmax(300px, 1fr);
+    grid-template-areas:
+      "gallery gallery"
+      "price summary"
+      "payment summary"
+      "credit credit"
+      "estimate estimate"
+      "disclosure disclosure";
+    gap: 0.9rem;
+  }
+
+  .vdp-purchase-panel {
+    display: contents;
+    padding: 0;
+  }
+
+  .vdp-price-header {
+    grid-area: price;
+    min-width: 0;
+    align-self: start;
+  }
+
+  .vdp-price-row {
+    display: grid;
+    gap: 0.25rem;
+    justify-items: start;
+  }
+
+  .vdp-price-row .vdp-link-button {
+    line-height: 1.2;
+  }
+
+  .vdp-price-disclaimer {
+    max-width: 18rem;
+    overflow-wrap: anywhere;
+  }
+
+  .vdp-payment-options {
+    grid-area: payment;
+    grid-template-columns: 1fr;
+  }
+
+  .vdp-credit-field {
+    grid-area: credit;
+  }
+
+  .vdp-payment-disclosure {
+    grid-area: estimate;
+  }
+
+  .vdp-disclosure-card {
+    grid-area: disclosure;
+  }
+
+  .vdp-hero-summary-card {
+    grid-area: summary;
+    align-self: stretch;
   }
 }
 
@@ -3768,8 +3986,15 @@ textarea {
     width: min(var(--shell-width), calc(100% - 1rem));
   }
 
+  .page-body > .shell {
+    width: calc(100vw - 1rem);
+    max-width: calc(100vw - 1rem);
+    overflow-x: clip;
+    overflow-y: visible;
+  }
+
   .page-body {
-    padding-top: 1rem;
+    padding-top: calc(var(--site-header-height) + 1rem);
   }
 
   .hero-surface,
@@ -3829,6 +4054,173 @@ textarea {
   .vdp-gallery-grid,
   .vdp-cards-grid {
     grid-template-columns: 1fr;
+  }
+
+  .vdp-hero-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "gallery"
+      "mobile-row"
+      "payment"
+      "credit"
+      "estimate"
+      "disclosure";
+    gap: 0.72rem;
+  }
+
+  .vdp-mobile-pricing-summary-row {
+    grid-area: mobile-row;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.55rem;
+    align-items: start;
+    justify-self: center;
+    width: min(392px, 100%) !important;
+    max-width: min(392px, 100%) !important;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .vdp-mobile-pricing-summary-row .vdp-price-header,
+  .vdp-mobile-pricing-summary-row .vdp-summary-card {
+    grid-area: auto;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .vdp-purchase-panel > .vdp-price-header,
+  .vdp-hero-summary-card {
+    display: none;
+  }
+
+  .vdp-mobile-summary-card {
+    display: grid;
+  }
+
+  .vdp-mobile-summary-card .vdp-summary-header p,
+  .vdp-mobile-summary-card .vdp-summary-copy {
+    max-width: 100%;
+    white-space: normal !important;
+    overflow-wrap: break-word;
+  }
+
+  .vdp-hero-card {
+    width: 100%;
+    max-width: calc(100vw - 1rem);
+    overflow: hidden;
+    padding: 0.65rem;
+  }
+
+  .vdp-gallery-shell,
+  .vdp-gallery-grid,
+  .vdp-gallery-stage,
+  .vdp-gallery-preview-stack {
+    justify-self: center;
+    width: min(392px, 100%) !important;
+    max-width: min(392px, 100%) !important;
+  }
+
+  .vdp-gallery-preview {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .vdp-price-header {
+    gap: 0.35rem;
+  }
+
+  .vdp-price-pill {
+    padding: 0.2rem 0.52rem;
+    font-size: 0.68rem;
+  }
+
+  .vdp-price-amount {
+    font-size: 2.02rem;
+    letter-spacing: 0;
+  }
+
+  .vdp-price-disclaimer,
+  .vdp-price-subtitle {
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+
+  .vdp-payment-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+    justify-self: center;
+    width: min(392px, 100%) !important;
+    max-width: min(392px, 100%) !important;
+    overflow: hidden;
+  }
+
+  .vdp-credit-field,
+  .vdp-payment-disclosure,
+  .vdp-disclosure-card {
+    justify-self: center;
+    width: min(392px, 100%) !important;
+    max-width: min(392px, 100%) !important;
+  }
+
+  .vdp-payment-choice,
+  .vdp-payment-card {
+    border-radius: 14px;
+    padding: 0.75rem;
+  }
+
+  .vdp-payment-choice-label,
+  .vdp-payment-card span {
+    font-size: 0.72rem;
+    line-height: 1.25;
+  }
+
+  .vdp-payment-choice strong {
+    font-size: 1.05rem;
+  }
+
+  .vdp-payment-choice small,
+  .vdp-down-payment-help {
+    font-size: 0.68rem;
+    line-height: 1.35;
+  }
+
+  .vdp-down-payment-input {
+    min-height: 44px;
+    border-radius: 12px;
+    padding: 0.7rem 0.78rem;
+    font-size: 0.92rem;
+  }
+
+  .vdp-hero-summary-card {
+    border-radius: 16px;
+    padding: 0.72rem;
+    gap: 0.5rem;
+  }
+
+  .vdp-hero-summary-card .vdp-summary-header {
+    gap: 0.45rem;
+  }
+
+  .vdp-hero-summary-card .vdp-summary-header h3 {
+    font-size: 0.86rem;
+    line-height: 1.15;
+  }
+
+  .vdp-hero-summary-card .vdp-summary-header p {
+    font-size: 0.7rem;
+    line-height: 1.35;
+  }
+
+  .vdp-hero-summary-card .vdp-summary-copy {
+    font-size: 0.72rem;
+    line-height: 1.45;
+  }
+
+  .vdp-summary-badges .badge {
+    font-size: 0.58rem;
+    padding: 0.28rem 0.42rem;
   }
 
   .vdp-market-card {
@@ -3924,17 +4316,26 @@ textarea {
   }
 
   .vdp-gallery-stage {
-    min-height: 220px;
-    height: 280px;
+    aspect-ratio: 14 / 9;
+    min-height: 0;
+    height: auto;
     border-radius: 12px;
   }
 
   .vdp-gallery-stage .vdp-showroom-image {
-    transform: translateY(5%) scale(0.94);
+    transform: scale(1);
+  }
+
+  .vdp-gallery-stage .vdp-showroom-image-angle {
+    transform: translateY(12%) scale(0.78);
   }
 
   .vdp-gallery-stage .vdp-showroom-image-side {
-    transform: translateY(7%) scale(1);
+    transform: translateY(14%) scale(0.95);
+  }
+
+  .vdp-gallery-stage .vdp-showroom-image-interior {
+    transform: scale(1);
   }
 
   /* Keep the mobile lightbox image full-width without stretching it into a tall crop. */
@@ -3942,17 +4343,34 @@ textarea {
     height: auto;
     min-height: 0;
     flex: 0 0 auto;
-    aspect-ratio: 4 / 3;
+    aspect-ratio: 14 / 9;
+    width: 100%;
     max-height: calc(100dvh - 170px);
     border-radius: 12px;
   }
 
+  .vdp-photo-modal .vdp-photo-stage.crop-dealer-overlays {
+    aspect-ratio: 14 / 9;
+  }
+
   .vdp-photo-modal .vdp-photo-stage .vdp-showroom-image {
-    transform: translateY(5%) scale(0.94);
+    transform: scale(1);
+  }
+
+  .vdp-photo-modal .vdp-photo-stage .vdp-showroom-image-angle {
+    transform: translateY(20%) scale(0.9375);
   }
 
   .vdp-photo-modal .vdp-photo-stage .vdp-showroom-image-side {
-    transform: translateY(7%) scale(1);
+    transform: translateY(20%) scale(1.2125);
+  }
+
+  .vdp-photo-modal .vdp-photo-stage .vdp-showroom-image-interior {
+    transform: scale(1);
+  }
+
+  .vdp-photo-modal .vdp-photo-stage .vdp-showroom-image-interior {
+    transform: scale(1.05);
   }
 
   .vdp-photo-modal .vdp-photo-thumbs {
@@ -3966,19 +4384,28 @@ textarea {
   .vdp-photo-modal .vdp-photo-thumbs .inventory-thumb {
     flex-shrink: 0;
     width: 72px;
-    height: 54px;
+    height: auto;
   }
 
   .vdp-gallery-preview {
-    height: 130px;
+    aspect-ratio: 14 / 9;
+    height: auto;
   }
 
   .vdp-gallery-preview .vdp-showroom-image {
-    transform: translateY(5%) scale(0.92);
+    transform: scale(1);
+  }
+
+  .vdp-gallery-preview .vdp-showroom-image-angle {
+    transform: translateY(12%) scale(0.82);
   }
 
   .vdp-gallery-preview .vdp-showroom-image-side {
-    transform: translateY(7%) scale(0.98);
+    transform: translateY(14%) scale(0.98);
+  }
+
+  .vdp-gallery-preview .vdp-showroom-image-interior {
+    transform: scale(1);
   }
 
   .vdp-gallery-preview-stack {
@@ -4052,7 +4479,7 @@ textarea {
 
   .vdp-photo-thumbs .inventory-thumb {
     width: 72px;
-    height: 54px;
+    height: auto;
     flex-shrink: 0;
   }
 }

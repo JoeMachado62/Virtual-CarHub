@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -39,6 +39,7 @@ function resolveLogoPath(theme: string | undefined) {
 
 export function SiteChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const headerRef = useRef<HTMLElement | null>(null);
   const [logoPath, setLogoPath] = useState("/assets/images/logo/VirtualCarHub white.png");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isEmbedRoute = pathname.startsWith("/embed/");
@@ -63,13 +64,32 @@ export function SiteChrome({ children }: { children: React.ReactNode }) {
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+
+    const updateHeaderHeight = () => {
+      document.documentElement.style.setProperty("--site-header-height", `${header.offsetHeight}px`);
+    };
+
+    updateHeaderHeight();
+    const observer = new ResizeObserver(updateHeaderHeight);
+    observer.observe(header);
+    window.addEventListener("resize", updateHeaderHeight);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateHeaderHeight);
+    };
+  }, []);
+
   if (isEmbedRoute) {
     return <div className="page-body page-body-embed">{children}</div>;
   }
 
   return (
     <>
-      <header className="site-header">
+      <header className="site-header" ref={headerRef}>
         <div className="topbar">
           <div className="shell topbar-inner">
             <div className="topbar-contact">
