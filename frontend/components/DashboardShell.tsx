@@ -10,7 +10,7 @@ import { DealTracker } from "@/components/DealTracker";
 import { QuickMatchForm } from "@/components/QuickMatchForm";
 import { Recommendation, RecommendationCards } from "@/components/RecommendationCards";
 import { apiFetch } from "@/lib/api";
-import { AuthState, canAccessConditionReports, clearAuthState, isAdminUser, loadValidAuthState, saveAuthState } from "@/lib/auth";
+import { AuthState, clearAuthState, isAdminUser, loadValidAuthState, saveAuthState } from "@/lib/auth";
 import { toPublicSourceLabel } from "@/lib/sourceLabels";
 import { maskVin } from "@/lib/vin";
 
@@ -389,10 +389,14 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     if (garage.status === "ok") {
       const items = garage.data || [];
       setGarageItems(items);
-      // Clear pending status for any VINs that now have reports
+      // Seed pending status from the server so report requests survive reloads.
+      const serverPendingVins = new Set(
+        items.filter((item) => item.cr_request_status === "pending").map((item) => item.vin),
+      );
       const vinsWithReports = new Set(items.filter(item => item.has_inspection_report).map(item => item.vin));
       setPendingReportVins(prev => {
         const updated = new Set(prev);
+        serverPendingVins.forEach((vin) => updated.add(vin));
         vinsWithReports.forEach(vin => updated.delete(vin));
         return updated;
       });
@@ -557,7 +561,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       request_id?: string;
       deduplicated?: boolean;
     }>(
-      `/me/vehicles/${vin}/condition-report-request`,
+      `/me/vehicles/${encodeURIComponent(vin)}/condition-report-request`,
       { method: "POST" },
       auth.accessToken
     );
@@ -568,18 +572,25 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     }
 
     const garageItem = garageItems.find((item) => item.vin === vin);
-    if (!response.data.already_available && response.data.status !== "available") {
+    const ready = Boolean(response.data.already_available || response.data.status === "available");
+    if (!ready) {
       setPendingReportVins((prev) => {
         const next = new Set(prev);
         next.add(vin);
         return next;
       });
     }
+    setGarageMessage(
+      response.data.message ||
+        (ready
+          ? "Inspection report is ready."
+          : "Report requested. My Garage will update when the inspection report is ready."),
+    );
     setCrRequestModal({
       vin,
       title: garageItem ? garageTitle(garageItem) : vin,
       imageUrl: garageItem?.vehicle.thumbnail || FALLBACK_IMAGE,
-      alreadyAvailable: Boolean(response.data.already_available || response.data.status === "available"),
+      alreadyAvailable: ready,
     });
     await refreshGarageStatus({ silent: true });
     setGarageActionVin(null);
@@ -624,6 +635,38 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     (item) => item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction"
   ).length;
   const unreadNotifications = notifications.filter((note) => !note.is_read);
+  const renderGarageReportAction = (item: GarageItem) => {
+    const itemActionLoading = garageActionVin === item.vin;
+    const reportPending = isReportPending(item, pendingReportVins);
+
+    if (item.has_inspection_report) {
+      return (
+        <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}/condition-report`}>
+          Inspection Report Ready
+        </Link>
+      );
+    }
+
+    if (reportPending) {
+      return (
+        <button className="button ghost-mint" disabled>
+          Report Requested
+        </button>
+      );
+    }
+
+    if (!canRequestReportForGarageItem(item)) return null;
+
+    return (
+      <button
+        className="button ghost-mint"
+        onClick={() => requestConditionReport(item.vin)}
+        disabled={itemActionLoading}
+      >
+        {itemActionLoading ? "Requesting..." : item.cr_request_status === "terminal" ? "Retry Report" : "Report Request"}
+      </button>
+    );
+  };
 
   if (!authReady) {
     return (
@@ -979,27 +1022,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                         </Link>
                       ) : (
                         <>
-                          {item.has_inspection_report ? (
-                            <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(item.public_slug || item.vin)}/condition-report`}>
-                              Inspection Report Ready
-                            </Link>
-                          ) : null}
-                          {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
-                          !item.has_inspection_report && pendingReportVins.has(item.vin) ? (
-                            <button className="button ghost-mint" disabled>
-                              Inspection Report Pending
-                            </button>
-                          ) : null}
-                          {(item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction") &&
-                          !item.has_inspection_report && !pendingReportVins.has(item.vin) ? (
-                            <button
-                              className="button ghost-mint"
-                              onClick={() => requestConditionReport(item.vin)}
-                              disabled={itemActionLoading}
-                            >
-                              {itemActionLoading ? "Requesting..." : item.cr_request_status === "terminal" ? "Retry Report" : "Request Inspection Report"}
-                            </button>
-                          ) : null}
+                          {renderGarageReportAction(item)}
                           <button className="button" onClick={() => startGarageAcquisition(item.vin)} disabled={itemActionLoading}>
                             {itemActionLoading ? "Starting..." : "Start Purchase"}
                           </button>
@@ -1079,11 +1102,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                 <Link className="button secondary" href={`/vinventory/${encodeURIComponent(spotlightItem.public_slug || spotlightItem.vin)}`}>
                   View Details
                 </Link>
-                {canAccessConditionReports(auth, { isPreapproved }) && spotlightItem.has_inspection_report ? (
-                  <Link className="button ghost-mint" href={`/vinventory/${encodeURIComponent(spotlightItem.public_slug || spotlightItem.vin)}/condition-report`}>
-                    Inspection Report Ready
-                  </Link>
-                ) : null}
+                {renderGarageReportAction(spotlightItem)}
                 <button
                   className="button"
                   onClick={() => startGarageAcquisition(spotlightItem.vin)}
@@ -1197,6 +1216,15 @@ function garageTitle(item: GarageItem): string {
 
 function garageLocation(item: GarageItem): string {
   return `${item.vehicle.location_state || "NA"} ${item.vehicle.location_zip || ""}`.trim();
+}
+
+function canRequestReportForGarageItem(item: GarageItem): boolean {
+  const sourceType = (item.vehicle.source_type || "").toLowerCase();
+  return sourceType === "ove" || sourceType === "auction";
+}
+
+function isReportPending(item: GarageItem, pendingReportVins: Set<string>): boolean {
+  return !item.has_inspection_report && (pendingReportVins.has(item.vin) || item.cr_request_status === "pending");
 }
 
 function displayModeLabel(mode: DisplayMode): string {
