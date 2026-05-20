@@ -2084,6 +2084,26 @@ textarea {
   object-fit: cover;
 }
 
+.dashboard-surplus-gallery img.dashboard-surplus-crop-crop_top_10 {
+  clip-path: inset(10% 0 0 0);
+  transform: scale(1.12);
+}
+
+.dashboard-surplus-gallery img.dashboard-surplus-crop-crop_bottom_10 {
+  clip-path: inset(0 0 10% 0);
+  transform: scale(1.12);
+}
+
+.dashboard-surplus-gallery img.dashboard-surplus-crop-crop_vertical_10 {
+  clip-path: inset(10% 0 10% 0);
+  transform: scale(1.18);
+}
+
+.dashboard-surplus-gallery img.dashboard-surplus-crop-crop_vertical_15 {
+  clip-path: inset(15% 0 15% 0);
+  transform: scale(1.28);
+}
+
 .dashboard-surplus-empty {
   display: grid;
   place-items: center;

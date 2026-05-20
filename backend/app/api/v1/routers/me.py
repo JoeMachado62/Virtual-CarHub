@@ -30,6 +30,7 @@ from app.services.marketcheck_history_enrichment_service import (
     extract_listing_metadata,
     select_best_history_entry,
 )
+from app.services.vehicle_image_screening_service import screen_marketcheck_vehicle_images
 from app.services.ghl_lifecycle_service import GHLLifecycleService
 from app.services.matching_service import run_matching
 from app.services.ove_inventory_service import enqueue_ove_detail_request
@@ -198,6 +199,7 @@ def _prepare_surplus_condition_report_images(db: Session, vehicle: Vehicle) -> t
         )
         db.flush()
         sanitized = sanitize_marketcheck_photo_urls(_load_marketcheck_asset_urls(db, vehicle.vin) or sanitized)
+        sanitized = screen_marketcheck_vehicle_images(db, vin=vehicle.vin, image_urls=sanitized)
 
     return sanitized, max(0, len([url for url in candidate_urls if url]) - len(sanitized))
 

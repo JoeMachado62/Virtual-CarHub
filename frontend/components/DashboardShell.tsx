@@ -1322,7 +1322,12 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
             <div className="dashboard-surplus-gallery">
               {surplusReportModal.images.length ? (
                 surplusReportModal.images.map((image, index) => (
-                  <img key={`${image}-${index}`} src={image} alt={`${surplusReportModal.title} photo ${index + 1}`} />
+                  <img
+                    key={`${image}-${index}`}
+                    src={image}
+                    alt={`${surplusReportModal.title} photo ${index + 1}`}
+                    className={cropClassForScreenedImage(image)}
+                  />
                 ))
               ) : (
                 <div className="dashboard-surplus-empty">
@@ -1362,6 +1367,11 @@ function canRequestReportForGarageItem(item: GarageItem): boolean {
 function isSurplusGarageItem(item: GarageItem): boolean {
   const sourceType = (item.vehicle.source_type || "").toLowerCase();
   return sourceType === "marketcheck" || sourceType === "dealer_wholesale" || sourceType === "dealer_partner" || sourceType === "wholesale";
+}
+
+function cropClassForScreenedImage(url: string): string | undefined {
+  const crop = new URL(url, "https://virtualcarhub.local").hash.match(/vch_crop=([^&]+)/)?.[1];
+  return crop ? `dashboard-surplus-crop-${crop}` : undefined;
 }
 
 function isReportPending(item: GarageItem, pendingReportVins: Set<string>): boolean {

@@ -233,6 +233,11 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+    gemini_image_screening_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_IMAGE_SCREENING_MODEL")
+    openai_image_screening_model: str = Field(default="gpt-5.4-mini", alias="OPENAI_IMAGE_SCREENING_MODEL")
+    image_screening_enabled: bool = Field(default=True, alias="IMAGE_SCREENING_ENABLED")
+    image_screening_max_images: int = Field(default=60, alias="IMAGE_SCREENING_MAX_IMAGES")
     openai_cr_review_mode: Literal["disabled", "inline", "async"] = Field(
         default="disabled",
         alias="OPENAI_CR_REVIEW_MODE",
@@ -315,6 +320,10 @@ class Settings(BaseSettings):
     @property
     def has_openai(self) -> bool:
         return bool(self.openai_api_key)
+
+    @property
+    def has_gemini(self) -> bool:
+        return bool(self.gemini_api_key)
 
     @property
     def has_imagin(self) -> bool:
