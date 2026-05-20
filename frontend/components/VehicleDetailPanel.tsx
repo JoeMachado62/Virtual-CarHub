@@ -184,6 +184,15 @@ type SimilarVehicle = {
   hero_image?: string | null;
 };
 
+type SurplusReportModalState = {
+  vin: string;
+  title: string;
+  message: string;
+  images: string[];
+  orderPrice: number;
+  removedImageCount: number;
+};
+
 type MarketComparisonPoint = {
   vin?: string | null;
   label: string;
@@ -654,6 +663,8 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [photoModalIndex, setPhotoModalIndex] = useState<number | null>(null);
   const [showPriceModal, setShowPriceModal] = useState(false);
+  const [surplusReportModal, setSurplusReportModal] = useState<SurplusReportModalState | null>(null);
+  const [orderingSurplusReport, setOrderingSurplusReport] = useState(false);
   const [selectedCreditTier, setSelectedCreditTier] = useState<CreditTierId>(DEFAULT_CREDIT_TIER);
   const [downPaymentInput, setDownPaymentInput] = useState("");
   const [marketComparison, setMarketComparison] = useState<MarketComparisonData | null>(null);
@@ -804,12 +815,13 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   }, [loading, vin]);
 
   useEffect(() => {
-    if (photoModalIndex === null && !showPriceModal) return;
+    if (photoModalIndex === null && !showPriceModal && !surplusReportModal) return;
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setPhotoModalIndex(null);
         setShowPriceModal(false);
+        setSurplusReportModal(null);
         return;
       }
       if (photoModalIndex === null || !vehicle) return;
@@ -829,7 +841,7 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [photoModalIndex, showPriceModal, vehicle]);
+  }, [photoModalIndex, showPriceModal, surplusReportModal, vehicle]);
 
   if (loading) {
     return (
@@ -1025,6 +1037,11 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
       status?: string;
       request_id?: string;
       deduplicated?: boolean;
+      report_type?: string;
+      title?: string;
+      images?: string[];
+      order_price?: number;
+      removed_image_count?: number;
     }>(
       `/me/vehicles/${encodeURIComponent(currentVehicle.vin)}/condition-report-request`,
       { method: "POST" },
@@ -1033,6 +1050,20 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     if (handleUnauthorized(response)) { setActionLoading(null); return; }
     if (response.status !== "ok") {
       setActionError(response.error?.message || "Unable to request inspection report.");
+      setActionLoading(null);
+      return;
+    }
+    if (response.data.report_type === "surplus_wrench") {
+      setSurplusReportModal({
+        vin: currentVehicle.vin,
+        title: response.data.title || `${currentVehicle.year} ${currentVehicle.make} ${currentVehicle.model}`,
+        message: response.data.message || "",
+        images: response.data.images || [],
+        orderPrice: response.data.order_price || 99,
+        removedImageCount: response.data.removed_image_count || 0,
+      });
+      setVehicle({ ...currentVehicle, is_in_garage: true });
+      setInGarage(true);
       setActionLoading(null);
       return;
     }
@@ -1049,6 +1080,30 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
           : "Inspection report requested. Refresh this page after the report is ready.")
     );
     setActionLoading(null);
+  }
+
+  async function orderSurplusConditionReport() {
+    if (!auth?.accessToken || !surplusReportModal) return;
+    setOrderingSurplusReport(true);
+    setActionError(null);
+    const response = await apiFetch<{ message?: string }>(
+      `/me/vehicles/${encodeURIComponent(surplusReportModal.vin)}/surplus-condition-report-order`,
+      { method: "POST" },
+      auth.accessToken,
+    );
+    if (handleUnauthorized(response)) {
+      setOrderingSurplusReport(false);
+      return;
+    }
+    if (response.status !== "ok") {
+      setActionError(response.error?.message || "Unable to order the surplus inspection report.");
+      setOrderingSurplusReport(false);
+      return;
+    }
+    setReportStatus("pending");
+    setActionMessage(response.data.message || "Surplus inspection report ordered. My Garage will update when it is ready.");
+    setSurplusReportModal(null);
+    setOrderingSurplusReport(false);
   }
 
   const featureLimit = showAllFeatures ? expandedFeatureBadges.length : 24;
@@ -1535,6 +1590,55 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
               referral-driven deals help reduce marketing pressure for everyone.
             </p>
           </section>
+        </div>
+      ) : null}
+
+      {surplusReportModal ? (
+        <div className="dashboard-cr-modal-overlay" onClick={() => setSurplusReportModal(null)}>
+          <div
+            className="card dashboard-surplus-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="vdp-surplus-modal-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="dashboard-surplus-modal-copy">
+              <p className="section-eyebrow" style={{ marginBottom: 8 }}>
+                Surplus Inventory Inspection
+              </p>
+              <h3 id="vdp-surplus-modal-title">{surplusReportModal.title}</h3>
+              <p>{surplusReportModal.message}</p>
+              {surplusReportModal.removedImageCount > 0 ? (
+                <p className="dashboard-muted-note">
+                  {surplusReportModal.removedImageCount} image{surplusReportModal.removedImageCount === 1 ? "" : "s"} removed during photo screening.
+                </p>
+              ) : null}
+            </div>
+            <div className="dashboard-surplus-gallery">
+              {surplusReportModal.images.length ? (
+                surplusReportModal.images.map((image, index) => (
+                  <img
+                    key={`${image}-${index}`}
+                    src={image}
+                    alt={`${surplusReportModal.title} photo ${index + 1}`}
+                    className={cropClassForScreenedImage(image)}
+                  />
+                ))
+              ) : (
+                <div className="dashboard-surplus-empty">
+                  <p>No screened MarketCheck photos are available yet.</p>
+                </div>
+              )}
+            </div>
+            <div className="dashboard-surplus-modal-actions">
+              <button className="button ghost" type="button" onClick={() => setSurplusReportModal(null)}>
+                Cancel
+              </button>
+              <button className="button" type="button" onClick={orderSurplusConditionReport} disabled={orderingSurplusReport}>
+                {orderingSurplusReport ? "Ordering..." : `ORDER REPORT $${surplusReportModal.orderPrice}`}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -2141,6 +2245,11 @@ function resolveDisplayImages(vehicle: VehicleDetail | null | undefined): string
     return withHero(primary);
   }
   return withHero([...(vehicle.images || []), ...supplemental]);
+}
+
+function cropClassForScreenedImage(url: string): string | undefined {
+  const crop = new URL(url, "https://virtualcarhub.local").hash.match(/vch_crop=([^&]+)/)?.[1];
+  return crop ? `dashboard-surplus-crop-${crop}` : undefined;
 }
 
 function resolveHeroImage(vehicle: VehicleDetail | null | undefined): string | null {

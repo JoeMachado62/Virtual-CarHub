@@ -42,6 +42,12 @@ from app.services.notification_service import create_notification
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+VCH_MARGIN = 1500.0
+AUCTION_BUY_FEE_UNDER_50K = 1000.0
+AUCTION_BUY_FEE_OVER_50K = 1300.0
+DETAIL_SHOP_FEE = 150.0
+MARKETING_FEE = 599.0
+
 CONDITION_REPORT_ELIGIBLE_FUNDING_STATES = {
     FundingState.PRE_APPROVED,
     FundingState.TERMS_ACCEPTED,
@@ -121,6 +127,13 @@ def _vehicle_title(vehicle: Vehicle) -> str:
         if part not in (None, "")
     )
     return title or vehicle.vin
+
+
+def _advertised_price(base_price: float | None) -> float | None:
+    if base_price is None:
+        return None
+    buy_fee = AUCTION_BUY_FEE_UNDER_50K if base_price <= 50000 else AUCTION_BUY_FEE_OVER_50K
+    return round(float(base_price) + buy_fee + DETAIL_SHOP_FEE + VCH_MARGIN + MARKETING_FEE, 2)
 
 
 def _image_urls_from_marketcheck_listing(payload: dict | None) -> list[str]:
@@ -311,7 +324,7 @@ def _serialize_garage_item(
             "make": vehicle.make if vehicle else None,
             "model": vehicle.model if vehicle else None,
             "trim": vehicle.trim if vehicle else None,
-            "price_asking": vehicle.price_asking if vehicle else None,
+            "price_asking": _advertised_price(vehicle.price_asking) if vehicle else None,
             "odometer": vehicle.odometer if vehicle else None,
             "location_state": vehicle.location_state if vehicle else None,
             "location_zip": vehicle.location_zip if vehicle else None,
@@ -900,13 +913,9 @@ def request_vehicle_condition_report(
 
     vehicle = _resolve_vehicle_or_404(db, identifier)
     normalized_vin = vehicle.vin
-    if vehicle.source_type not in {InventorySourceType.OVE.value, InventorySourceType.AUCTION.value}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Condition report requests are only supported for auction inventory.",
-        )
 
-    # Auto-add vehicle to garage if not already present
+    # Auto-add vehicle to garage if not already present. Surplus Wrench
+    # previews use this same shared request endpoint from the VDP.
     existing_garage = db.scalar(
         select(GarageItem).where(GarageItem.deal_id == current_deal.id, GarageItem.vin == normalized_vin)
     )
@@ -919,6 +928,35 @@ def request_vehicle_condition_report(
             source="condition_report_request",
         ))
         db.flush()
+
+    if _is_surplus_inventory(vehicle):
+        images, removed_count = _prepare_surplus_condition_report_images(db, vehicle)
+        response = {
+            "vin": normalized_vin,
+            "eligible": True,
+            "report_type": "surplus_wrench",
+            "title": _vehicle_title(vehicle),
+            "order_price": 99,
+            "currency": "USD",
+            "message": SURPLUS_CONDITION_REPORT_MESSAGE,
+            "images": images,
+            "removed_image_count": removed_count,
+        }
+        log_event(
+            db,
+            deal_id=current_deal.id,
+            event_type="buyer_surplus_condition_report_previewed",
+            actor="buyer",
+            payload={**response, "user_id": current_user.id, "source_type": vehicle.source_type},
+        )
+        db.commit()
+        return ok(response)
+
+    if vehicle.source_type not in {InventorySourceType.OVE.value, InventorySourceType.AUCTION.value}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Condition report requests are only supported for auction inventory.",
+        )
 
     ove_detail = db.get(OveVehicleDetail, normalized_vin)
     if ove_detail and ove_detail.condition_report_json:
