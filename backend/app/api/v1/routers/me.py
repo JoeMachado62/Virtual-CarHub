@@ -242,6 +242,7 @@ def _prepare_surplus_condition_report_images(db: Session, vehicle: Vehicle, *, i
         db.flush()
         sanitized = sanitize_marketcheck_photo_urls(_load_marketcheck_asset_urls(db, vehicle.vin) or sanitized)
         sanitized = screen_marketcheck_vehicle_images(db, vin=vehicle.vin, image_urls=sanitized)
+        db.flush()
 
     hidden = _load_admin_hidden_marketcheck_asset_urls(db, vehicle.vin) if include_hidden else []
     return sanitized, hidden, max(0, len([url for url in candidate_urls if url]) - len(sanitized))
