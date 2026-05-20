@@ -19,6 +19,7 @@ from app.services.audit_service import log_event
 from app.services.deal_service import advance_deal_for_trigger
 from app.services.image_pipeline_service import (
     _asset_url,
+    canonical_source_image_url,
     ensure_tier3_processing_job,
     resolve_vehicle_card_media,
     resolve_vehicle_display_context,
@@ -75,6 +76,10 @@ SURPLUS_SOURCE_TYPES = {
 
 class MarkNotificationsReadRequest(BaseModel):
     ids: list[str] | None = None
+
+
+class PublishSurplusImagesRequest(BaseModel):
+    image_urls: list[str]
 
 def _normalize_vin(vin: str) -> str:
     normalized = vin.strip().upper()
@@ -170,7 +175,28 @@ def _load_marketcheck_asset_urls(db: Session, vin: str) -> list[str]:
     return [url for asset in assets if (url := _asset_url(asset))]
 
 
-def _prepare_surplus_condition_report_images(db: Session, vehicle: Vehicle) -> tuple[list[str], int]:
+def _load_admin_hidden_marketcheck_asset_urls(db: Session, vin: str) -> list[str]:
+    assets = db.scalars(
+        select(VehicleImageAsset)
+        .where(
+            VehicleImageAsset.vin == vin,
+            VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
+            VehicleImageAsset.source_kind == "marketcheck",
+            VehicleImageAsset.active.is_(False),
+        )
+        .order_by(VehicleImageAsset.display_order.asc(), VehicleImageAsset.created_at.asc())
+    ).all()
+    out: list[str] = []
+    for asset in assets:
+        screening = (asset.metadata_json or {}).get("overlay_screening")
+        if not isinstance(screening, dict) or screening.get("approved") is not False:
+            continue
+        if url := _asset_url(asset):
+            out.append(url)
+    return out
+
+
+def _prepare_surplus_condition_report_images(db: Session, vehicle: Vehicle, *, include_hidden: bool = False) -> tuple[list[str], list[str], int]:
     candidate_urls: list[str] = []
     candidate_urls.extend(str(url) for url in (vehicle.images or []) if url)
     candidate_urls.extend(_load_marketcheck_asset_urls(db, vehicle.vin))
@@ -214,7 +240,8 @@ def _prepare_surplus_condition_report_images(db: Session, vehicle: Vehicle) -> t
         sanitized = sanitize_marketcheck_photo_urls(_load_marketcheck_asset_urls(db, vehicle.vin) or sanitized)
         sanitized = screen_marketcheck_vehicle_images(db, vin=vehicle.vin, image_urls=sanitized)
 
-    return sanitized, max(0, len([url for url in candidate_urls if url]) - len(sanitized))
+    hidden = _load_admin_hidden_marketcheck_asset_urls(db, vehicle.vin) if include_hidden else []
+    return sanitized, hidden, max(0, len([url for url in candidate_urls if url]) - len(sanitized))
 
 
 def _infer_auction_platform(vehicle: Vehicle, ove_detail: OveVehicleDetail | None) -> AuctionPlatform:
@@ -829,21 +856,27 @@ def preview_surplus_condition_report(
         ))
         db.flush()
 
-    images, removed_count = _prepare_surplus_condition_report_images(db, vehicle)
+    include_hidden = is_admin_user(current_user)
+    images, hidden_images, removed_count = _prepare_surplus_condition_report_images(
+        db,
+        vehicle,
+        include_hidden=include_hidden,
+    )
     db.commit()
 
-    return ok(
-        {
-            "vin": vehicle.vin,
-            "title": _vehicle_title(vehicle),
-            "report_type": "surplus_wrench",
-            "order_price": 99,
-            "currency": "USD",
-            "message": SURPLUS_CONDITION_REPORT_MESSAGE,
-            "images": images,
-            "removed_image_count": removed_count,
-        }
-    )
+    payload = {
+        "vin": vehicle.vin,
+        "title": _vehicle_title(vehicle),
+        "report_type": "surplus_wrench",
+        "order_price": 99,
+        "currency": "USD",
+        "message": SURPLUS_CONDITION_REPORT_MESSAGE,
+        "images": images,
+    }
+    if include_hidden:
+        payload["hidden_images"] = hidden_images
+        payload["removed_image_count"] = removed_count
+    return ok(payload)
 
 
 @router.post("/vehicles/{identifier}/surplus-condition-report-order")
@@ -864,7 +897,7 @@ def order_surplus_condition_report(
             detail="Surplus condition report orders are only supported for surplus inventory.",
         )
 
-    images, removed_count = _prepare_surplus_condition_report_images(db, vehicle)
+    images, _hidden_images, removed_count = _prepare_surplus_condition_report_images(db, vehicle)
     log_event(
         db,
         deal_id=current_deal.id,
@@ -900,6 +933,66 @@ def order_surplus_condition_report(
     )
 
 
+@router.post("/vehicles/{identifier}/surplus-condition-report-images/publish")
+def publish_surplus_condition_report_images(
+    identifier: str,
+    payload: PublishSurplusImagesRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    if not is_admin_user(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+
+    vehicle = _resolve_vehicle_or_404(db, identifier)
+    if not _is_surplus_inventory(vehicle):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Surplus image publishing is only supported for surplus inventory.",
+        )
+
+    requested_keys = {
+        canonical_source_image_url(url)
+        for url in payload.image_urls
+        if str(url).strip()
+    }
+    if not requested_keys:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Select at least one image.")
+
+    assets = db.scalars(
+        select(VehicleImageAsset).where(
+            VehicleImageAsset.vin == vehicle.vin,
+            VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
+            VehicleImageAsset.source_kind == "marketcheck",
+        )
+    ).all()
+    published: list[str] = []
+    now = datetime.now(UTC).isoformat()
+    for asset in assets:
+        key = canonical_source_image_url(asset.external_url or "")
+        if key not in requested_keys:
+            continue
+        metadata = dict(asset.metadata_json or {})
+        screening = dict(metadata.get("overlay_screening") or {})
+        screening.update(
+            {
+                "approved": True,
+                "admin_override": True,
+                "admin_override_by": current_user.email,
+                "admin_override_at": now,
+                "reason": "Approved for public surplus report gallery by admin review.",
+            }
+        )
+        metadata["overlay_screening"] = screening
+        asset.metadata_json = metadata
+        asset.active = True
+        published_url = _asset_url(asset)
+        if published_url:
+            published.append(published_url)
+
+    db.commit()
+    return ok({"vin": vehicle.vin, "published_images": published, "published_count": len(published)})
+
+
 @router.post("/vehicles/{identifier}/condition-report-request")
 def request_vehicle_condition_report(
     identifier: str,
@@ -930,7 +1023,12 @@ def request_vehicle_condition_report(
         db.flush()
 
     if _is_surplus_inventory(vehicle):
-        images, removed_count = _prepare_surplus_condition_report_images(db, vehicle)
+        include_hidden = is_admin_user(current_user)
+        images, hidden_images, removed_count = _prepare_surplus_condition_report_images(
+            db,
+            vehicle,
+            include_hidden=include_hidden,
+        )
         response = {
             "vin": normalized_vin,
             "eligible": True,
@@ -940,8 +1038,10 @@ def request_vehicle_condition_report(
             "currency": "USD",
             "message": SURPLUS_CONDITION_REPORT_MESSAGE,
             "images": images,
-            "removed_image_count": removed_count,
         }
+        if include_hidden:
+            response["hidden_images"] = hidden_images
+            response["removed_image_count"] = removed_count
         log_event(
             db,
             deal_id=current_deal.id,

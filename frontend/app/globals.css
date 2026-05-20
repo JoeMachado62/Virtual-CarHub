@@ -2112,6 +2112,32 @@ textarea {
   text-align: center;
 }
 
+.dashboard-surplus-admin-review {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 0.85rem;
+  padding-top: 0.85rem;
+}
+
+.dashboard-surplus-hidden-gallery {
+  max-height: 260px;
+  min-height: 0;
+}
+
+.dashboard-surplus-hidden-item {
+  position: relative;
+  display: block;
+}
+
+.dashboard-surplus-hidden-item input {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.55rem;
+  z-index: 2;
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
 .dashboard-surplus-modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -3536,6 +3562,20 @@ textarea {
   color: var(--ink);
   font-size: 0.95rem;
   overflow-wrap: anywhere;
+}
+
+.vdp-summary-collapsed {
+  max-height: 10.2em; /* ~6 lines at line-height 1.7 */
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+}
+
+.vdp-summary-toggle {
+  justify-self: start;
+  font-size: 0.88rem;
+  padding: 0;
+  margin-top: -0.25rem;
 }
 
 .vdp-summary-badges {

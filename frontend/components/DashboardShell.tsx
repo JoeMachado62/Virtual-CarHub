@@ -81,8 +81,9 @@ type SurplusReportModalState = {
   title: string;
   message: string;
   images: string[];
+  hiddenImages: string[];
+  selectedHiddenImages: string[];
   orderPrice: number;
-  removedImageCount: number;
 };
 
 export function DashboardShell({ requestedVin }: { requestedVin?: string | null }) {
@@ -626,8 +627,8 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       title?: string;
       message: string;
       images: string[];
+      hidden_images?: string[];
       order_price?: number;
-      removed_image_count?: number;
     }>(
       `/me/vehicles/${encodeURIComponent(item.vin)}/surplus-condition-report-preview`,
       { method: "POST" },
@@ -644,10 +645,51 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       title: response.data.title || garageTitle(item),
       message: response.data.message,
       images: response.data.images || [],
+      hiddenImages: response.data.hidden_images || [],
+      selectedHiddenImages: [],
       orderPrice: response.data.order_price || 99,
-      removedImageCount: response.data.removed_image_count || 0,
     });
     setGarageActionVin(null);
+  }
+
+  function toggleHiddenSurplusImage(image: string) {
+    setSurplusReportModal((current) => {
+      if (!current) return current;
+      const selected = new Set(current.selectedHiddenImages);
+      if (selected.has(image)) selected.delete(image);
+      else selected.add(image);
+      return { ...current, selectedHiddenImages: Array.from(selected) };
+    });
+  }
+
+  async function publishHiddenSurplusImages() {
+    if (!auth?.accessToken || !surplusReportModal || !isAdminUser(auth) || !surplusReportModal.selectedHiddenImages.length) return;
+    setGarageError(null);
+    const selected = surplusReportModal.selectedHiddenImages;
+    const response = await apiFetch<{ published_images?: string[]; published_count?: number }>(
+      `/me/vehicles/${encodeURIComponent(surplusReportModal.vin)}/surplus-condition-report-images/publish`,
+      {
+        method: "POST",
+        body: JSON.stringify({ image_urls: selected }),
+      },
+      auth.accessToken,
+    );
+    if (response.status !== "ok") {
+      setGarageError(response.error?.message || "Unable to publish selected images.");
+      return;
+    }
+    const published = response.data.published_images || selected;
+    setSurplusReportModal((current) => {
+      if (!current) return current;
+      const publishedSet = new Set(published);
+      return {
+        ...current,
+        images: Array.from(new Set([...current.images, ...published])),
+        hiddenImages: current.hiddenImages.filter((image) => !publishedSet.has(image)),
+        selectedHiddenImages: [],
+      };
+    });
+    setGarageMessage(`${response.data.published_count || published.length} image${(response.data.published_count || published.length) === 1 ? "" : "s"} published to the report gallery.`);
   }
 
   async function orderSurplusConditionReport() {
@@ -1171,7 +1213,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                   <strong>{sourceLabel(spotlightItem.vehicle.source_type)}</strong>
                 </div>
                 <div className="vinv-modal-data-row">
-                  <span>Ask</span>
+                  <span>Price</span>
                   <strong>{formatMoney(spotlightItem.vehicle.price_asking)}</strong>
                 </div>
                 <div className="vinv-modal-data-row">
@@ -1313,11 +1355,6 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
               </p>
               <h3 id="dashboard-surplus-modal-title">{surplusReportModal.title}</h3>
               <p>{surplusReportModal.message}</p>
-              {surplusReportModal.removedImageCount > 0 ? (
-                <p className="dashboard-muted-note">
-                  {surplusReportModal.removedImageCount} image{surplusReportModal.removedImageCount === 1 ? "" : "s"} removed during photo screening.
-                </p>
-              ) : null}
             </div>
             <div className="dashboard-surplus-gallery">
               {surplusReportModal.images.length ? (
@@ -1335,6 +1372,35 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
                 </div>
               )}
             </div>
+            {isAdminUser(auth) && surplusReportModal.hiddenImages.length ? (
+              <div className="dashboard-surplus-admin-review">
+                <p className="section-eyebrow">Admin Hidden Images</p>
+                <div className="dashboard-surplus-gallery dashboard-surplus-hidden-gallery">
+                  {surplusReportModal.hiddenImages.map((image, index) => (
+                    <label className="dashboard-surplus-hidden-item" key={`${image}-${index}`}>
+                      <input
+                        type="checkbox"
+                        checked={surplusReportModal.selectedHiddenImages.includes(image)}
+                        onChange={() => toggleHiddenSurplusImage(image)}
+                      />
+                      <img
+                        src={image}
+                        alt={`${surplusReportModal.title} hidden photo ${index + 1}`}
+                        className={cropClassForScreenedImage(image)}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <button
+                  className="button ghost"
+                  type="button"
+                  onClick={publishHiddenSurplusImages}
+                  disabled={!surplusReportModal.selectedHiddenImages.length}
+                >
+                  Publish Selected
+                </button>
+              </div>
+            ) : null}
             <div className="dashboard-surplus-modal-actions">
               <button className="button ghost" type="button" onClick={() => setSurplusReportModal(null)}>
                 Cancel

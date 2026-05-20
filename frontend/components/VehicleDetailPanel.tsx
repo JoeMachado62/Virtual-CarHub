@@ -189,8 +189,9 @@ type SurplusReportModalState = {
   title: string;
   message: string;
   images: string[];
+  hiddenImages: string[];
+  selectedHiddenImages: string[];
   orderPrice: number;
-  removedImageCount: number;
 };
 
 type MarketComparisonPoint = {
@@ -670,6 +671,9 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
   const [marketComparison, setMarketComparison] = useState<MarketComparisonData | null>(null);
   const [marketComparisonLoading, setMarketComparisonLoading] = useState(false);
   const [countdownNow, setCountdownNow] = useState(() => Date.now());
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [summaryOverflows, setSummaryOverflows] = useState(false);
+  const summaryMeasureRef = useRef<ResizeObserver | null>(null);
   const photoTouchStartX = useRef<number | null>(null);
   const topResetVin = useRef<string | null>(null);
 
@@ -842,6 +846,24 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [photoModalIndex, showPriceModal, surplusReportModal, vehicle]);
+
+  const summaryRefsSet = useRef<Set<HTMLParagraphElement>>(new Set());
+  const summaryRefCallback = (el: HTMLParagraphElement | null) => {
+    if (!el) return;
+    if (summaryRefsSet.current.has(el)) return;
+    summaryRefsSet.current.add(el);
+    const check = () => {
+      for (const node of summaryRefsSet.current) {
+        if (node.scrollHeight > node.clientHeight + 1) { setSummaryOverflows(true); return; }
+      }
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    if (!summaryMeasureRef.current) summaryMeasureRef.current = ro;
+  };
+
+  useEffect(() => () => { summaryMeasureRef.current?.disconnect(); }, []);
 
   if (loading) {
     return (
@@ -1040,8 +1062,8 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
       report_type?: string;
       title?: string;
       images?: string[];
+      hidden_images?: string[];
       order_price?: number;
-      removed_image_count?: number;
     }>(
       `/me/vehicles/${encodeURIComponent(currentVehicle.vin)}/condition-report-request`,
       { method: "POST" },
@@ -1059,8 +1081,9 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
         title: response.data.title || `${currentVehicle.year} ${currentVehicle.make} ${currentVehicle.model}`,
         message: response.data.message || "",
         images: response.data.images || [],
+        hiddenImages: response.data.hidden_images || [],
+        selectedHiddenImages: [],
         orderPrice: response.data.order_price || 99,
-        removedImageCount: response.data.removed_image_count || 0,
       });
       setVehicle({ ...currentVehicle, is_in_garage: true });
       setInGarage(true);
@@ -1104,6 +1127,47 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
     setActionMessage(response.data.message || "Surplus inspection report ordered. My Garage will update when it is ready.");
     setSurplusReportModal(null);
     setOrderingSurplusReport(false);
+  }
+
+  function toggleHiddenSurplusImage(image: string) {
+    setSurplusReportModal((current) => {
+      if (!current) return current;
+      const selected = new Set(current.selectedHiddenImages);
+      if (selected.has(image)) selected.delete(image);
+      else selected.add(image);
+      return { ...current, selectedHiddenImages: Array.from(selected) };
+    });
+  }
+
+  async function publishHiddenSurplusImages() {
+    if (!auth?.accessToken || !surplusReportModal || !isAdminUser(auth) || !surplusReportModal.selectedHiddenImages.length) return;
+    setActionError(null);
+    const selected = surplusReportModal.selectedHiddenImages;
+    const response = await apiFetch<{ published_images?: string[]; published_count?: number }>(
+      `/me/vehicles/${encodeURIComponent(surplusReportModal.vin)}/surplus-condition-report-images/publish`,
+      {
+        method: "POST",
+        body: JSON.stringify({ image_urls: selected }),
+      },
+      auth.accessToken,
+    );
+    if (handleUnauthorized(response)) return;
+    if (response.status !== "ok") {
+      setActionError(response.error?.message || "Unable to publish selected images.");
+      return;
+    }
+    const published = response.data.published_images || selected;
+    setSurplusReportModal((current) => {
+      if (!current) return current;
+      const publishedSet = new Set(published);
+      return {
+        ...current,
+        images: Array.from(new Set([...current.images, ...published])),
+        hiddenImages: current.hiddenImages.filter((image) => !publishedSet.has(image)),
+        selectedHiddenImages: [],
+      };
+    });
+    setActionMessage(`${response.data.published_count || published.length} image${(response.data.published_count || published.length) === 1 ? "" : "s"} published to the report gallery.`);
   }
 
   const featureLimit = showAllFeatures ? expandedFeatureBadges.length : 24;
@@ -1158,7 +1222,20 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
           {vehicle.source_label ? <span className="badge">{toPublicSourceLabel(vehicle.source_label, vehicle.source_type)}</span> : null}
         </div>
       </div>
-      <p className="vdp-summary-copy">{sellerSummary}</p>
+      <p
+        ref={summaryRefCallback}
+        className={`vdp-summary-copy${summaryExpanded ? "" : " vdp-summary-collapsed"}`}
+      >
+        {sellerSummary}
+      </p>
+      {summaryOverflows && (
+        <button
+          className="vdp-link-button vdp-summary-toggle"
+          onClick={() => setSummaryExpanded((prev) => !prev)}
+        >
+          {summaryExpanded ? "Show less" : "Read more"}
+        </button>
+      )}
     </section>
   ) : null;
 
@@ -1608,11 +1685,6 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
               </p>
               <h3 id="vdp-surplus-modal-title">{surplusReportModal.title}</h3>
               <p>{surplusReportModal.message}</p>
-              {surplusReportModal.removedImageCount > 0 ? (
-                <p className="dashboard-muted-note">
-                  {surplusReportModal.removedImageCount} image{surplusReportModal.removedImageCount === 1 ? "" : "s"} removed during photo screening.
-                </p>
-              ) : null}
             </div>
             <div className="dashboard-surplus-gallery">
               {surplusReportModal.images.length ? (
@@ -1630,6 +1702,35 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
                 </div>
               )}
             </div>
+            {isAdminUser(auth) && surplusReportModal.hiddenImages.length ? (
+              <div className="dashboard-surplus-admin-review">
+                <p className="section-eyebrow">Admin Hidden Images</p>
+                <div className="dashboard-surplus-gallery dashboard-surplus-hidden-gallery">
+                  {surplusReportModal.hiddenImages.map((image, index) => (
+                    <label className="dashboard-surplus-hidden-item" key={`${image}-${index}`}>
+                      <input
+                        type="checkbox"
+                        checked={surplusReportModal.selectedHiddenImages.includes(image)}
+                        onChange={() => toggleHiddenSurplusImage(image)}
+                      />
+                      <img
+                        src={image}
+                        alt={`${surplusReportModal.title} hidden photo ${index + 1}`}
+                        className={cropClassForScreenedImage(image)}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <button
+                  className="button ghost"
+                  type="button"
+                  onClick={publishHiddenSurplusImages}
+                  disabled={!surplusReportModal.selectedHiddenImages.length}
+                >
+                  Publish Selected
+                </button>
+              </div>
+            ) : null}
             <div className="dashboard-surplus-modal-actions">
               <button className="button ghost" type="button" onClick={() => setSurplusReportModal(null)}>
                 Cancel
