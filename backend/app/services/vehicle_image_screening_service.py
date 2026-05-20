@@ -137,10 +137,11 @@ def screen_marketcheck_vehicle_images(
         result = record["result"] or _failure_result("screening", "No screening result was produced.")
         asset = record["asset"]
 
-        if asset and not record["cached"]:
-            metadata = dict(asset.metadata_json or {})
-            metadata[SCREENING_CACHE_KEY] = result
-            asset.metadata_json = metadata
+        if asset:
+            if not record["cached"]:
+                metadata = dict(asset.metadata_json or {})
+                metadata[SCREENING_CACHE_KEY] = result
+                asset.metadata_json = metadata
             asset.active = bool(result.get("approved"))
         display_url = _display_url(url, result)
         if result.get("approved") is True and display_url:
