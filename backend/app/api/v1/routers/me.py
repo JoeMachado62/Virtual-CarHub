@@ -104,6 +104,9 @@ def _resolve_vehicle_or_404(db: Session, identifier: str) -> Vehicle:
 
 
 def _condition_report_eligibility(deal, user) -> tuple[bool, str]:
+    if isinstance(user, User) and is_admin_user(user):
+        return True, "Eligible to request a VCH condition report (admin)."
+
     # Check if user has manual pre-approval override. Guard against the
     # helper being called with an unresolved FastAPI ``Depends`` marker
     # (happens when route handlers are invoked directly without FastAPI
