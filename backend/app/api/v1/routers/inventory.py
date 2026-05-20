@@ -406,6 +406,8 @@ def _is_wholesale_source(source_type: str | None) -> bool:
     return normalized in {
         InventorySourceType.MARKETCHECK.value,
         InventorySourceType.DEALER_WHOLESALE.value,
+        InventorySourceType.DEALER_PARTNER.value,
+        PUBLIC_WHOLESALE_SOURCE,
     }
 
 
@@ -2101,7 +2103,8 @@ def get_inventory_vehicle(
             logger.warning("ChromeData detail fetch failed for vin=%s", vehicle.vin, exc_info=True)
 
     public_gallery = display_context.get("gallery_images") or []
-    resolved_images = public_gallery or ([] if display_context.get("dealer_photos_gated") else (vehicle.images or []))
+    is_surplus_source = _is_wholesale_source(vehicle.source_type)
+    resolved_images = public_gallery or ([] if is_surplus_source or display_context.get("dealer_photos_gated") else (vehicle.images or []))
     hero_image = display_context.get("hero_image") or (resolved_images[0] if resolved_images else None)
 
     listing_meta: dict[str, Any] = {}
@@ -2280,7 +2283,7 @@ def get_inventory_vehicle(
             "source_category": PUBLIC_AUCTION_SOURCE if _is_auction_source(vehicle.source_type) else PUBLIC_RETAIL_SOURCE,
             "source_filter_value": _public_source_value(vehicle.source_type),
             "source_label": _public_source_label(vehicle.source_type),
-            "images": [] if display_context.get("dealer_photos_gated") else (vehicle.images or []),
+            "images": [] if is_surplus_source or display_context.get("dealer_photos_gated") else (vehicle.images or []),
             "display_images": resolved_images,
             "hero_image": hero_image,
             "display_mode": display_context.get("mode"),
@@ -2528,7 +2531,9 @@ def get_similar_vehicles(
     results = []
     for row in rows:
         card_media = resolve_vehicle_card_media(db, vehicle=row)
-        hero = card_media.thumbnail or (None if card_media.dealer_photos_gated else (row.images[0] if row.images else None))
+        hero = card_media.thumbnail or (
+            None if _is_wholesale_source(row.source_type) or card_media.dealer_photos_gated else (row.images[0] if row.images else None)
+        )
         normalized = row.features_normalized or {}
         results.append({
             "vin": row.vin,
