@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import re
@@ -92,23 +93,51 @@ def screen_marketcheck_vehicle_images(
     limit = max(1, int(max_images or settings.image_screening_max_images or 60))
     candidate_urls = image_urls[:limit]
     assets_by_key = _load_marketcheck_assets_by_key(db, vin)
+    records: list[dict[str, Any]] = []
+    model_jobs: list[tuple[int, str]] = []
     approved: list[str] = []
 
     for url in candidate_urls:
         key = canonical_source_image_url(url)
         asset = assets_by_key.get(key)
+        record: dict[str, Any] = {
+            "url": url,
+            "asset": asset,
+            "cached": False,
+            "result": None,
+        }
+        records.append(record)
+
         cached = _cached_screening(asset)
         if cached:
-            display_url = _display_url(url, cached)
-            if cached.get("approved") is True and display_url:
-                approved.append(display_url)
+            record["cached"] = True
+            record["result"] = cached
             continue
 
         result = _cheap_precheck(url)
         if result is None:
-            result = _screen_with_models(url)
+            model_jobs.append((len(records) - 1, url))
+        else:
+            record["result"] = result
 
-        if asset:
+    parallelism = max(1, int(settings.image_screening_parallelism or 4))
+    if model_jobs:
+        with ThreadPoolExecutor(max_workers=min(parallelism, len(model_jobs))) as executor:
+            futures = {executor.submit(_screen_with_models, url): index for index, url in model_jobs}
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    records[index]["result"] = future.result()
+                except Exception as exc:
+                    logger.info("image_screening_job_failed url=%s", records[index]["url"], exc_info=True)
+                    records[index]["result"] = _failure_result("screening", str(exc))
+
+    for record in records:
+        url = str(record["url"])
+        result = record["result"] or _failure_result("screening", "No screening result was produced.")
+        asset = record["asset"]
+
+        if asset and not record["cached"]:
             metadata = dict(asset.metadata_json or {})
             metadata[SCREENING_CACHE_KEY] = result
             asset.metadata_json = metadata
@@ -267,7 +296,6 @@ def _screen_with_openai(image_bytes: bytes, mime_type: str) -> dict[str, Any]:
                 ],
             }
         ],
-        "text": {"format": {"type": "json_object"}},
     }
     with httpx.Client(timeout=45.0) as client:
         response = client.post(

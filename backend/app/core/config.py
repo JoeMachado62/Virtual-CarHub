@@ -238,6 +238,7 @@ class Settings(BaseSettings):
     openai_image_screening_model: str = Field(default="gpt-5.4-mini", alias="OPENAI_IMAGE_SCREENING_MODEL")
     image_screening_enabled: bool = Field(default=True, alias="IMAGE_SCREENING_ENABLED")
     image_screening_max_images: int = Field(default=60, alias="IMAGE_SCREENING_MAX_IMAGES")
+    image_screening_parallelism: int = Field(default=4, alias="IMAGE_SCREENING_PARALLELISM")
     openai_cr_review_mode: Literal["disabled", "inline", "async"] = Field(
         default="disabled",
         alias="OPENAI_CR_REVIEW_MODE",
