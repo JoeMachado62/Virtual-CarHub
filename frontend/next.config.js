@@ -16,7 +16,9 @@ const nextConfig = {
     ];
   },
   async rewrites() {
-    const apiBase = (process.env.API_INTERNAL_BASE || "http://backend:8000/v1").replace(/\/$/, "");
+    const defaultApiBase =
+      process.env.NODE_ENV === "development" ? "http://127.0.0.1:8000/v1" : "http://backend:8000/v1";
+    const apiBase = (process.env.API_INTERNAL_BASE || defaultApiBase).replace(/\/$/, "");
 
     return [
       {

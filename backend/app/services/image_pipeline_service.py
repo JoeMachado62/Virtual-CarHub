@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -92,8 +93,9 @@ def sync_marketcheck_source_assets(
         db,
         vin=vin,
         listing_id=listing_id,
-        image_urls=image_urls,
+        image_urls=sanitize_marketcheck_photo_urls(image_urls),
         source_kind="marketcheck",
+        deactivate_missing=True,
     )
 
 
@@ -115,6 +117,48 @@ def canonical_source_image_url(url: str) -> str:
     )
     path = parts.path.rstrip("/") or parts.path
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, query, ""))
+
+
+def _is_marketcheck_cache_url(url: str) -> bool:
+    parts = urlsplit(str(url).strip())
+    return parts.netloc.lower() == "api.marketcheck.com" and "/image/cache/" in parts.path.lower()
+
+
+def _is_dealer_hosted_stock_asset(url: str) -> bool:
+    """Detect dealer-site factory/stock PNG assets mixed into real dealer photos."""
+    parts = urlsplit(str(url).strip())
+    path = parts.path.lower()
+    if "/assets/stock/" in path or "/stock/expanded/" in path:
+        return True
+    return bool(
+        "/transparent/" in path
+        and path.endswith(".png")
+        and re.search(r"_[0-9]{2}\.png$", path)
+    )
+
+
+def sanitize_marketcheck_photo_urls(image_urls: list[str]) -> list[str]:
+    """Prefer real dealer photos and remove source-cache artifacts.
+
+    MarketCheck can return both cached copies and direct dealer URLs for the same
+    vehicle, and some dealer feeds append factory/ChromeData-style transparent
+    stock assets after the real photos. Keep direct URLs when available, remove
+    generated stock assets, and let canonical URL handling remove exact matches.
+    """
+    cleaned = _filter_non_photo_urls([str(url).strip() for url in image_urls if str(url).strip()])
+    non_stock = [url for url in cleaned if not _is_dealer_hosted_stock_asset(url)]
+    direct_urls = [url for url in non_stock if not _is_marketcheck_cache_url(url)]
+    candidate_urls = direct_urls or non_stock
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for url in candidate_urls:
+        key = canonical_source_image_url(url)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(url)
+    return deduped
 
 
 def sync_source_assets(
@@ -445,6 +489,9 @@ def resolve_vehicle_display_context(
     is_marketcheck_source = bool(
         vehicle.source_type and vehicle.source_type.lower() in {"marketcheck", "dealer_wholesale"}
     )
+    if is_marketcheck_source:
+        source_gallery = sanitize_marketcheck_photo_urls(source_gallery)
+        fallback_gallery = sanitize_marketcheck_photo_urls(fallback_gallery)
 
     chromedata_refresh_needed = bool(chromedata_assets_need_refresh(vehicle, chromedata_assets)) if chromedata_assets else False
     reference_pending = (

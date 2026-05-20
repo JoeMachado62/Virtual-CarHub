@@ -58,6 +58,14 @@ type GarageItem = {
   };
 };
 
+type NotificationItem = {
+  id: string;
+  message: string;
+  channel?: string;
+  is_read?: boolean;
+  created_at?: string | null;
+};
+
 const FALLBACK_IMAGE = "/assets/images/portfolio/01.webp";
 
 type AuthView = "login" | "register" | "onboarding" | "forgot-password";
@@ -75,12 +83,13 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
   const [deal, setDeal] = useState<DealSummary | null>(null);
   const [isPreapproved, setIsPreapproved] = useState(false);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
-  const [notifications, setNotifications] = useState<{ id: string; message: string }[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [garageItems, setGarageItems] = useState<GarageItem[]>([]);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [garageMessage, setGarageMessage] = useState<string | null>(null);
   const [garageError, setGarageError] = useState<string | null>(null);
   const [garageActionVin, setGarageActionVin] = useState<string | null>(null);
+  const [markingNotificationsRead, setMarkingNotificationsRead] = useState(false);
   const [pendingReportVins, setPendingReportVins] = useState<Set<string>>(new Set());
   const [crRequestModal, setCrRequestModal] = useState<CrRequestModalState | null>(null);
   const [profileBfv, setProfileBfv] = useState<Record<string, unknown> | null>(null);
@@ -331,8 +340,8 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
 
     const [dealResponse, recs, notes, garage, accountStatus, profileResponse] = await Promise.all([
       apiFetch<DealSummary>("/me/deal", {}, auth.accessToken),
-      apiFetch<Recommendation[]>("/me/recommendations", {}, auth.accessToken),
-      apiFetch<{ id: string; message: string }[]>("/me/notifications", {}, auth.accessToken),
+      apiFetch<Recommendation[]>("/me/recommendations/refresh", { method: "POST" }, auth.accessToken),
+      apiFetch<NotificationItem[]>("/me/notifications", {}, auth.accessToken),
       apiFetch<GarageItem[]>("/me/garage", {}, auth.accessToken),
       apiFetch<{ is_preapproved: boolean }>("/me/account-status", {}, auth.accessToken),
       apiFetch<{ first_name: string | null; last_name: string | null; bfv_json: Record<string, unknown> | null }>("/me/profile", {}, auth.accessToken)
@@ -404,7 +413,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
 
     const [garage, notes] = await Promise.all([
       apiFetch<GarageItem[]>("/me/garage", {}, auth.accessToken),
-      apiFetch<{ id: string; message: string }[]>("/me/notifications", {}, auth.accessToken),
+      apiFetch<NotificationItem[]>("/me/notifications", {}, auth.accessToken),
     ]);
 
     if ([garage, notes].some(isUnauthorized)) {
@@ -480,6 +489,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       setDashboardError(response.error?.message || "Unable to select vehicle.");
       return;
     }
+    setGarageMessage("Vehicle selected and added to My Garage.");
     await refreshData();
   }
 
@@ -508,6 +518,31 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       return;
     }
     await refreshData();
+  }
+
+  async function markNotificationsRead() {
+    if (!auth?.accessToken) return;
+    const unreadIds = notifications.filter((note) => !note.is_read).map((note) => note.id);
+    if (!unreadIds.length) return;
+
+    setMarkingNotificationsRead(true);
+    const response = await apiFetch(
+      "/me/notifications/mark-read",
+      {
+        method: "POST",
+        body: JSON.stringify({ ids: unreadIds }),
+      },
+      auth.accessToken,
+    );
+
+    if (response.status !== "ok") {
+      setDashboardError(response.error?.message || "Unable to mark notifications read.");
+      setMarkingNotificationsRead(false);
+      return;
+    }
+
+    setNotifications((current) => current.filter((note) => !unreadIds.includes(note.id)));
+    setMarkingNotificationsRead(false);
   }
 
   async function requestConditionReport(vin: string) {
@@ -588,6 +623,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
   const auctionGarageCount = garageItems.filter(
     (item) => item.vehicle.source_type === "ove" || item.vehicle.source_type === "auction"
   ).length;
+  const unreadNotifications = notifications.filter((note) => !note.is_read);
 
   if (!authReady) {
     return (
@@ -1073,7 +1109,13 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       ) : null}
 
       <section>
-        <h2>Top Recommendations</h2>
+        <div className="dashboard-section-head">
+          <div>
+            <h2>Top Recommendations</h2>
+            <p className="dashboard-muted-note">Refreshed from available inventory when My Garage opens.</p>
+          </div>
+          {recommendations.length ? <span className="badge">{Math.min(recommendations.length, 4)} shown</span> : null}
+        </div>
         <RecommendationCards data={recommendations} onSelect={selectVehicle} onFavorite={favoriteVehicle} isAdmin={isAdminUser(auth)} />
       </section>
 
@@ -1081,11 +1123,20 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
         <DannyChat accessToken={accessToken} />
 
         <div className="card">
-          <h3>Notifications</h3>
-          {notifications.length ? notifications.map((note) => <p key={note.id}>{note.message}</p>) : <p>No notifications yet.</p>}
-          <button className="button" onClick={initiateReturn}>
-            Initiate 7-Day Return
-          </button>
+          <div className="dashboard-notification-head">
+            <h3>Notifications</h3>
+            {unreadNotifications.length ? (
+              <button className="button ghost" onClick={markNotificationsRead} disabled={markingNotificationsRead}>
+                {markingNotificationsRead ? "Marking..." : "Mark All Read"}
+              </button>
+            ) : null}
+          </div>
+          {unreadNotifications.length ? unreadNotifications.map((note) => <p key={note.id}>{note.message}</p>) : <p>No notifications yet.</p>}
+          {isAdminUser(auth) ? (
+            <button className="button" onClick={initiateReturn}>
+              Initiate 7-Day Return
+            </button>
+          ) : null}
         </div>
       </section>
 

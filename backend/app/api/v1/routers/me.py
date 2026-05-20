@@ -1,14 +1,17 @@
+import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_deal, get_current_user, is_admin_user
+from app.core.config import settings
 from app.core.constants import AuctionPlatform, DealState, FundingState, InventorySourceType, OveDetailRequestStatus
 from app.core.responses import ok
 from app.db.session import get_db
-from app.models.entities import Document, GarageItem, Notification, OveDetailRequest, OveVehicleDetail, Shipment, User, Vehicle, VehicleMatch
+from app.models.entities import Document, GarageItem, Notification, OveDetailRequest, OveVehicleDetail, Shipment, User, Vehicle, VehicleImageAsset, VehicleMatch
 from app.schemas.profile import ProfileUpdateRequest, QuickMatchRequest
 from app.schemas.returns import InitiateReturnRequest
 from app.schemas.ove_inventory import OveDetailRequestEnqueueRequest
@@ -18,6 +21,7 @@ from app.services.image_pipeline_service import (
     ensure_tier3_processing_job,
     resolve_vehicle_card_media,
     resolve_vehicle_display_context,
+    sanitize_marketcheck_photo_urls,
     sync_marketcheck_source_assets,
 )
 from app.services.ghl_lifecycle_service import GHLLifecycleService
@@ -28,6 +32,7 @@ from app.services.profile_service import apply_full_profile, apply_quick_match, 
 from app.services.return_service import initiate_return
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 CONDITION_REPORT_ELIGIBLE_FUNDING_STATES = {
     FundingState.PRE_APPROVED,
@@ -36,6 +41,10 @@ CONDITION_REPORT_ELIGIBLE_FUNDING_STATES = {
     FundingState.FULLY_FUNDED,
     FundingState.CASH_BUYER,
 }
+
+
+class MarkNotificationsReadRequest(BaseModel):
+    ids: list[str] | None = None
 
 def _normalize_vin(vin: str) -> str:
     normalized = vin.strip().upper()
@@ -236,6 +245,71 @@ def _ensure_vehicle_match(
     return match
 
 
+def _serialize_recommendation(db: Session, match: VehicleMatch) -> dict:
+    vehicle = match.vehicle
+    display_context = (
+        resolve_vehicle_display_context(db, vehicle=vehicle)
+        if vehicle
+        else {}
+    )
+    hero_image = display_context.get("hero_image") if display_context.get("has_chromedata_stock") else None
+    return {
+        "vin": match.vin,
+        "public_slug": vehicle.public_slug if vehicle else None,
+        "status": match.status,
+        "match_score": match.match_score,
+        "explainability": match.explainability_text,
+        "market_retail": match.marketcheck_retail,
+        "target_acquisition": vehicle.price_asking if vehicle else None,
+        "estimated_otd": match.estimated_otd,
+        "danny_savings": match.danny_savings,
+        "last_seen_active": vehicle.last_seen_active if vehicle else None,
+        "vehicle": {
+            "year": vehicle.year if vehicle else None,
+            "make": vehicle.make if vehicle else None,
+            "model": vehicle.model if vehicle else None,
+            "trim": vehicle.trim if vehicle else None,
+            "odometer": vehicle.odometer if vehicle else None,
+            "price": vehicle.price_asking if vehicle else None,
+            "location": f"{vehicle.location_state} {vehicle.location_zip}" if vehicle else None,
+            "images": [hero_image] if hero_image else [],
+            "thumbnail": hero_image,
+        },
+    }
+
+
+def _ensure_recommendation_chromedata_assets(db: Session, matches: list[VehicleMatch], *, limit: int = 4) -> None:
+    if not settings.has_chromedata_media:
+        return
+
+    from app.services.chromedata_service import build_chromedata_manifest, sync_chromedata_source_assets
+
+    synced = False
+    for match in matches[:limit]:
+        vehicle = match.vehicle
+        if not vehicle:
+            continue
+        existing_cd = db.scalar(
+            select(VehicleImageAsset.id).where(
+                VehicleImageAsset.vin == vehicle.vin,
+                VehicleImageAsset.source_kind == "chromedata",
+                VehicleImageAsset.active == True,  # noqa: E712
+            ).limit(1)
+        )
+        if existing_cd:
+            continue
+        try:
+            manifest = build_chromedata_manifest(vehicle, detail_level="card")
+            if manifest:
+                sync_chromedata_source_assets(db, vehicle=vehicle, manifest=manifest)
+                synced = True
+        except Exception:
+            logger.debug("ChromeData recommendation sync failed for vin=%s", vehicle.vin, exc_info=True)
+
+    if synced:
+        db.commit()
+
+
 @router.get("/profile")
 def get_profile(
     db: Session = Depends(get_db),
@@ -359,32 +433,29 @@ def get_recommendations(
         .where(VehicleMatch.deal_id == current_deal.id)
         .order_by(VehicleMatch.match_score.desc())
     ).all()
+    _ensure_recommendation_chromedata_assets(db, matches)
 
-    return ok(
-        [
-            {
-                "vin": m.vin,
-                "public_slug": m.vehicle.public_slug if m.vehicle else None,
-                "match_score": m.match_score,
-                "explainability": m.explainability_text,
-                "market_retail": m.marketcheck_retail,
-                "target_acquisition": m.vehicle.price_asking if m.vehicle else None,
-                "estimated_otd": m.estimated_otd,
-                "danny_savings": m.danny_savings,
-                "vehicle": {
-                    "year": m.vehicle.year if m.vehicle else None,
-                    "make": m.vehicle.make if m.vehicle else None,
-                    "model": m.vehicle.model if m.vehicle else None,
-                    "trim": m.vehicle.trim if m.vehicle else None,
-                    "odometer": m.vehicle.odometer if m.vehicle else None,
-                    "price": m.vehicle.price_asking if m.vehicle else None,
-                    "location": f"{m.vehicle.location_state} {m.vehicle.location_zip}" if m.vehicle else None,
-                    "images": m.vehicle.images if m.vehicle else [],
-                },
-            }
-            for m in matches
-        ]
-    )
+    return ok([_serialize_recommendation(db, m) for m in matches])
+
+
+@router.post("/recommendations/refresh")
+def refresh_recommendations(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    current_deal=Depends(get_current_deal),
+) -> dict:
+    profile = get_or_create_profile(db, current_user.id)
+    if profile.is_complete and profile.bfv_json:
+        run_matching(db, profile=profile, deal=current_deal, limit=10)
+        db.commit()
+
+    matches = db.scalars(
+        select(VehicleMatch)
+        .where(VehicleMatch.deal_id == current_deal.id)
+        .order_by(VehicleMatch.match_score.desc())
+    ).all()
+    _ensure_recommendation_chromedata_assets(db, matches)
+    return ok([_serialize_recommendation(db, m) for m in matches])
 
 
 @router.post("/recommendations/{vin}/select")
@@ -400,7 +471,37 @@ def select_recommendation(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recommendation not found")
 
     match.status = "selected"
+    selected_matches = db.scalars(
+        select(VehicleMatch).where(
+            VehicleMatch.deal_id == current_deal.id,
+            VehicleMatch.status == "selected",
+            VehicleMatch.vin != vin,
+        )
+    ).all()
+    for selected_match in selected_matches:
+        selected_match.status = "favorited"
+
     current_deal.selected_vin = vin
+    if match.vehicle:
+        item = db.scalar(select(GarageItem).where(GarageItem.deal_id == current_deal.id, GarageItem.vin == vin))
+        if not item:
+            item = GarageItem(
+                deal_id=current_deal.id,
+                user_id=current_deal.user_id,
+                vin=vin,
+                status="saved",
+                source="recommendation",
+            )
+            db.add(item)
+        elif item.status == "removed":
+            item.status = "saved"
+            item.source = "recommendation"
+        ensure_tier3_processing_job(
+            db,
+            vin=match.vehicle.vin,
+            trigger_event="recommendation_selected",
+            source_image_urls=match.vehicle.images or [],
+        )
     advance_deal_for_trigger(
         db,
         deal=current_deal,
@@ -585,7 +686,14 @@ def add_to_garage(
                         photo_links = _extract_photos(listing)
 
                 if isinstance(photo_links, list) and photo_links:
-                    _log.info("syncing %d dealer photos for %s", len(photo_links), vehicle.vin)
+                    raw_photo_count = len(photo_links)
+                    photo_links = sanitize_marketcheck_photo_urls(photo_links)
+                    _log.info(
+                        "syncing %d/%d dealer photos for %s",
+                        len(photo_links),
+                        raw_photo_count,
+                        vehicle.vin,
+                    )
                     sync_marketcheck_source_assets(
                         db,
                         vin=vehicle.vin,
@@ -893,8 +1001,12 @@ def get_delivery(
 def post_return_initiate(
     payload: InitiateReturnRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
     current_deal=Depends(get_current_deal),
 ) -> dict:
+    if not is_admin_user(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can initiate returns from My Garage")
+
     return_case = initiate_return(
         db,
         deal=current_deal,
@@ -919,6 +1031,7 @@ def get_notifications(
     notifications = db.scalars(
         select(Notification)
         .where(Notification.user_id == current_user.id)
+        .where(Notification.is_read.is_(False))
         .order_by(Notification.created_at.desc())
         .limit(100)
     ).all()
@@ -934,3 +1047,24 @@ def get_notifications(
             for n in notifications
         ]
     )
+
+
+@router.post("/notifications/mark-read")
+def mark_notifications_read(
+    payload: MarkNotificationsReadRequest | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    statement = select(Notification).where(
+        Notification.user_id == current_user.id,
+        Notification.is_read.is_(False),
+    )
+    if payload and payload.ids:
+        statement = statement.where(Notification.id.in_(payload.ids))
+
+    notifications = db.scalars(statement).all()
+    for notification in notifications:
+        notification.is_read = True
+
+    db.commit()
+    return ok({"marked_read": len(notifications)})

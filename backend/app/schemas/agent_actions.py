@@ -109,6 +109,36 @@ class RateLimitCheckResponse(BaseModel):
     next_allowed_at: datetime | None = None
 
 
+# Opportunity management (Doc 2 §2.3.4-2.3.5)
+class CreateOpportunityRequest(BaseModel):
+    contact_id: str
+    pipeline_id: str
+    stage_id: str
+    name: str
+    monetary_value: float | None = None
+    custom_fields: dict[str, Any] | None = None
+    context: ActionContext
+
+
+class CreateOpportunityResponse(BaseModel):
+    status: str = "created"
+    opportunity_id: str
+    audit_log_id: str
+
+
+class UpdateOpportunityStageRequest(BaseModel):
+    opportunity_id: str
+    new_stage_id: str
+    transition_reason: str
+    context: ActionContext
+
+
+class UpdateOpportunityStageResponse(BaseModel):
+    status: str = "updated"
+    opportunity_id: str
+    audit_log_id: str
+
+
 # ---------------------------------------------------------------------------
 # Batch 2 — Buyer-side (Danny)
 # ---------------------------------------------------------------------------

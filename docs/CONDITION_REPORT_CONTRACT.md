@@ -195,7 +195,8 @@ Field rules:
     "reported_severity": "Minor",
     "severity_label": "Minor",
     "severity_color": "yellow",  // one of: green | yellow | orange | red | gray
-    "severity_rank": 2
+    "severity_rank": 2,
+    "repair_status": null         // null | "active" | "repaired"  (NEW — see below)
   }
 ],
 "damage_summary": {
@@ -210,6 +211,20 @@ Source: CR HTML damage map (SVG overlay + tabular list).
 `severity_color` drives the colored pill in the damage table — the
 template classes are `cr-severity-{color}` so stick to the five values
 above.
+
+**`repair_status`** (string, nullable, NEW): When the Manheim CR page
+places a damage item in the "Repaired" section with "Repair Status:
+Completed", set this to `"repaired"`. When the condition text includes
+"Prev Repair" or "Repaired" indicating the repair is done, also set to
+`"repaired"`. Otherwise send `null` or `"active"`. The backend uses this
+field to filter completed repairs from the consumer report. If this field
+is absent, the backend falls back to heuristic detection via
+`section_label` matching and body\_text cross-referencing.
+
+**Preferred approach:** do not include repaired items in `damage_items`
+at all. Only include items representing **current, unrepaired** damage.
+If you choose to include repaired items (e.g. for audit trail), tag them
+with `repair_status: "repaired"` so the backend can filter them.
 
 ### 3.7 `tire_depths`
 

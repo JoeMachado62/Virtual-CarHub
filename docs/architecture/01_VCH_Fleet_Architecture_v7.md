@@ -484,6 +484,58 @@ Skills' Instructions sections may instruct the agent to call `sessions_spawn` di
 | Anything requiring HITL approval | No — use Lobster instead (§3.8) |
 | Skill composition (one skill calling another's logic) | No — invoke the other skill directly |
 
+### 3.7a — Skill Sharing Across Agents
+
+The skill-sharing invariant
+OpenClaw's skills.entries.<name> configuration is keyed by skill name, not by (skill, agent) tuple. A skill present in multiple agents' allowlists shares one config entry — including the env block — across every agent that invokes it.
+This is fine when the shared skill needs no agent-specific context. It breaks the moment an agent-specific credential, identity, or scope is involved.
+When sharing is safe
+A skill can be shared across agents if and only if it:
+
+Uses no credentials, OR
+Uses credentials that are identical across all sharing agents AND requires no per-agent attribution downstream
+
+Examples of safe shared skills:
+
+A unit-conversion or formatting utility
+A VIN-decode skill that calls NHTSA vPIC (no auth)
+A shared HTML email-render helper
+
+When sharing breaks — the required pattern
+A skill that needs different env values per agent cannot be shared. The hardest case is per-agent backend service tokens: each agent has its own token with its own scopes; a single shared skills.entries.<name>.env cannot deliver the right token to each agent.
+The required pattern is agent-specific skill variants:
+Broken — single shared skillCorrect — agent-specific variantsvch-log-interaction in both danny and admin-danny allowlists. One shared skills.entries.vch-log-interaction.env.VCH_BACKEND_SERVICE_TOKEN — cannot point at two different tokens.vch-log-interaction-danny in danny's allowlist; vch-log-interaction-admin-danny in admin-danny's allowlist. Each has its own skills.entries.<variant>.env injecting its agent-specific token.
+Both variants can share their scripts/run.sh logic by symlink, file copy, or a shared library module. The SKILL.md and the openclaw.json entry differ; the executable behavior is identical.
+Naming convention
+For agent-specific variants of a logically-shared skill, use:
+<base-skill-name>-<agent-id>
+Examples:
+
+vch-diagnostic-token-scoping-danny
+vch-diagnostic-token-scoping-admin-danny
+vch-diagnostic-token-scoping-admin-mc-hub
+
+This keeps the base name searchable, makes the agent scope visible in the file path, and disambiguates downstream audit log attribution.
+Decision rule
+Before adding a skill to more than one agent's allowlist, check:
+
+Does this skill make any authenticated call to backend? → split
+Does this skill use GHL, MarketCheck, Telnyx, or any other auth'd MCP? → split
+Does any downstream system attribute actions by agent identity (audit logs, rate-limit counters, the audit_log table)? → split
+None of the above → safe to share
+
+When in doubt, split. The cost of a duplicate skill is low; the cost of credential bleed across agent boundaries is structural.
+Anti-pattern — "smart" runtime detection
+Do not try to make a shared skill detect which agent invoked it (e.g., by reading some OPENCLAW_AGENT_ID env var and selecting the matching token from a multi-token env block). OpenClaw 2026.4.14 does not expose agent identity to skill execution env in a reliable way, and even if a future version did, skills.entries.<name>.env injection delivers the same values to every invocation regardless of the invoking agent. The cleanest separation is at the skill-name level, enforced by configuration rather than skill code.
+Canonical first instance
+The first deployment instance of this pattern is the vch-diagnostic-token-scoping-{danny, admin-danny} pair built during Danny VPS D-D-pilot to verify per-agent token injection. The OpenClaw architecture investigation that surfaced this invariant — namely, that there is no per-agent env mechanism, only per-skill — is recorded in the v7.2 doc-deltas tracker (items #8 and #9).
+
+How This Affects Other Skills in the v7 Doc Set
+Once you fold this section into Doc 1 §3.7, the corresponding action items propagate to the other docs. I'll handle these when I produce the v7.2 batch — flagging here so they're visible:
+DocSectionActionDoc 2 §15admin-mc-hub skill catalogNo splits needed — admin-mc-hub is the only agent on MC. All 15 skills are unique to it.Doc 3 §4 / §15danny + admin-danny skill catalogsAlready disjoint (vch-buyer-* + vch-admin-* for danny, vch-admin-danny-* for admin-danny). The only shared skill is the diagnostic; already split.Doc 4 §4 / §15negotiator + admin-negotiator skill catalogsSame pattern — keep them disjoint. When the diagnostic skill is added to Negotiator VPS, use vch-diagnostic-token-scoping-negotiator / vch-diagnostic-token-scoping-admin-negotiator.
+The naming convention (<base-skill-name>-<agent-id>) is now an enforced standard across the doc set rather than a Danny-local tweak.
+Paste this section to wherever you're tracking the v7.2 doc-update work, and continue with D-D-pilot on Danny. I'll fold it formally into Doc 1 v7.2 once the pilot results come in and we know whether ${ENV_VAR} interpolation in skills.entries.env actually works (which determines whether the entire pattern needs another revision toward Option C).
+
 ### 3.8 Lobster Workflows for HITL Pipelines
 
 Lobster is OpenClaw's YAML workflow engine. VCH uses Lobster **specifically for HITL pipelines and audit-heavy multi-step processes**. Not for everything.

@@ -13,6 +13,11 @@ from app.services.profile_service import normalized_list, quick_priority_keyword
 def run_matching(db: Session, *, profile: BuyerProfile, deal: Deal, limit: int = 10) -> list[VehicleMatch]:
     hard = profile.hard_constraints or {}
     excluded_brands = set(normalized_list(hard.get("brands_excluded", [])))
+    existing_status_by_vin = {
+        match.vin: match.status
+        for match in db.scalars(select(VehicleMatch).where(VehicleMatch.deal_id == deal.id)).all()
+        if match.status in {"selected", "favorited"}
+    }
 
     vehicles = db.scalars(select(Vehicle).where(Vehicle.available.is_(True))).all()
     candidates: list[tuple[Vehicle, float, str]] = []
@@ -52,6 +57,7 @@ def run_matching(db: Session, *, profile: BuyerProfile, deal: Deal, limit: int =
             marketcheck_retail=round(retail, 2),
             estimated_otd=round(estimated_otd, 2),
             danny_savings=round(retail - estimated_otd, 2),
+            status=existing_status_by_vin.get(vehicle.vin, "recommended"),
         )
         db.add(match)
         results.append(match)

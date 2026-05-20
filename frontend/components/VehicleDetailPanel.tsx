@@ -31,6 +31,8 @@ type VehicleDisplayContext = {
   marketing_images?: string[];
   reference_images?: string[];
   reference_detail_images?: string[];
+  chromedata_images?: string[];
+  chromedata_detail_images?: string[];
   reference_provider?: string | null;
   has_reference_stock?: boolean;
   reference_color_exact?: boolean;
@@ -2081,8 +2083,42 @@ function resolveDisplayImages(vehicle: VehicleDetail | null | undefined): string
   const ctx = vehicle.display_context;
   const hero = resolveHeroImage(vehicle);
   const supplemental = vehicle.supplemental_photo_links || vehicle.photo_links_cached || vehicle.photo_links || [];
+
+  const unique = (urls: Array<string | null | undefined>) =>
+    Array.from(new Set(urls.filter((url): url is string => Boolean(url))));
+
+  const chromeDataPool = unique([
+    hero,
+    ...(ctx?.chromedata_images || []),
+    ...(ctx?.chromedata_detail_images || []),
+    ...(ctx?.reference_images || []),
+    ...(ctx?.reference_detail_images || []),
+    ...(ctx?.gallery_images || []),
+    ...(vehicle.display_images || []),
+  ]).filter((url) => url.includes("media.chromedata.com"));
+
+  if (chromeDataPool.length) {
+    const exterior = chromeDataPool.filter(isChromeDataExterior);
+    const firstExterior = exterior.slice(0, 3);
+    const firstExteriorSet = new Set(firstExterior);
+    const interior = chromeDataPool.filter(isChromeDataInterior);
+    const interiorSet = new Set(interior);
+    const remainingChromeData = chromeDataPool.filter((url) => !firstExteriorSet.has(url) && !interiorSet.has(url));
+    const imported = unique([
+      ...(ctx?.source_images || []),
+      ...(ctx?.inspection_images || []),
+      ...(ctx?.disclosure_images || []),
+      ...(supplemental || []),
+      ...(ctx?.gallery_images || []),
+      ...(vehicle.display_images || []),
+      ...(vehicle.images || []),
+    ]).filter((url) => !url.includes("media.chromedata.com"));
+
+    return unique([...firstExterior, ...interior, ...remainingChromeData, ...imported]);
+  }
+
   const referenceDetail = ctx?.reference_detail_images || [];
-  const withHero = (urls: string[]) => Array.from(new Set([hero, ...urls].filter(Boolean) as string[]));
+  const withHero = (urls: string[]) => unique([hero, ...urls]);
   if (referenceDetail.length) {
     const base = ctx?.gallery_images || vehicle.display_images || [];
     const seen = new Set(referenceDetail);

@@ -108,6 +108,13 @@ export function QuickMatchForm({
   const [deliveryZip, setDeliveryZip] = useState(
     typeof p.delivery_zip === "string" ? p.delivery_zip : ""
   );
+  const notificationPreferences =
+    p.notification_preferences && typeof p.notification_preferences === "object"
+      ? (p.notification_preferences as Record<string, unknown>)
+      : {};
+  const [notifyInApp, setNotifyInApp] = useState(notificationPreferences.in_app !== false);
+  const [notifyEmail, setNotifyEmail] = useState(Boolean(notificationPreferences.email));
+  const [notifySms, setNotifySms] = useState(Boolean(notificationPreferences.sms));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -135,6 +142,9 @@ export function QuickMatchForm({
           brands_included: brandsIn,
           brands_excluded: brandsEx,
           delivery_zip: deliveryZip,
+          notify_new_matches_in_app: notifyInApp,
+          notify_new_matches_email: notifyEmail,
+          notify_new_matches_sms: notifySms,
         }),
       },
       accessToken
@@ -259,6 +269,23 @@ export function QuickMatchForm({
         Delivery ZIP
         <input className="input" value={deliveryZip} onChange={(e) => setDeliveryZip(e.target.value)} />
       </label>
+
+      <fieldset className="qm-notification-preferences">
+        <legend>New Match Alerts</legend>
+        <label className="qm-checkbox-row">
+          <input type="checkbox" checked={notifyInApp} onChange={(event) => setNotifyInApp(event.target.checked)} />
+          <span>Notify me in My Garage</span>
+        </label>
+        <label className="qm-checkbox-row">
+          <input type="checkbox" checked={notifyEmail} onChange={(event) => setNotifyEmail(event.target.checked)} />
+          <span>Email me</span>
+        </label>
+        <label className="qm-checkbox-row">
+          <input type="checkbox" checked={notifySms} onChange={(event) => setNotifySms(event.target.checked)} />
+          <span>Text me</span>
+        </label>
+      </fieldset>
+
       <button className="button" disabled={loading} type="submit">
         {loading ? "Running match..." : "Run Quick Match"}
       </button>

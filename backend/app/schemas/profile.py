@@ -15,6 +15,9 @@ class QuickMatchRequest(BaseModel):
     brands_included: list[str] = Field(default_factory=list)
     brands_excluded: list[str] = Field(default_factory=list)
     delivery_zip: str | None = None
+    notify_new_matches_in_app: bool = True
+    notify_new_matches_email: bool = False
+    notify_new_matches_sms: bool = False
 
 
 class ProfileUpdateRequest(BaseModel):

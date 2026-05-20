@@ -21,6 +21,8 @@ from app.db.session import get_db
 from app.schemas.agent_actions import (
     AddContactNoteRequest,
     AddContactNoteResponse,
+    CreateOpportunityRequest,
+    CreateOpportunityResponse,
     DealerOutreachRequest,
     DealerOutreachResponse,
     HitlEscalateRequest,
@@ -41,12 +43,106 @@ from app.schemas.agent_actions import (
     StrategyReportResponse,
     UpdateContactFieldRequest,
     UpdateContactFieldResponse,
+    UpdateOpportunityStageRequest,
+    UpdateOpportunityStageResponse,
 )
+import httpx
+
+from app.core.config import settings
+from app.integrations import GHLClient, TelnyxClient
 from app.services import rate_limit_service
+
+GRAPHITI_URL = settings.graphiti_url
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Integration clients (reuse existing wrappers)
+# ---------------------------------------------------------------------------
+
+_ghl: GHLClient | None = None
+_telnyx: TelnyxClient | None = None
+
+
+def _get_ghl() -> GHLClient:
+    global _ghl
+    if _ghl is None:
+        _ghl = GHLClient(
+            api_key=settings.ghl_api_key,
+            api_base_url=settings.ghl_api_base_url,
+            api_version=settings.ghl_api_version,
+            live=settings.has_ghl,
+        )
+    return _ghl
+
+
+def _get_telnyx() -> TelnyxClient:
+    global _telnyx
+    if _telnyx is None:
+        _telnyx = TelnyxClient(
+            api_key=settings.telnyx_api_key,
+            live=settings.has_telnyx,
+        )
+    return _telnyx
+
+
+# ---------------------------------------------------------------------------
+# Graphiti forwarding (fire-and-forget)
+# ---------------------------------------------------------------------------
+
+def _forward_to_graphiti(
+    *,
+    contact_id: str,
+    content: str,
+    agent_id: str,
+    interaction_type: str,
+    channel: str,
+    trace_id: str,
+) -> None:
+    """Forward interaction to Graphiti on MC for knowledge graph enrichment.
+
+    Fire-and-forget: failures are logged but never block the audit_log path.
+    Graphiti returns 202 (async processing); entity extraction happens in
+    background on MC via OpenAI.
+
+    group_id convention per MC integration contract:
+    - vch-buyer-{contact_id} for buyer interactions
+    - vch-dealer-{dealer_id} for dealer interactions
+    - vch-shared for fleet-wide observations
+    """
+    try:
+        # Determine role_type: agent replies are "assistant", buyer/dealer
+        # inbound is "user", system events are "system".
+        if interaction_type == "inbound_message":
+            role_type = "user"
+            role = f"buyer-{contact_id}"
+        elif interaction_type in ("call_summary", "meeting_note"):
+            role_type = "system"
+            role = "audit"
+        else:
+            role_type = "assistant"
+            role = agent_id
+
+        group_id = f"vch-buyer-{contact_id}"
+        body = {
+            "group_id": group_id,
+            "messages": [{
+                "content": content,
+                "role_type": role_type,
+                "role": role,
+                "source_description": f"{channel} via {agent_id}",
+                "name": trace_id,
+            }],
+        }
+
+        with httpx.Client(timeout=5.0) as client:
+            r = client.post(f"{GRAPHITI_URL}/messages", json=body)
+            r.raise_for_status()
+            logger.debug("graphiti_forward_ok contact=%s group=%s", contact_id, group_id)
+    except Exception as exc:
+        logger.warning("graphiti_forward_failed contact=%s error=%s", contact_id, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +377,16 @@ def log_interaction(
     )
     db.commit()
 
+    # Forward to Graphiti for knowledge graph enrichment (fire-and-forget).
+    _forward_to_graphiti(
+        contact_id=payload.contact_id,
+        content=payload.content_summary,
+        agent_id=agent.agent_id,
+        interaction_type=payload.interaction_type,
+        channel=payload.channel,
+        trace_id=trace_id,
+    )
+
     return LogInteractionResponse(audit_log_id=audit_id)
 
 
@@ -426,6 +532,92 @@ def rate_limit_check(
     )
 
 
+# --- GHL Opportunity management (Doc 2 §2.3.4-2.3.5) ---
+
+@router.post("/create-opportunity", response_model=CreateOpportunityResponse)
+def create_opportunity(
+    payload: CreateOpportunityRequest,
+    agent: AgentContext = Depends(require_scope("agent_actions.create_opportunity")),
+    db: Session = Depends(get_db),
+    x_trace_id: str | None = Header(default=None),
+):
+    trace_id = _resolve_trace_id(x_trace_id)
+
+    # Dispatch to GHL via existing client.
+    ghl = _get_ghl()
+    ghl_payload: dict = {
+        "pipelineId": payload.pipeline_id,
+        "pipelineStageId": payload.stage_id,
+        "contactId": payload.contact_id,
+        "name": payload.name,
+        "locationId": settings.ghl_location_id,
+        "status": "open",
+    }
+    if payload.monetary_value is not None:
+        ghl_payload["monetaryValue"] = payload.monetary_value
+
+    try:
+        result = ghl.create_opportunity(ghl_payload)
+        opportunity_id = result.get("id", "") or f"ghl-{uuid.uuid4().hex[:8]}"
+    except Exception as exc:
+        logger.warning("create_opportunity_dispatch_error contact=%s error=%s", payload.contact_id, exc)
+        opportunity_id = f"dispatch-error-{uuid.uuid4().hex[:8]}"
+
+    audit_id = _write_audit(
+        db, trace_id=trace_id, agent_id=agent.agent_id,
+        action_type="create_opportunity", target_type="opportunity",
+        target_id=opportunity_id,
+        payload_redacted={
+            "contact_id": payload.contact_id,
+            "pipeline_id": payload.pipeline_id,
+            "stage_id": payload.stage_id,
+            "name": payload.name,
+        },
+        outcome="success",
+    )
+    db.commit()
+
+    return CreateOpportunityResponse(
+        opportunity_id=opportunity_id,
+        audit_log_id=audit_id,
+    )
+
+
+@router.post("/update-opportunity-stage", response_model=UpdateOpportunityStageResponse)
+def update_opportunity_stage(
+    payload: UpdateOpportunityStageRequest,
+    agent: AgentContext = Depends(require_scope("agent_actions.update_opportunity_stage")),
+    db: Session = Depends(get_db),
+    x_trace_id: str | None = Header(default=None),
+):
+    trace_id = _resolve_trace_id(x_trace_id)
+
+    # Dispatch to GHL via existing client.
+    try:
+        ghl = _get_ghl()
+        ghl.update_opportunity_stage(payload.opportunity_id, payload.new_stage_id)
+    except Exception as exc:
+        logger.warning("update_opportunity_stage_dispatch_error opp=%s error=%s",
+                        payload.opportunity_id, exc)
+
+    audit_id = _write_audit(
+        db, trace_id=trace_id, agent_id=agent.agent_id,
+        action_type="update_opportunity_stage", target_type="opportunity",
+        target_id=payload.opportunity_id,
+        payload_redacted={
+            "new_stage_id": payload.new_stage_id,
+            "reason": payload.transition_reason,
+        },
+        outcome="success",
+    )
+    db.commit()
+
+    return UpdateOpportunityStageResponse(
+        opportunity_id=payload.opportunity_id,
+        audit_log_id=audit_id,
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # BATCH 2 — Buyer-side actions (Danny)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -480,11 +672,74 @@ def send_message(
             retry_after_seconds=retry_seconds,
         )
 
-    # --- Dispatch ---
-    # For now, log the outbound to outbound_log. Actual Telnyx/GHL dispatch
-    # will be wired in when those service clients are integrated.
-    external_id = f"pending-{uuid.uuid4().hex[:12]}"
+    # --- Resolve GHL contact_id → phone/email ---
+    ghl = _get_ghl()
+    contact_phone = None
+    contact_email = None
+    try:
+        contact_data = ghl.get_contact(payload.contact_id)
+        contact = contact_data.get("contact", contact_data)
+        contact_phone = contact.get("phone")
+        contact_email = contact.get("email")
+    except Exception as exc:
+        logger.warning("send_message_contact_resolve_error contact=%s error=%s",
+                        payload.contact_id, exc)
+
+    if payload.channel in ("sms", "mms") and not contact_phone:
+        audit_id = _write_audit(
+            db, trace_id=trace_id, agent_id=agent.agent_id,
+            action_type="send_message", target_type="contact",
+            target_id=payload.contact_id,
+            payload_redacted={"channel": payload.channel, "reason": "no phone on contact"},
+            outcome="policy_rejected", outcome_detail="contact has no phone number",
+        )
+        db.commit()
+        return SendMessageResponse(
+            status="rejected", audit_log_id=audit_id,
+            reason="invalid_contact", detail="Contact has no phone number for SMS",
+        )
+
+    if payload.channel == "email" and not contact_email:
+        audit_id = _write_audit(
+            db, trace_id=trace_id, agent_id=agent.agent_id,
+            action_type="send_message", target_type="contact",
+            target_id=payload.contact_id,
+            payload_redacted={"channel": payload.channel, "reason": "no email on contact"},
+            outcome="policy_rejected", outcome_detail="contact has no email",
+        )
+        db.commit()
+        return SendMessageResponse(
+            status="rejected", audit_log_id=audit_id,
+            reason="invalid_contact", detail="Contact has no email address",
+        )
+
+    # --- Dispatch via existing integration clients ---
     sent_at = datetime.now(UTC)
+    external_id = ""
+
+    try:
+        if payload.channel in ("sms", "mms"):
+            telnyx = _get_telnyx()
+            result = telnyx.send_sms(
+                from_number=settings.telnyx_phone_number,
+                to_number=contact_phone,
+                text=payload.body,
+            )
+            external_id = result.get("data", {}).get("id", "") or f"telnyx-{uuid.uuid4().hex[:8]}"
+        elif payload.channel == "email":
+            from app.services.email_service import _send_email
+            _send_email(
+                to_email=contact_email,
+                subject=payload.subject or "Message from VirtualCarHub",
+                html_body=payload.body,
+                text_body=payload.body,
+            )
+            external_id = f"sendgrid-{uuid.uuid4().hex[:8]}"
+        else:
+            external_id = f"unknown-channel-{uuid.uuid4().hex[:8]}"
+    except Exception as exc:
+        logger.warning("send_message_dispatch_error channel=%s error=%s", payload.channel, exc)
+        external_id = f"dispatch-error-{uuid.uuid4().hex[:8]}"
 
     db.execute(
         text(
@@ -555,8 +810,18 @@ def add_contact_note(
             db.commit()
             raise HTTPException(status_code=422, detail="Note body contains restricted content")
 
-    # GHL contact note will be dispatched here when ghl_client is wired.
-    # For now, audit the intent.
+    # Dispatch to GHL via existing client.
+    note_body = payload.note_body
+    if payload.tags:
+        note_body += f"\n\nTags: {', '.join(payload.tags)}"
+    note_body += f"\n[trace: {trace_id}, agent: {agent.agent_id}]"
+
+    try:
+        ghl = _get_ghl()
+        ghl.add_contact_note(contact_id=payload.contact_id, body=note_body)
+    except Exception as exc:
+        logger.warning("add_contact_note_dispatch_error contact=%s error=%s", payload.contact_id, exc)
+
     audit_id = _write_audit(
         db, trace_id=trace_id, agent_id=agent.agent_id,
         action_type="add_contact_note", target_type="contact",
@@ -592,7 +857,17 @@ def update_contact_field(
             detail=f"Field '{payload.field_name}' is not in the agent-updatable allowlist",
         )
 
-    # GHL contact update will be dispatched here when ghl_client is wired.
+    # Dispatch to GHL via existing client.
+    try:
+        ghl = _get_ghl()
+        ghl.update_contact(payload.contact_id, {"customFields": [{
+            "key": payload.field_name,
+            "field_value": payload.value,
+        }]})
+    except Exception as exc:
+        logger.warning("update_contact_field_dispatch_error contact=%s field=%s error=%s",
+                        payload.contact_id, payload.field_name, exc)
+
     audit_id = _write_audit(
         db, trace_id=trace_id, agent_id=agent.agent_id,
         action_type="update_contact_field", target_type="contact",
@@ -623,7 +898,19 @@ def schedule_followup(
     if payload.due_at > now + timedelta(days=30):
         raise HTTPException(status_code=422, detail="due_at must be within 30 days")
 
-    # GHL task creation will be dispatched here when ghl_client is wired.
+    # Dispatch to GHL via existing client.
+    try:
+        ghl = _get_ghl()
+        ghl.create_task({
+            "title": payload.title,
+            "body": payload.body,
+            "dueDate": payload.due_at.isoformat(),
+            "contactId": payload.contact_id,
+            "assignedTo": payload.assigned_to or "",
+        })
+    except Exception as exc:
+        logger.warning("schedule_followup_dispatch_error contact=%s error=%s", payload.contact_id, exc)
+
     audit_id = _write_audit(
         db, trace_id=trace_id, agent_id=agent.agent_id,
         action_type="schedule_followup", target_type="contact",

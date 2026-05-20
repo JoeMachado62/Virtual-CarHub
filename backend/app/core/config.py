@@ -140,6 +140,9 @@ class Settings(BaseSettings):
         default="https://vpic.nhtsa.dot.gov/api", alias="NHTSA_API_BASE_URL"
     )
 
+    # Graphiti knowledge graph (on MC VPS)
+    graphiti_url: str = Field(default="http://mc-vps:8001", alias="GRAPHITI_URL")
+
     # Live integration toggles
     marketcheck_live_enabled: bool = Field(default=False, alias="MARKETCHECK_LIVE_ENABLED")
     ghl_live_enabled: bool = Field(default=False, alias="GHL_LIVE_ENABLED")

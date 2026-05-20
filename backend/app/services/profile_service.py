@@ -45,6 +45,11 @@ def apply_quick_match(profile: BuyerProfile, payload: QuickMatchRequest) -> Buye
         "brands_included": payload.brands_included,
         "brands_excluded": payload.brands_excluded,
         "delivery_zip": payload.delivery_zip,
+        "notification_preferences": {
+            "in_app": payload.notify_new_matches_in_app,
+            "email": payload.notify_new_matches_email,
+            "sms": payload.notify_new_matches_sms,
+        },
         "weights": {
             "body_type": 0.20,
             "budget": 0.20,

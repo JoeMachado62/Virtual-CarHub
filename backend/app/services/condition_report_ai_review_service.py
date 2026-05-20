@@ -221,7 +221,10 @@ def _system_instructions() -> str:
         "Only mark a granular field as issue when source text explicitly reports damage, malfunction, odor, warning light, leak, tire/wheel issue, or similar problem. "
         "Use evidence as a short exact source phrase. Prefer the most specific field. "
         "If location is ambiguous, use exterior.further_disclosures or warnings instead of guessing. "
-        "For clean/default fields, usually return no patch; the deterministic report already says Normal - No Damage Reported or Normal - No Issue Reported."
+        "For clean/default fields, usually return no patch; the deterministic report already says Normal - No Damage Reported or Normal - No Issue Reported. "
+        "IMPORTANT: The body_text may contain a 'Repaired' section listing items with 'Repair Status: Completed'. "
+        "These are historical repairs and do NOT represent current damage — do NOT mark the corresponding panel as 'issue'. "
+        "Similarly, damage_items with section_label 'Repaired' or repair_status 'completed'/'repaired' are already fixed."
     )
 
 

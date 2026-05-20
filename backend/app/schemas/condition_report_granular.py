@@ -158,8 +158,24 @@ _CLEAN_VALUE_RE = re.compile(
     re.I,
 )
 
+_REPAIRED_SECTION_RE = re.compile(r"\brepaired\b", re.I)
+_REPAIR_STATUS_VALUES = frozenset({"repaired", "completed", "done", "approved"})
+
 
 _FIELD_PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
+    # Manheim two-letter abbreviation + panel patterns (must precede general patterns;
+    # tire patterns further below require tire/wheel/rim/curb so there is no collision).
+    ("exterior", "front_bumper", re.compile(r"\b[lr]f\b.*\bbumper\b|\bbumper\b.*\b[lr]f\b", re.I)),
+    ("exterior", "rear_bumper", re.compile(r"\b[lr]r\b.*\bbumper\b|\bbumper\b.*\b[lr]r\b", re.I)),
+    ("exterior", "driver_front_door", re.compile(r"\blf\b.*\bdoor\b|\bdoor\b.*\blf\b", re.I)),
+    ("exterior", "driver_rear_door", re.compile(r"\blr\b.*\bdoor\b|\bdoor\b.*\blr\b", re.I)),
+    ("exterior", "passenger_front_door", re.compile(r"\brf\b.*\bdoor\b|\bdoor\b.*\brf\b", re.I)),
+    ("exterior", "passenger_rear_door", re.compile(r"\brr\b.*\bdoor\b|\bdoor\b.*\brr\b", re.I)),
+    ("exterior", "driver_fender", re.compile(r"\blf\b.*\bfender\b|\bfender\b.*\blf\b", re.I)),
+    ("exterior", "passenger_fender", re.compile(r"\brf\b.*\bfender\b|\bfender\b.*\brf\b", re.I)),
+    ("exterior", "driver_quarter", re.compile(r"\blr\b.*\bquarter\b|\bquarter\b.*\blr\b", re.I)),
+    ("exterior", "passenger_quarter", re.compile(r"\brr\b.*\bquarter\b|\bquarter\b.*\brr\b", re.I)),
+    # General panel patterns
     ("exterior", "front_bumper", re.compile(r"\b(front|frt)\s+bumper\b|\bbumper\b.*\bfront\b", re.I)),
     ("exterior", "rear_bumper", re.compile(r"\b(rear|back)\s+bumper\b|\bbumper\b.*\brear\b", re.I)),
     ("exterior", "hood", re.compile(r"\bhood\b", re.I)),
@@ -239,10 +255,11 @@ _BROAD_INSPECTION_MAP: dict[tuple[str, str], tuple[str, str]] = {
 
 def build_granular_condition_report(report: dict[str, Any]) -> dict[str, Any]:
     granular = _empty_granular_report()
+    repaired_panels = _extract_repaired_panels(report)
     _apply_structured_inspection(granular, report.get("inspection"))
     _apply_tire_depths(granular, report.get("tire_depths"))
-    _apply_damage_items(granular, report.get("damage_items"))
-    _apply_text_sources(granular, report)
+    _apply_damage_items(granular, report.get("damage_items"), repaired_panels)
+    _apply_text_sources(granular, report, repaired_panels)
     _refresh_issue_counts(granular)
     return granular
 
@@ -428,12 +445,39 @@ def _apply_tire_depths(granular: dict[str, Any], tire_depths: Any) -> None:
             _set_field(granular, "tires", f"{pos}_tire_issue", status=status, value=issue, source="tire_depths", evidence=issue, confidence=0.96)
 
 
-def _apply_damage_items(granular: dict[str, Any], damage_items: Any) -> None:
+def _apply_damage_items(
+    granular: dict[str, Any],
+    damage_items: Any,
+    repaired_panels: set[tuple[str, str]] | None = None,
+) -> None:
     if not isinstance(damage_items, list):
         return
+    if repaired_panels is None:
+        repaired_panels = set()
+    seen: set[tuple[str, str]] = set()  # (panel_lower, condition_lower) dedup
     for item in damage_items:
         if not isinstance(item, dict):
             continue
+        # --- Repair filter ---
+        if _is_repaired_damage(item, repaired_panels):
+            continue
+        # --- Deduplication (same panel + condition from different sources) ---
+        panel_key = (
+            _clean_text(item.get("panel"))
+            or _clean_text(item.get("section_label"))
+            or _clean_text(item.get("location"))
+            or ""
+        ).lower()
+        cond_key = (
+            _clean_text(item.get("condition"))
+            or _clean_text(item.get("damage_type"))
+            or ""
+        ).lower()
+        if panel_key and cond_key:
+            dedup_key = (panel_key, cond_key)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
         text = _join_text(
             item.get("section_label"),
             item.get("section"),
@@ -462,7 +506,11 @@ def _apply_damage_items(granular: dict[str, Any], damage_items: Any) -> None:
         )
 
 
-def _apply_text_sources(granular: dict[str, Any], report: dict[str, Any]) -> None:
+def _apply_text_sources(
+    granular: dict[str, Any],
+    report: dict[str, Any],
+    repaired_panels: set[tuple[str, str]] | None = None,
+) -> None:
     text_items: list[tuple[str, str]] = []
     for key in ("problem_highlights", "remarks", "seller_comments_items", "announcements"):
         value = report.get(key)
@@ -481,7 +529,20 @@ def _apply_text_sources(granular: dict[str, Any], report: dict[str, Any]) -> Non
         if isinstance(report_page, dict):
             body_text = _clean_text(report_page.get("body_text"))
             if body_text:
+                in_repaired = False
                 for line in body_text.splitlines():
+                    stripped = line.strip()
+                    if re.match(r"^Repaired\s*$", stripped, re.I):
+                        in_repaired = True
+                        continue
+                    if in_repaired and re.match(
+                        r"^(IMAGE\s+DESCRIPTION|[A-Z ]{6,}.*\[)", stripped, re.I
+                    ):
+                        if not re.match(r"^IMAGE\s+DESCRIPTION", stripped, re.I):
+                            in_repaired = False
+                        continue
+                    if in_repaired:
+                        continue  # skip lines inside the Repaired section
                     cleaned = _clean_text(line)
                     if cleaned and _looks_like_damage_or_issue(cleaned):
                         text_items.append(("report_body_text", cleaned))
@@ -586,6 +647,103 @@ def _is_clean_value(value: str) -> bool:
 
 def _looks_like_damage_or_issue(value: str) -> bool:
     return bool(re.search(r"\b(scratch|dent|ding|chip|crack|scuff|damage|rip|tear|torn|stain|odor|smoke|leak|warning|check engine|curb|rash)\b", value, re.I))
+
+
+def _extract_repaired_panels(report: dict[str, Any]) -> set[tuple[str, str]]:
+    """Parse the body_text 'Repaired' section and return (panel, condition) tuples."""
+    metadata = report.get("metadata")
+    if not isinstance(metadata, dict):
+        return set()
+    report_page = metadata.get("report_page")
+    if not isinstance(report_page, dict):
+        return set()
+    body_text = report_page.get("body_text")
+    if not isinstance(body_text, str):
+        return set()
+
+    repaired: set[tuple[str, str]] = set()
+    in_repaired_section = False
+    lines = body_text.splitlines()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Detect "Repaired" section header (standalone line)
+        if re.match(r"^Repaired\s*$", stripped, re.I):
+            in_repaired_section = True
+            continue
+        # A new section header (all-caps with brackets or known headings) ends the repaired block
+        if in_repaired_section and (
+            re.match(r"^[A-Z ]{6,}.*\[", stripped)
+            or re.match(r"^(IMAGE\s+DESCRIPTION|TIRES AND WHEELS|KEYS|OTHER|ADDITIONAL|MECHANICAL|INTERIOR|GRADING)\b", stripped, re.I)
+        ):
+            # "IMAGE  DESCRIPTION" is the column header row inside the Repaired
+            # section — skip it but stay in the section.
+            if re.match(r"^IMAGE\s+DESCRIPTION", stripped, re.I):
+                continue
+            in_repaired_section = False
+            continue
+        if in_repaired_section:
+            # Lines inside the Repaired section look like:
+            #   "LF Bumper Cover Scratch Heavy   1/2" to 1"      Completed"
+            # Extract the panel name (first token group before a known condition keyword)
+            m = re.match(
+                r"^(?:0+\s+Picture.*|IMAGE\s+DESCRIPTION.*)$", stripped, re.I
+            )
+            if m:
+                continue  # skip picture rows and header rows
+            # Try to split into panel and condition using known condition keywords
+            cond_match = re.search(
+                r"\b(Scratch|Dent|Ding|Chip|Crack|Scuff|Curb Rash|Bug damage|"
+                r"Rip|Tear|Torn|Stain|Missing|Broken|Bent|Faded|Peeling|"
+                r"Prev Repair|Chipped|Heavy|Light|Paint Dmg|No Paint Dmg)\b",
+                stripped,
+                re.I,
+            )
+            if cond_match:
+                panel = stripped[: cond_match.start()].strip()
+                condition = cond_match.group(0).strip()
+                if panel:
+                    repaired.add((panel.lower(), condition.lower()))
+
+    return repaired
+
+
+def _is_repaired_damage(
+    item: dict[str, Any],
+    repaired_panels: set[tuple[str, str]],
+) -> bool:
+    """Return True when a damage item represents a completed repair."""
+    # 1. Explicit repair_status field (forward-compatible with scraper contract)
+    rs = _clean_text(item.get("repair_status"))
+    if rs and rs.lower() in _REPAIR_STATUS_VALUES:
+        return True
+
+    # 2. section_label or section contains "Repaired"
+    for key in ("section_label", "section"):
+        val = _clean_text(item.get(key))
+        if val and _REPAIRED_SECTION_RE.search(val):
+            return True
+
+    # 3. Cross-reference with body_text repaired panels
+    if repaired_panels:
+        panel = (
+            _clean_text(item.get("panel"))
+            or _clean_text(item.get("section_label"))
+            or _clean_text(item.get("location"))
+            or ""
+        ).lower()
+        condition = (
+            _clean_text(item.get("condition"))
+            or _clean_text(item.get("damage_type"))
+            or ""
+        ).lower()
+        if panel and condition:
+            for rep_panel, rep_cond in repaired_panels:
+                if rep_panel == panel and rep_cond in condition:
+                    return True
+
+    return False
 
 
 def _damage_value(item: dict[str, Any], fallback: str) -> str:
