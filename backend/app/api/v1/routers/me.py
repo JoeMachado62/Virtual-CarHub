@@ -760,82 +760,8 @@ def add_to_garage(
         db,
         vin=vehicle.vin,
         trigger_event="garage_saved",
-        source_image_urls=vehicle.images or [],
+        source_image_urls=[] if _is_surplus_inventory(vehicle) else (vehicle.images or []),
     )
-
-    # For MarketCheck vehicles, fetch real dealer photos on garage add
-    import logging
-    _log = logging.getLogger("vch.garage")
-    mc_images_fetched = 0
-    is_mc = vehicle.source_type and vehicle.source_type.lower() in ("marketcheck", "dealer_wholesale")
-    _log.info("garage_add source_type=%s is_mc=%s vin=%s", vehicle.source_type, is_mc, vehicle.vin)
-    if is_mc:
-        from app.core.config import settings
-        _log.info("has_marketcheck=%s", settings.has_marketcheck)
-        if settings.has_marketcheck:
-            try:
-                from app.integrations.marketcheck_client import MarketCheckClient
-                mc_client = MarketCheckClient(
-                    api_key=settings.marketcheck_api_key,
-                    api_secret=settings.marketcheck_api_secret,
-                    api_base_url=settings.marketcheck_api_base_url,
-                    live=settings.has_marketcheck,
-                )
-                # Try listing endpoint first (faster), fall back to search
-                photo_links: list[str] = []
-
-                def _extract_photos(listing_data: dict) -> list[str]:
-                    """Extract the fullest set of photos from a MC listing."""
-                    media = listing_data.get("media", {}) if isinstance(listing_data.get("media"), dict) else {}
-                    # photo_links = original dealer URLs (full set)
-                    # photo_links_cached = MarketCheck CDN copies (often a subset)
-                    direct = media.get("photo_links") or listing_data.get("photo_links") or []
-                    cached = media.get("photo_links_cached") or listing_data.get("photo_links_cached") or []
-                    if not isinstance(direct, list):
-                        direct = []
-                    if not isinstance(cached, list):
-                        cached = []
-                    # Use whichever set is larger — direct URLs usually have more
-                    return direct if len(direct) >= len(cached) else cached
-
-                if vehicle.listing_id:
-                    try:
-                        listing = mc_client.get_listing(vehicle.listing_id)
-                        if isinstance(listing, dict):
-                            photo_links = _extract_photos(listing)
-                            _log.info("listing endpoint returned %d photos for %s", len(photo_links), vehicle.vin)
-                    except Exception as e:
-                        _log.warning("listing endpoint failed for %s: %s", vehicle.listing_id, e)
-
-                if not photo_links:
-                    mc_payload = mc_client.search_inventory({"vin": vehicle.vin, "rows": 1, "start": 0})
-                    listings = mc_payload.get("listings", []) if isinstance(mc_payload, dict) else []
-                    listing = listings[0] if listings else None
-                    _log.info("search endpoint returned %d listings for VIN %s", len(listings), vehicle.vin)
-                    if isinstance(listing, dict):
-                        photo_links = _extract_photos(listing)
-
-                if isinstance(photo_links, list) and photo_links:
-                    raw_photo_count = len(photo_links)
-                    photo_links = sanitize_marketcheck_photo_urls(photo_links)
-                    _log.info(
-                        "syncing %d/%d dealer photos for %s",
-                        len(photo_links),
-                        raw_photo_count,
-                        vehicle.vin,
-                    )
-                    sync_marketcheck_source_assets(
-                        db,
-                        vin=vehicle.vin,
-                        listing_id=vehicle.listing_id,
-                        image_urls=photo_links,
-                    )
-                    vehicle.images = photo_links
-                    mc_images_fetched = len(photo_links)
-                else:
-                    _log.warning("no dealer photos found for %s", vehicle.vin)
-            except Exception as e:
-                _log.exception("dealer photo fetch failed for %s: %s", vehicle.vin, e)
 
     # NOTE: Do NOT enqueue an auction detail refresh here.  The OVE detail
     # refresh also triggers condition-report scraping, which should only happen
@@ -854,7 +780,7 @@ def add_to_garage(
                 deal_stage=current_deal.stage,
                 allow_protected_photos=can_view_protected_vehicle_photos(user=current_user, deal=current_deal),
             ),
-            "dealer_photos_fetched": mc_images_fetched,
+            "dealer_photos_fetched": 0,
         }
     )
 

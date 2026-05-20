@@ -50,6 +50,13 @@ READY_INSPECTION_STATUSES = {
     InspectionStatus.VERIFIED,
 }
 
+SURPLUS_REFERENCE_ONLY_SOURCE_TYPES = {
+    "dealer_partner",
+    "dealer_wholesale",
+    "marketcheck",
+    "wholesale",
+}
+
 _VOLATILE_IMAGE_QUERY_PARAMS = {
     "cache",
     "cachebuster",
@@ -492,6 +499,21 @@ def resolve_vehicle_display_context(
     if is_marketcheck_source:
         source_gallery = sanitize_marketcheck_photo_urls(source_gallery)
         fallback_gallery = sanitize_marketcheck_photo_urls(fallback_gallery)
+    is_surplus_reference_only = bool(
+        vehicle.source_type and vehicle.source_type.strip().lower() in SURPLUS_REFERENCE_ONLY_SOURCE_TYPES
+    )
+    if is_surplus_reference_only:
+        hero_url = None
+        tier3_gallery = []
+        source_gallery = []
+        fallback_gallery = []
+        evox_card_gallery = []
+        evox_ext_stills = []
+        evox_int_stills = []
+        evox_spin = []
+        evox_int_pano = []
+        imagin_gallery = []
+        spin_gallery = []
 
     chromedata_refresh_needed = bool(chromedata_assets_need_refresh(vehicle, chromedata_assets)) if chromedata_assets else False
     reference_pending = (
@@ -500,7 +522,9 @@ def resolve_vehicle_display_context(
         and (not chromedata_card_gallery or chromedata_refresh_needed)
     )
 
-    # Reference gallery: ChromeData > EVOX > Imagin
+    # Surplus inventory only exposes ChromeData reference imagery in normal
+    # listing surfaces. Real MarketCheck photos are shown inside the explicit
+    # surplus condition-report request modal after screening.
     reference_gallery = chromedata_card_gallery or evox_card_gallery or imagin_gallery
     reference_hero = reference_gallery[0] if reference_gallery else None
     uses_chromedata = bool(chromedata_card_gallery)
@@ -515,7 +539,7 @@ def resolve_vehicle_display_context(
 
     # Public VDPs should only show safe reference/generated imagery.
     dealer_photos_gated = False
-    if is_marketcheck_source:
+    if is_marketcheck_source or is_surplus_reference_only:
         if protected_photo_access:
             marketing_gallery = _merge_unique(protected_photo_gallery, reference_gallery)
         else:
