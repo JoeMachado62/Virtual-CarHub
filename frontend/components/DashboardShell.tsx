@@ -10,7 +10,7 @@ import { DealTracker } from "@/components/DealTracker";
 import { QuickMatchForm } from "@/components/QuickMatchForm";
 import { Recommendation, RecommendationCards } from "@/components/RecommendationCards";
 import { apiFetch } from "@/lib/api";
-import { AuthState, clearAuthState, isAdminUser, loadValidAuthState, saveAuthState } from "@/lib/auth";
+import { AuthState, canAccessConditionReports, clearAuthState, isAdminUser, loadValidAuthState, saveAuthState } from "@/lib/auth";
 import { toPublicSourceLabel } from "@/lib/sourceLabels";
 import { maskVin } from "@/lib/vin";
 
@@ -76,6 +76,15 @@ type CrRequestModalState = {
   alreadyAvailable: boolean;
 };
 
+type SurplusReportModalState = {
+  vin: string;
+  title: string;
+  message: string;
+  images: string[];
+  orderPrice: number;
+  removedImageCount: number;
+};
+
 export function DashboardShell({ requestedVin }: { requestedVin?: string | null }) {
   const searchParams = useSearchParams();
   const [auth, setAuth] = useState<AuthState | null>(null);
@@ -92,6 +101,8 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
   const [markingNotificationsRead, setMarkingNotificationsRead] = useState(false);
   const [pendingReportVins, setPendingReportVins] = useState<Set<string>>(new Set());
   const [crRequestModal, setCrRequestModal] = useState<CrRequestModalState | null>(null);
+  const [surplusReportModal, setSurplusReportModal] = useState<SurplusReportModalState | null>(null);
+  const [orderingSurplusReport, setOrderingSurplusReport] = useState(false);
   const [profileBfv, setProfileBfv] = useState<Record<string, unknown> | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -551,6 +562,17 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
 
   async function requestConditionReport(vin: string) {
     if (!auth?.accessToken) return;
+    if (!canAccessConditionReports(auth, { isPreapproved, crEligible: deal?.condition_report_eligible })) {
+      setGarageError("Condition report requests require a pre-qualified buyer account.");
+      return;
+    }
+
+    const garageItem = garageItems.find((item) => item.vin === vin);
+    if (garageItem && isSurplusGarageItem(garageItem)) {
+      await previewSurplusConditionReport(garageItem);
+      return;
+    }
+
     setGarageActionVin(vin);
     setGarageError(null);
     setGarageMessage(null);
@@ -571,7 +593,6 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
       return;
     }
 
-    const garageItem = garageItems.find((item) => item.vin === vin);
     const ready = Boolean(response.data.already_available || response.data.status === "available");
     if (!ready) {
       setPendingReportVins((prev) => {
@@ -594,6 +615,65 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     });
     await refreshGarageStatus({ silent: true });
     setGarageActionVin(null);
+  }
+
+  async function previewSurplusConditionReport(item: GarageItem) {
+    if (!auth?.accessToken) return;
+    setGarageActionVin(item.vin);
+    setGarageError(null);
+    setGarageMessage(null);
+    const response = await apiFetch<{
+      title?: string;
+      message: string;
+      images: string[];
+      order_price?: number;
+      removed_image_count?: number;
+    }>(
+      `/me/vehicles/${encodeURIComponent(item.vin)}/surplus-condition-report-preview`,
+      { method: "POST" },
+      auth.accessToken,
+    );
+    if (response.status !== "ok") {
+      setGarageError(response.error?.message || "Unable to prepare surplus inspection report options.");
+      setGarageActionVin(null);
+      return;
+    }
+
+    setSurplusReportModal({
+      vin: item.vin,
+      title: response.data.title || garageTitle(item),
+      message: response.data.message,
+      images: response.data.images || [],
+      orderPrice: response.data.order_price || 99,
+      removedImageCount: response.data.removed_image_count || 0,
+    });
+    setGarageActionVin(null);
+  }
+
+  async function orderSurplusConditionReport() {
+    if (!auth?.accessToken || !surplusReportModal) return;
+    setOrderingSurplusReport(true);
+    setGarageError(null);
+    const response = await apiFetch<{ message?: string }>(
+      `/me/vehicles/${encodeURIComponent(surplusReportModal.vin)}/surplus-condition-report-order`,
+      { method: "POST" },
+      auth.accessToken,
+    );
+    if (response.status !== "ok") {
+      setGarageError(response.error?.message || "Unable to order the surplus inspection report.");
+      setOrderingSurplusReport(false);
+      return;
+    }
+
+    setPendingReportVins((prev) => {
+      const next = new Set(prev);
+      next.add(surplusReportModal.vin);
+      return next;
+    });
+    setGarageMessage(response.data.message || "Surplus inspection report ordered. My Garage will update when it is ready.");
+    setSurplusReportModal(null);
+    await refreshGarageStatus({ silent: true });
+    setOrderingSurplusReport(false);
   }
 
   async function startGarageAcquisition(vin: string) {
@@ -638,6 +718,7 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
   const renderGarageReportAction = (item: GarageItem) => {
     const itemActionLoading = garageActionVin === item.vin;
     const reportPending = isReportPending(item, pendingReportVins);
+    const reportEligible = canAccessConditionReports(auth, { isPreapproved, crEligible: deal?.condition_report_eligible });
 
     if (item.has_inspection_report) {
       return (
@@ -656,6 +737,17 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
     }
 
     if (!canRequestReportForGarageItem(item)) return null;
+
+    if (!reportEligible) {
+      return (
+        <button
+          className="button ghost-mint"
+          onClick={() => setGarageError("Condition report requests require a pre-qualified buyer account.")}
+        >
+          Prequalify to Request
+        </button>
+      );
+    }
 
     return (
       <button
@@ -1205,6 +1297,50 @@ export function DashboardShell({ requestedVin }: { requestedVin?: string | null 
           </div>
         </div>
       ) : null}
+
+      {surplusReportModal ? (
+        <div className="dashboard-cr-modal-overlay" onClick={() => setSurplusReportModal(null)}>
+          <div
+            className="card dashboard-surplus-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dashboard-surplus-modal-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="dashboard-surplus-modal-copy">
+              <p className="section-eyebrow" style={{ marginBottom: 8 }}>
+                Surplus Inventory Inspection
+              </p>
+              <h3 id="dashboard-surplus-modal-title">{surplusReportModal.title}</h3>
+              <p>{surplusReportModal.message}</p>
+              {surplusReportModal.removedImageCount > 0 ? (
+                <p className="dashboard-muted-note">
+                  {surplusReportModal.removedImageCount} image{surplusReportModal.removedImageCount === 1 ? "" : "s"} removed during photo screening.
+                </p>
+              ) : null}
+            </div>
+            <div className="dashboard-surplus-gallery">
+              {surplusReportModal.images.length ? (
+                surplusReportModal.images.map((image, index) => (
+                  <img key={`${image}-${index}`} src={image} alt={`${surplusReportModal.title} photo ${index + 1}`} />
+                ))
+              ) : (
+                <div className="dashboard-surplus-empty">
+                  <p>No screened MarketCheck photos are available yet.</p>
+                </div>
+              )}
+            </div>
+            <div className="dashboard-surplus-modal-actions">
+              <button className="button ghost" type="button" onClick={() => setSurplusReportModal(null)}>
+                Cancel
+              </button>
+              <button className="button" type="button" onClick={orderSurplusConditionReport} disabled={orderingSurplusReport}>
+                {orderingSurplusReport ? "Ordering..." : `ORDER REPORT $${surplusReportModal.orderPrice}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1220,7 +1356,12 @@ function garageLocation(item: GarageItem): string {
 
 function canRequestReportForGarageItem(item: GarageItem): boolean {
   const sourceType = (item.vehicle.source_type || "").toLowerCase();
-  return sourceType === "ove" || sourceType === "auction";
+  return sourceType === "ove" || sourceType === "auction" || isSurplusGarageItem(item);
+}
+
+function isSurplusGarageItem(item: GarageItem): boolean {
+  const sourceType = (item.vehicle.source_type || "").toLowerCase();
+  return sourceType === "marketcheck" || sourceType === "dealer_wholesale" || sourceType === "dealer_partner" || sourceType === "wholesale";
 }
 
 function isReportPending(item: GarageItem, pendingReportVins: Set<string>): boolean {

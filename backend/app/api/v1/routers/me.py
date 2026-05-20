@@ -8,21 +8,27 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_deal, get_current_user, is_admin_user
 from app.core.config import settings
-from app.core.constants import AuctionPlatform, DealState, FundingState, InventorySourceType, OveDetailRequestStatus
+from app.core.constants import AuctionPlatform, DealState, FundingState, ImageTier, InventorySourceType, OveDetailRequestStatus
 from app.core.responses import ok
 from app.db.session import get_db
-from app.models.entities import Document, GarageItem, Notification, OveDetailRequest, OveVehicleDetail, Shipment, User, Vehicle, VehicleImageAsset, VehicleMatch
+from app.models.entities import AuditEvent, Document, GarageItem, Notification, OveDetailRequest, OveVehicleDetail, Shipment, User, Vehicle, VehicleHistoryEnrichment, VehicleImageAsset, VehicleMatch
 from app.schemas.profile import ProfileUpdateRequest, QuickMatchRequest
 from app.schemas.returns import InitiateReturnRequest
 from app.schemas.ove_inventory import OveDetailRequestEnqueueRequest
 from app.services.audit_service import log_event
 from app.services.deal_service import advance_deal_for_trigger
 from app.services.image_pipeline_service import (
+    _asset_url,
     ensure_tier3_processing_job,
     resolve_vehicle_card_media,
     resolve_vehicle_display_context,
     sanitize_marketcheck_photo_urls,
     sync_marketcheck_source_assets,
+)
+from app.services.marketcheck_history_enrichment_service import (
+    build_marketcheck_client,
+    extract_listing_metadata,
+    select_best_history_entry,
 )
 from app.services.ghl_lifecycle_service import GHLLifecycleService
 from app.services.matching_service import run_matching
@@ -30,6 +36,7 @@ from app.services.ove_inventory_service import enqueue_ove_detail_request
 from app.services.photo_access_service import can_view_protected_vehicle_photos
 from app.services.profile_service import apply_full_profile, apply_quick_match, get_or_create_profile
 from app.services.return_service import initiate_return
+from app.services.notification_service import create_notification
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -40,6 +47,22 @@ CONDITION_REPORT_ELIGIBLE_FUNDING_STATES = {
     FundingState.FINAL_APPROVAL_PENDING,
     FundingState.FULLY_FUNDED,
     FundingState.CASH_BUYER,
+}
+
+SURPLUS_CONDITION_REPORT_MESSAGE = (
+    'Vehicles sourced from surplus inventory channels are aged inventory units that are currently rated as "Retail Ready". '
+    'Because they have been thru a dealers service shop and reconditioning process we only offer these "AS IS" . '
+    "That said, we highly recommend a professional inspection. Contracting an inspector or hiring a mechanic to do this can cost from $150 to $200+  "
+    'That is why Virtual CarHub has partnered with "Wrench" the largest mobile mechanic company in the U.S. '
+    "You can order a full condition report performed by an ASE certified mechanic for only $99 today. "
+    "Just click on the ORDER REPORT button below."
+)
+
+SURPLUS_SOURCE_TYPES = {
+    InventorySourceType.MARKETCHECK.value,
+    InventorySourceType.DEALER_WHOLESALE.value,
+    InventorySourceType.DEALER_PARTNER.value,
+    "wholesale",
 }
 
 
@@ -84,6 +107,99 @@ def _condition_report_eligibility(deal, user) -> tuple[bool, str]:
         return True, "Eligible to request a VCH condition report."
 
     return False, "Condition/inspection report requests require a pre-approved buyer account."
+
+
+def _is_surplus_inventory(vehicle: Vehicle) -> bool:
+    return (vehicle.source_type or "").strip().lower() in SURPLUS_SOURCE_TYPES
+
+
+def _vehicle_title(vehicle: Vehicle) -> str:
+    title = " ".join(
+        str(part).strip()
+        for part in (vehicle.year, vehicle.make, vehicle.model, vehicle.trim)
+        if part not in (None, "")
+    )
+    return title or vehicle.vin
+
+
+def _image_urls_from_marketcheck_listing(payload: dict | None) -> list[str]:
+    listing = payload or {}
+    metadata = extract_listing_metadata(listing)
+    urls = list(metadata.get("supplemental_photo_links") or [])
+    media = listing.get("media") if isinstance(listing.get("media"), dict) else {}
+    for key in ("photo_links_cached", "photo_links", "photos", "images"):
+        value = media.get(key) if isinstance(media, dict) else None
+        if isinstance(value, list):
+            urls.extend(str(item) for item in value if item)
+    for key in ("photo_links", "photo_links_cached", "image_urls", "images"):
+        value = listing.get(key)
+        if isinstance(value, list):
+            urls.extend(str(item) for item in value if item)
+    return sanitize_marketcheck_photo_urls(urls)
+
+
+def _load_marketcheck_asset_urls(db: Session, vin: str) -> list[str]:
+    assets = db.scalars(
+        select(VehicleImageAsset)
+        .where(
+            VehicleImageAsset.vin == vin,
+            VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
+            VehicleImageAsset.source_kind == "marketcheck",
+            VehicleImageAsset.active.is_(True),
+        )
+        .order_by(
+            VehicleImageAsset.is_primary.desc(),
+            VehicleImageAsset.display_order.asc(),
+            VehicleImageAsset.created_at.asc(),
+        )
+    ).all()
+    return [url for asset in assets if (url := _asset_url(asset))]
+
+
+def _prepare_surplus_condition_report_images(db: Session, vehicle: Vehicle) -> tuple[list[str], int]:
+    candidate_urls: list[str] = []
+    candidate_urls.extend(str(url) for url in (vehicle.images or []) if url)
+    candidate_urls.extend(_load_marketcheck_asset_urls(db, vehicle.vin))
+
+    record = db.get(VehicleHistoryEnrichment, vehicle.vin)
+    if record:
+        metadata = record.listing_metadata_json or {}
+        candidate_urls.extend(str(url) for url in (metadata.get("supplemental_photo_links") or []) if url)
+        candidate_urls.extend(_image_urls_from_marketcheck_listing(record.listing_payload_json or {}))
+        candidate_urls.extend(_image_urls_from_marketcheck_listing(record.history_entry_json or {}))
+
+    listing_id: str | None = record.source_listing_id if record else None
+    if settings.has_marketcheck:
+        try:
+            client = build_marketcheck_client()
+            history_payload = client.get_history(vehicle.vin)
+            entry = select_best_history_entry(history_payload, preferred_source_url=vehicle.source_url)
+            listing_payload = entry or {}
+            listing_id = str((entry or {}).get("id") or (entry or {}).get("listing_id") or listing_id or "").strip() or None
+            if listing_id:
+                try:
+                    detailed_listing = client.get_listing(listing_id)
+                    if isinstance(detailed_listing, dict):
+                        listing_payload = detailed_listing
+                except Exception:
+                    logger.info("surplus_marketcheck_listing_fetch_failed vin=%s listing_id=%s", vehicle.vin, listing_id, exc_info=True)
+            if isinstance(listing_payload, dict):
+                candidate_urls.extend(_image_urls_from_marketcheck_listing(listing_payload))
+        except Exception:
+            logger.info("surplus_marketcheck_history_fetch_failed vin=%s", vehicle.vin, exc_info=True)
+
+    sanitized = sanitize_marketcheck_photo_urls(candidate_urls)
+    if sanitized:
+        sync_marketcheck_source_assets(
+            db,
+            vin=vehicle.vin,
+            listing_id=listing_id,
+            image_urls=sanitized,
+        )
+        db.flush()
+        sanitized = sanitize_marketcheck_photo_urls(_load_marketcheck_asset_urls(db, vehicle.vin) or sanitized)
+
+    return sanitized, max(0, len([url for url in candidate_urls if url]) - len(sanitized))
 
 
 def _infer_auction_platform(vehicle: Vehicle, ove_detail: OveVehicleDetail | None) -> AuctionPlatform:
@@ -578,6 +694,18 @@ def get_garage(
             cr_status_by_vin[vin] = "terminal"
         # COMPLETED / CANCELED → no flag needed (has_inspection_report covers it)
 
+    surplus_events = db.scalars(
+        select(AuditEvent)
+        .where(AuditEvent.deal_id == current_deal.id)
+        .where(AuditEvent.event_type == "buyer_surplus_condition_report_ordered")
+        .order_by(AuditEvent.timestamp.desc())
+        .limit(200)
+    ).all()
+    for event in surplus_events:
+        vin = str((event.payload_json or {}).get("vin") or "").strip().upper()
+        if vin and vin in garage_vins and vin not in cr_status_by_vin:
+            cr_status_by_vin[vin] = "pending"
+
     return ok(
         [
             _serialize_garage_item(
@@ -725,6 +853,108 @@ def add_to_garage(
                 allow_protected_photos=can_view_protected_vehicle_photos(user=current_user, deal=current_deal),
             ),
             "dealer_photos_fetched": mc_images_fetched,
+        }
+    )
+
+
+@router.post("/vehicles/{identifier}/surplus-condition-report-preview")
+def preview_surplus_condition_report(
+    identifier: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    current_deal=Depends(get_current_deal),
+) -> dict:
+    eligible, reason = _condition_report_eligibility(current_deal, current_user)
+    if not eligible:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
+
+    vehicle = _resolve_vehicle_or_404(db, identifier)
+    if not _is_surplus_inventory(vehicle):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Surplus condition report requests are only supported for surplus inventory.",
+        )
+
+    existing_garage = db.scalar(
+        select(GarageItem).where(GarageItem.deal_id == current_deal.id, GarageItem.vin == vehicle.vin)
+    )
+    if not existing_garage:
+        db.add(GarageItem(
+            deal_id=current_deal.id,
+            user_id=current_user.id,
+            vin=vehicle.vin,
+            status="saved",
+            source="surplus_condition_report_preview",
+        ))
+        db.flush()
+
+    images, removed_count = _prepare_surplus_condition_report_images(db, vehicle)
+    db.commit()
+
+    return ok(
+        {
+            "vin": vehicle.vin,
+            "title": _vehicle_title(vehicle),
+            "report_type": "surplus_wrench",
+            "order_price": 99,
+            "currency": "USD",
+            "message": SURPLUS_CONDITION_REPORT_MESSAGE,
+            "images": images,
+            "removed_image_count": removed_count,
+        }
+    )
+
+
+@router.post("/vehicles/{identifier}/surplus-condition-report-order")
+def order_surplus_condition_report(
+    identifier: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    current_deal=Depends(get_current_deal),
+) -> dict:
+    eligible, reason = _condition_report_eligibility(current_deal, current_user)
+    if not eligible:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
+
+    vehicle = _resolve_vehicle_or_404(db, identifier)
+    if not _is_surplus_inventory(vehicle):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Surplus condition report orders are only supported for surplus inventory.",
+        )
+
+    images, removed_count = _prepare_surplus_condition_report_images(db, vehicle)
+    log_event(
+        db,
+        deal_id=current_deal.id,
+        event_type="buyer_surplus_condition_report_ordered",
+        actor="buyer",
+        payload={
+            "vin": vehicle.vin,
+            "user_id": current_user.id,
+            "source_type": vehicle.source_type,
+            "vendor": "wrench",
+            "price": 99,
+            "currency": "USD",
+            "image_count": len(images),
+            "removed_image_count": removed_count,
+        },
+    )
+    create_notification(
+        db,
+        user_id=current_user.id,
+        deal_id=current_deal.id,
+        message=f"Surplus inspection report ordered for {_vehicle_title(vehicle)}. We will update My Garage when it is ready.",
+    )
+    db.commit()
+
+    return ok(
+        {
+            "vin": vehicle.vin,
+            "status": "requested",
+            "vendor": "wrench",
+            "order_price": 99,
+            "message": "Surplus inspection report ordered. We will update My Garage when it is ready.",
         }
     )
 

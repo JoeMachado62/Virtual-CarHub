@@ -2022,6 +2022,83 @@ textarea {
   min-width: 150px;
 }
 
+.dashboard-surplus-modal {
+  width: min(980px, 100%);
+  max-height: calc(100dvh - 2.5rem);
+  display: grid;
+  grid-template-rows: auto minmax(180px, 1fr) auto;
+  gap: 1rem;
+  overflow: hidden;
+  padding: 1.35rem;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--line) 72%, rgba(207, 115, 74, 0.28) 28%);
+  background:
+    radial-gradient(circle at top right, rgba(207, 115, 74, 0.16), transparent 32%),
+    linear-gradient(160deg, rgba(10, 18, 30, 0.98), rgba(22, 26, 42, 0.97));
+  box-shadow: 0 28px 90px rgba(4, 9, 18, 0.5);
+}
+
+:root[data-theme="light"] .dashboard-surplus-modal {
+  background:
+    radial-gradient(circle at top right, rgba(207, 115, 74, 0.1), transparent 32%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.99), rgba(249, 246, 243, 0.98));
+}
+
+.dashboard-surplus-modal-copy {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.dashboard-surplus-modal-copy h3 {
+  margin: 0;
+  font-size: clamp(1.45rem, 2.5vw, 2rem);
+  line-height: 1.08;
+}
+
+.dashboard-surplus-modal-copy p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.dashboard-surplus-gallery {
+  min-height: 180px;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+  padding-right: 0.25rem;
+}
+
+.dashboard-surplus-gallery img,
+.dashboard-surplus-empty {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.dashboard-surplus-gallery img {
+  display: block;
+  object-fit: cover;
+}
+
+.dashboard-surplus-empty {
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.dashboard-surplus-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .inventory-layout {
   display: grid;
   gap: 1.15rem;
