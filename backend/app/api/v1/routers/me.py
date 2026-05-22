@@ -1,5 +1,7 @@
 import logging
 from datetime import UTC, datetime
+from hashlib import sha256
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -31,7 +33,7 @@ from app.services.marketcheck_history_enrichment_service import (
     extract_listing_metadata,
     select_best_history_entry,
 )
-from app.services.vehicle_image_screening_service import screen_marketcheck_vehicle_images
+from app.services.vehicle_image_screening_service import SCREENING_VERSION, screen_marketcheck_vehicle_images
 from app.services.ghl_lifecycle_service import GHLLifecycleService
 from app.services.matching_service import run_matching
 from app.services.ove_inventory_service import enqueue_ove_detail_request
@@ -39,6 +41,7 @@ from app.services.photo_access_service import can_view_protected_vehicle_photos
 from app.services.profile_service import apply_full_profile, apply_quick_match, get_or_create_profile
 from app.services.return_service import initiate_return
 from app.services.notification_service import create_notification
+from app.services.s3_service import cache_remote_image, object_storage_uploads_enabled
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -160,22 +163,23 @@ def _image_urls_from_marketcheck_listing(payload: dict | None) -> list[str]:
     return sanitize_marketcheck_photo_urls(urls)
 
 
-def _load_marketcheck_asset_urls(db: Session, vin: str) -> list[str]:
+def _load_marketcheck_asset_urls(db: Session, vin: str, *, active_only: bool = True) -> list[str]:
+    query = select(VehicleImageAsset).where(
+        VehicleImageAsset.vin == vin,
+        VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
+        VehicleImageAsset.source_kind == "marketcheck",
+    )
+    if active_only:
+        query = query.where(VehicleImageAsset.active.is_(True))
     assets = db.scalars(
-        select(VehicleImageAsset)
-        .where(
-            VehicleImageAsset.vin == vin,
-            VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
-            VehicleImageAsset.source_kind == "marketcheck",
-            VehicleImageAsset.active.is_(True),
-        )
+        query
         .order_by(
             VehicleImageAsset.is_primary.desc(),
             VehicleImageAsset.display_order.asc(),
             VehicleImageAsset.created_at.asc(),
         )
     ).all()
-    return [url for asset in assets if (url := _asset_url(asset))]
+    return [url for asset in assets if (url := asset.external_url)]
 
 
 def _load_admin_hidden_marketcheck_asset_urls(db: Session, vin: str) -> list[str]:
@@ -202,7 +206,7 @@ def _load_admin_hidden_marketcheck_asset_urls(db: Session, vin: str) -> list[str
 def _prepare_surplus_condition_report_images(db: Session, vehicle: Vehicle, *, include_hidden: bool = False) -> tuple[list[str], list[str], int]:
     candidate_urls: list[str] = []
     candidate_urls.extend(str(url) for url in (vehicle.images or []) if url)
-    candidate_urls.extend(_load_marketcheck_asset_urls(db, vehicle.vin))
+    candidate_urls.extend(_load_marketcheck_asset_urls(db, vehicle.vin, active_only=False))
 
     record = db.get(VehicleHistoryEnrichment, vehicle.vin)
     if record:
@@ -212,7 +216,8 @@ def _prepare_surplus_condition_report_images(db: Session, vehicle: Vehicle, *, i
         candidate_urls.extend(_image_urls_from_marketcheck_listing(record.history_entry_json or {}))
 
     listing_id: str | None = record.source_listing_id if record else None
-    if settings.has_marketcheck:
+    has_local_image_candidates = bool(sanitize_marketcheck_photo_urls(candidate_urls))
+    if settings.has_marketcheck and not has_local_image_candidates:
         try:
             client = build_marketcheck_client()
             history_payload = client.get_history(vehicle.vin)
@@ -240,12 +245,77 @@ def _prepare_surplus_condition_report_images(db: Session, vehicle: Vehicle, *, i
             image_urls=sanitized,
         )
         db.flush()
-        sanitized = sanitize_marketcheck_photo_urls(_load_marketcheck_asset_urls(db, vehicle.vin) or sanitized)
+        sanitized = sanitize_marketcheck_photo_urls(_load_marketcheck_asset_urls(db, vehicle.vin, active_only=False) or sanitized)
         sanitized = screen_marketcheck_vehicle_images(db, vin=vehicle.vin, image_urls=sanitized)
         db.flush()
 
     hidden = _load_admin_hidden_marketcheck_asset_urls(db, vehicle.vin) if include_hidden else []
     return sanitized, hidden, max(0, len([url for url in candidate_urls if url]) - len(sanitized))
+
+
+def _cache_ordered_surplus_marketcheck_images(db: Session, vin: str) -> int:
+    """Copy ordered surplus source photos to object storage when configured.
+
+    SOURCE_CACHE assets keep the original MarketCheck/dealer URL as provenance,
+    while storage_key points at our durable copy for future display. This is
+    deliberately best-effort: a CDN timeout should not block a buyer's CR order.
+    """
+    if not object_storage_uploads_enabled():
+        return 0
+
+    assets = db.scalars(
+        select(VehicleImageAsset)
+        .where(
+            VehicleImageAsset.vin == vin,
+            VehicleImageAsset.tier == ImageTier.SOURCE_CACHE,
+            VehicleImageAsset.source_kind == "marketcheck",
+        )
+        .order_by(VehicleImageAsset.display_order.asc(), VehicleImageAsset.created_at.asc())
+    ).all()
+    cached_count = 0
+    for asset in assets:
+        if asset.storage_key or not asset.external_url:
+            continue
+        source_url = str(asset.external_url).strip()
+        if not source_url:
+            continue
+        key = _surplus_marketcheck_storage_key(vin=vin, source_url=source_url, display_order=asset.display_order)
+        try:
+            result = cache_remote_image(source_url=source_url, key=key, timeout_seconds=15.0)
+        except Exception:
+            logger.info("surplus_marketcheck_image_cache_failed vin=%s url=%s", vin, source_url, exc_info=True)
+            metadata = dict(asset.metadata_json or {})
+            metadata["surplus_source_cache_error_at"] = datetime.now(UTC).isoformat()
+            asset.metadata_json = metadata
+            continue
+        asset.storage_key = result.storage_key
+        asset.sha256 = result.sha256
+        metadata = dict(asset.metadata_json or {})
+        metadata.update(
+            {
+                "surplus_source_cached_at": datetime.now(UTC).isoformat(),
+                "surplus_source_cache_bucket": result.bucket,
+                "surplus_source_cache_content_type": result.content_type,
+                "surplus_source_cache_size_bytes": result.size_bytes,
+            }
+        )
+        asset.metadata_json = metadata
+        cached_count += 1
+    return cached_count
+
+
+def _surplus_marketcheck_storage_key(*, vin: str, source_url: str, display_order: int) -> str:
+    digest = sha256(canonical_source_image_url(source_url).encode("utf-8")).hexdigest()
+    extension = _image_extension_from_url(source_url)
+    return f"source-cache/{vin}/marketcheck/{display_order:03d}-{digest[:16]}{extension}"
+
+
+def _image_extension_from_url(url: str) -> str:
+    path = urlsplit(str(url)).path.lower()
+    for extension in (".jpg", ".jpeg", ".png", ".webp", ".avif"):
+        if path.endswith(extension):
+            return ".jpg" if extension == ".jpeg" else extension
+    return ".jpg"
 
 
 def _infer_auction_platform(vehicle: Vehicle, ove_detail: OveVehicleDetail | None) -> AuctionPlatform:
@@ -902,6 +972,7 @@ def order_surplus_condition_report(
         )
 
     images, _hidden_images, removed_count = _prepare_surplus_condition_report_images(db, vehicle)
+    cached_image_count = _cache_ordered_surplus_marketcheck_images(db, vehicle.vin)
     log_event(
         db,
         deal_id=current_deal.id,
@@ -916,6 +987,7 @@ def order_surplus_condition_report(
             "currency": "USD",
             "image_count": len(images),
             "removed_image_count": removed_count,
+            "cached_image_count": cached_image_count,
         },
     )
     create_notification(
@@ -979,6 +1051,11 @@ def publish_surplus_condition_report_images(
         screening = dict(metadata.get("overlay_screening") or {})
         screening.update(
             {
+                "version": SCREENING_VERSION,
+                "provider": "admin",
+                "model": "manual_override",
+                "classification": "clean_vehicle_photo",
+                "has_overlay": False,
                 "approved": True,
                 "admin_override": True,
                 "admin_override_by": current_user.email,

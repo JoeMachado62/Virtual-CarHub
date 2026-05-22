@@ -6,6 +6,7 @@ import type { TouchEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { AuthModal } from "@/components/AuthModal";
+import { SurplusAdminReportModal, SurplusUserReportModal } from "@/components/SurplusReportModals";
 import { apiFetch } from "@/lib/api";
 import { AuthState, clearAuthState, isAdminUser, loadValidAuthState } from "@/lib/auth";
 import { normalizeSourceFilterValue, toPublicSourceLabel } from "@/lib/sourceLabels";
@@ -1671,76 +1672,25 @@ export function VehicleDetailPanel({ vin }: { vin: string }) {
       ) : null}
 
       {surplusReportModal ? (
-        <div className="dashboard-cr-modal-overlay" onClick={() => setSurplusReportModal(null)}>
-          <div
-            className="card dashboard-surplus-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="vdp-surplus-modal-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="dashboard-surplus-modal-copy">
-              <p className="section-eyebrow" style={{ marginBottom: 8 }}>
-                Surplus Inventory Inspection
-              </p>
-              <h3 id="vdp-surplus-modal-title">{surplusReportModal.title}</h3>
-              <p>{surplusReportModal.message}</p>
-            </div>
-            <div className="dashboard-surplus-gallery">
-              {surplusReportModal.images.length ? (
-                surplusReportModal.images.map((image, index) => (
-                  <img
-                    key={`${image}-${index}`}
-                    src={image}
-                    alt={`${surplusReportModal.title} photo ${index + 1}`}
-                    className={cropClassForScreenedImage(image)}
-                  />
-                ))
-              ) : (
-                <div className="dashboard-surplus-empty">
-                  <p>No screened MarketCheck photos are available yet.</p>
-                </div>
-              )}
-            </div>
-            {isAdminUser(auth) && surplusReportModal.hiddenImages.length ? (
-              <div className="dashboard-surplus-admin-review">
-                <p className="section-eyebrow">Admin Hidden Images</p>
-                <div className="dashboard-surplus-gallery dashboard-surplus-hidden-gallery">
-                  {surplusReportModal.hiddenImages.map((image, index) => (
-                    <label className="dashboard-surplus-hidden-item" key={`${image}-${index}`}>
-                      <input
-                        type="checkbox"
-                        checked={surplusReportModal.selectedHiddenImages.includes(image)}
-                        onChange={() => toggleHiddenSurplusImage(image)}
-                      />
-                      <img
-                        src={image}
-                        alt={`${surplusReportModal.title} hidden photo ${index + 1}`}
-                        className={cropClassForScreenedImage(image)}
-                      />
-                    </label>
-                  ))}
-                </div>
-                <button
-                  className="button ghost"
-                  type="button"
-                  onClick={publishHiddenSurplusImages}
-                  disabled={!surplusReportModal.selectedHiddenImages.length}
-                >
-                  Publish Selected
-                </button>
-              </div>
-            ) : null}
-            <div className="dashboard-surplus-modal-actions">
-              <button className="button ghost" type="button" onClick={() => setSurplusReportModal(null)}>
-                Cancel
-              </button>
-              <button className="button" type="button" onClick={orderSurplusConditionReport} disabled={orderingSurplusReport}>
-                {orderingSurplusReport ? "Ordering..." : `ORDER REPORT $${surplusReportModal.orderPrice}`}
-              </button>
-            </div>
-          </div>
-        </div>
+        isAdminUser(auth) ? (
+          <SurplusAdminReportModal
+            modal={surplusReportModal}
+            ordering={orderingSurplusReport}
+            onClose={() => setSurplusReportModal(null)}
+            onOrder={orderSurplusConditionReport}
+            onToggleHiddenImage={toggleHiddenSurplusImage}
+            onPublishHiddenImages={publishHiddenSurplusImages}
+            cropClassForImage={cropClassForScreenedImage}
+          />
+        ) : (
+          <SurplusUserReportModal
+            modal={surplusReportModal}
+            ordering={orderingSurplusReport}
+            onClose={() => setSurplusReportModal(null)}
+            onOrder={orderSurplusConditionReport}
+            cropClassForImage={cropClassForScreenedImage}
+          />
+        )
       ) : null}
 
       {showAuthModal ? (

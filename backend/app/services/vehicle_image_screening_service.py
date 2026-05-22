@@ -16,18 +16,17 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.constants import ImageTier
 from app.models.entities import VehicleImageAsset
-from app.services.image_pipeline_service import canonical_source_image_url
+from app.services.image_pipeline_service import _asset_url, canonical_source_image_url
 
 logger = logging.getLogger(__name__)
 
 GEMINI_GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 SCREENING_CACHE_KEY = "overlay_screening"
-SCREENING_VERSION = "2026-05-20-v1"
+SCREENING_VERSION = "2026-05-21-v6"
 SCREENING_REJECT_CLASSIFICATIONS = {
     "has_text_overlay",
     "has_graphic_overlay",
-    "has_ui_or_screenshot_elements",
     "not_vehicle_photo",
 }
 SCREENING_CROP_CLASSIFICATIONS = {
@@ -35,14 +34,69 @@ SCREENING_CROP_CLASSIFICATIONS = {
     "has_graphic_overlay",
 }
 URL_REJECT_PATTERNS = re.compile(
-    r"(logo|banner|badge|overlay|sprite|icon|placeholder|watermark|no[_-]?photo|coming[_-]?soon|map|avatar)",
+    r"(banner|overlay|sprite|icon|placeholder|watermark|no[_-]?photo|coming[_-]?soon|avatar)",
+    re.IGNORECASE,
+)
+MARKETING_SIGNAL_RE = re.compile(
+    r"("
+    r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b|"
+    r"\bcall\b|\bsale\b|\bspecial\b|\boffer\b|\bfinanc(?:e|ing)\b|"
+    r"\bpayment\b|\bdown\b|\bapr\b|\bwarranty\b|\bcertified\b|\bshop\b|"
+    r"\bvisit\b|\bwww\.|\.com\b|@|#|"
+    r"\$\s?\d|"
+    r"\bwatermark\b|\bbanner\b"
+    r")",
+    re.IGNORECASE,
+)
+ADDED_OVERLAY_CONTEXT_RE = re.compile(
+    r"("
+    r"\badded\s+(?:text|graphic|banner|overlay|watermark|callout)\b|"
+    r"\b(?:text|graphic|banner|watermark|callout)\s+(?:was\s+)?(?:added|overlaid|superimposed)\b|"
+    r"\bplaced\s+on\s+top\b|\bsuperimposed\b|\boverlaid\b|"
+    r"\bpromotional\s+(?:banner|graphic|image)\b|\bmarketing\s+(?:banner|graphic|image)\b|\bdealer\s+watermark\b|"
+    r"\bprice\s+callout\b|\bpayment\s+callout\b|"
+    r"\bdesign\s+elements?\b|\bcollage\b|\bcomposite\b|"
+    r"\bapp\s+screenshot\b|\bui\s+screenshot\b"
+    r")",
+    re.IGNORECASE,
+)
+NEGATED_ADDED_OVERLAY_RE = re.compile(
+    r"\b(?:no|not|without|lacks|does\s+not\s+contain)\b.{0,40}"
+    r"\b(?:added|overlay|overlaid|superimposed|banner|watermark|callout|composite|screenshot)\b",
+    re.IGNORECASE,
+)
+INCIDENTAL_TEXT_RE = re.compile(
+    r"("
+    r"\bmapquest\b|\bmap\b|\bgps\b|\bnavigation\b|\bnav\b|\bodometer\b|\bodo\b|"
+    r"\bmiles?\b|\bmi\b|\bvin\b|\blicense\b|\bplate\b|\bfort\s+myers\s+acura\b|"
+    r"\bacura\b|\bhonda\b|\btoyota\b|\bford\b|\bchevrolet\b|\bnissan\b|\bhyundai\b|"
+    r"\bkia\b|\bmazda\b|\blexus\b|\bbmw\b|\bmercedes\b|\baudi\b|"
+    r"\bbadge\b|\bemblem\b|\bmodel\b|\btrim\b"
+    r")",
+    re.IGNORECASE,
+)
+LICENSE_PLATE_CONTEXT_RE = re.compile(
+    r"("
+    r"\blicense\b|\bplate\b|\bplate\s+frame\b|\btag\b|\btemporary\s+tag\b|"
+    r"\bdealer\s+plate\b|\bvehicle\s+plate\b"
+    r")",
+    re.IGNORECASE,
+)
+NON_VEHICLE_MARKETING_RE = re.compile(
+    r"("
+    r"\bnot\s+(?:a\s+)?(?:photo|photograph|image|picture)\s+of\s+(?:a\s+)?vehicle\b|"
+    r"\bno\s+vehicle\b|\bwithout\s+(?:a\s+)?vehicle\b|"
+    r"\bmarketing\s+(?:graphic|image|billboard|poster|flyer)\b|"
+    r"\bpromotional\s+(?:graphic|image|billboard|poster|flyer)\b|"
+    r"\btext[- ]only\s+(?:graphic|image|billboard|poster|flyer)\b"
+    r")",
     re.IGNORECASE,
 )
 
 SCREENING_PROMPT = """
 You are reviewing vehicle listing photos for VirtualCarHub.
 
-Determine whether this image is a clean base vehicle photo or whether it contains added marketing or graphic overlays.
+Determine whether this image is a usable vehicle listing photo or whether it contains added marketing or graphic overlays that should be hidden from a public gallery.
 
 Classify as exactly one of:
 - clean_vehicle_photo
@@ -52,9 +106,22 @@ Classify as exactly one of:
 - not_vehicle_photo
 - uncertain
 
-Look for text, price labels, dealer logos, phone numbers, badges, banners, arrows, colored callouts,
-watermarks, UI cards, app screenshots, borders, stickers, promotional graphics, collage layouts,
-or other composite design elements.
+Reject only clear added promotional/composite content: phone numbers, websites, social handles, price/payment
+callouts, large dealer marketing banners, dealer watermark graphics, arrows, colored callouts, app screenshots,
+collage layouts, or other design elements placed on top of the photo. Do not reject merely because text,
+logos, navigation UI, or dealer names are visible inside the original camera photo.
+
+Do NOT reject normal incidental text that is physically part of the vehicle or scene, including license plates
+or plate frames. License plate and plate-frame text should be ignored even when it includes dealer names,
+locations, slogans, phone numbers, or websites. Also allow dashboard gauges, odometer screens,
+infotainment/navigation screens, GPS/MapQuest/map text visible on an in-car display, window stickers,
+inspection stickers, tire labels, manufacturer logos, model/trim/emission/drive badges, emblems, decals
+physically attached to the vehicle, or signs reflected in glass. Treat those as clean_vehicle_photo unless
+there is also a clear added promotional overlay outside the physical plate/frame/display/object/vehicle badge.
+When unsure whether text is physically in the scene or added after the photo, choose clean_vehicle_photo.
+
+Use has_ui_or_screenshot_elements only when the whole image is a screenshot/composite UI rather than a camera
+photo of a vehicle interior display.
 
 If the overlay is confined mostly to a top or bottom band and the vehicle remains usable after cropping,
 set "crop_recommendation" to one of: crop_top_10, crop_bottom_10, crop_vertical_10, crop_vertical_15.
@@ -143,7 +210,8 @@ def screen_marketcheck_vehicle_images(
                 metadata[SCREENING_CACHE_KEY] = result
                 asset.metadata_json = metadata
             asset.active = bool(result.get("approved"))
-        display_url = _display_url(url, result)
+        display_source_url = _asset_url(asset) if asset else url
+        display_url = _display_url(display_source_url or url, result)
         if result.get("approved") is True and display_url:
             approved.append(display_url)
 
@@ -161,7 +229,17 @@ def _load_marketcheck_assets_by_key(db: Session, vin: str) -> dict[str, VehicleI
     out: dict[str, VehicleImageAsset] = {}
     for asset in assets:
         key = canonical_source_image_url(asset.external_url or "")
-        if key and key not in out:
+        if not key:
+            continue
+        current = out.get(key)
+        if current is None:
+            out[key] = asset
+            continue
+        current_screening = (current.metadata_json or {}).get(SCREENING_CACHE_KEY)
+        asset_screening = (asset.metadata_json or {}).get(SCREENING_CACHE_KEY)
+        if not current.active and asset.active:
+            out[key] = asset
+        elif not isinstance(current_screening, dict) and isinstance(asset_screening, dict):
             out[key] = asset
     return out
 
@@ -172,6 +250,8 @@ def _cached_screening(asset: VehicleImageAsset | None) -> dict[str, Any] | None:
     screening = (asset.metadata_json or {}).get(SCREENING_CACHE_KEY)
     if not isinstance(screening, dict):
         return None
+    if screening.get("admin_override") is True and isinstance(screening.get("approved"), bool):
+        return screening
     if screening.get("version") != SCREENING_VERSION:
         return None
     if isinstance(screening.get("approved"), bool):
@@ -189,7 +269,7 @@ def _cheap_precheck(url: str) -> dict[str, Any] | None:
             overlay_types=["url_marketing_keyword"],
             visible_text=[],
             crop_recommendation="none",
-            confidence=0.7,
+            confidence=0.92,
             reason="URL contains a common marketing/graphic asset keyword.",
         )
     return None
@@ -338,24 +418,104 @@ def _normalize_model_result(parsed: dict[str, Any], *, provider: str, model: str
     has_overlay = bool(parsed.get("has_overlay")) or classification in SCREENING_REJECT_CLASSIFICATIONS
     confidence = _coerce_confidence(parsed.get("confidence"))
     crop_recommendation = _normalize_crop_recommendation(parsed.get("crop_recommendation"))
+    overlay_types = _string_list(parsed.get("overlay_types"))
+    visible_text = _string_list(parsed.get("visible_text"))
+    reason = str(parsed.get("reason") or "")
     crop_salvage = (
         crop_recommendation != "none"
         and classification in SCREENING_CROP_CLASSIFICATIONS
         and confidence >= 0.65
     )
-    approved = (classification == "clean_vehicle_photo" and not has_overlay and confidence >= 0.55) or crop_salvage
+    approved = _approve_screening_result(
+        classification=classification,
+        has_overlay=has_overlay,
+        overlay_types=overlay_types,
+        visible_text=visible_text,
+        crop_salvage=crop_salvage,
+        confidence=confidence,
+        reason=reason,
+    )
     return _result(
         provider=provider,
         model=model,
         classification=classification,
         has_overlay=has_overlay,
-        overlay_types=_string_list(parsed.get("overlay_types")),
-        visible_text=_string_list(parsed.get("visible_text")),
+        overlay_types=overlay_types,
+        visible_text=visible_text,
         crop_recommendation=crop_recommendation,
         confidence=confidence,
-        reason=str(parsed.get("reason") or ""),
+        reason=reason,
         approved=approved,
     )
+
+
+def _approve_screening_result(
+    *,
+    classification: str,
+    has_overlay: bool,
+    overlay_types: list[str],
+    visible_text: list[str],
+    crop_salvage: bool,
+    confidence: float,
+    reason: str,
+) -> bool:
+    if crop_salvage:
+        return True
+    if classification == "clean_vehicle_photo":
+        return True
+    if classification == "not_vehicle_photo":
+        return confidence < 0.85
+
+    marketing_signal = _has_marketing_signal(overlay_types=overlay_types, visible_text=visible_text, reason=reason)
+    incidental_signal = _has_incidental_vehicle_text(visible_text=visible_text, reason=reason)
+    plate_context = _has_license_plate_context(overlay_types=overlay_types, visible_text=visible_text, reason=reason)
+    added_overlay_context = _has_added_overlay_context(overlay_types=overlay_types, visible_text=visible_text, reason=reason)
+    non_vehicle_marketing = _has_non_vehicle_marketing_context(overlay_types=overlay_types, visible_text=visible_text, reason=reason)
+
+    if non_vehicle_marketing and confidence >= 0.75:
+        return False
+
+    if classification in {"has_text_overlay", "has_graphic_overlay"}:
+        if plate_context or incidental_signal:
+            return True
+        if marketing_signal and added_overlay_context and confidence >= 0.84:
+            return False
+        return True
+
+    if classification == "has_ui_or_screenshot_elements":
+        return not (marketing_signal and added_overlay_context and not incidental_signal and confidence >= 0.9)
+
+    if classification == "uncertain":
+        return True
+
+    return not (has_overlay and marketing_signal and added_overlay_context and confidence >= 0.84)
+
+
+def _has_marketing_signal(*, overlay_types: list[str], visible_text: list[str], reason: str) -> bool:
+    haystack = " ".join([*overlay_types, *visible_text, reason])
+    return bool(MARKETING_SIGNAL_RE.search(haystack))
+
+
+def _has_incidental_vehicle_text(*, visible_text: list[str], reason: str) -> bool:
+    haystack = " ".join([*visible_text, reason])
+    return bool(INCIDENTAL_TEXT_RE.search(haystack))
+
+
+def _has_license_plate_context(*, overlay_types: list[str], visible_text: list[str], reason: str) -> bool:
+    haystack = " ".join([*overlay_types, *visible_text, reason])
+    return bool(LICENSE_PLATE_CONTEXT_RE.search(haystack))
+
+
+def _has_added_overlay_context(*, overlay_types: list[str], visible_text: list[str], reason: str) -> bool:
+    haystack = " ".join([*overlay_types, *visible_text, reason])
+    if NEGATED_ADDED_OVERLAY_RE.search(haystack):
+        return False
+    return bool(ADDED_OVERLAY_CONTEXT_RE.search(haystack))
+
+
+def _has_non_vehicle_marketing_context(*, overlay_types: list[str], visible_text: list[str], reason: str) -> bool:
+    haystack = " ".join([*overlay_types, *visible_text, reason])
+    return bool(NON_VEHICLE_MARKETING_RE.search(haystack))
 
 
 def _result(
@@ -392,13 +552,13 @@ def _failure_result(provider: str, reason: str) -> dict[str, Any]:
         provider=provider,
         model="none",
         classification="uncertain",
-        has_overlay=True,
+        has_overlay=False,
         overlay_types=["screening_failed"],
         visible_text=[],
         crop_recommendation="none",
         confidence=0.0,
         reason=reason,
-        approved=False,
+        approved=True,
     )
 
 
